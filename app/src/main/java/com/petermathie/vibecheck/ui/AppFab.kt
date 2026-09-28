@@ -3,9 +3,9 @@ package com.petermathie.vibecheck.ui
 import android.os.SystemClock
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Stable
@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.size
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -51,9 +52,9 @@ internal sealed interface AppFabDestination {
         override val accessibilityLabel = "Add exercise to workout"
     }
 
-    data object AddProgressPhoto : AppFabDestination {
-        override val label = "Add photo"
-        override val accessibilityLabel = "Add progress photo"
+    data object AddBodyEntry : AppFabDestination {
+        override val label = "Add body entry"
+        override val accessibilityLabel = "Add body entry"
     }
 }
 
@@ -131,15 +132,17 @@ internal fun RegisterAppFabAction(
 @Composable
 internal fun AppFloatingAction(action: AppFabAction, host: AppFabHostState, modifier: Modifier = Modifier) {
     val haptics = rememberVibeHaptics()
-    ExtendedFloatingActionButton(
+    FloatingActionButton(
         onClick = {
             host.invoke(action) {
                 haptics.perform(VibeHapticEvent.SELECTION)
             }
         },
-        modifier = modifier.semantics { contentDescription = action.destination.accessibilityLabel },
-        icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-        text = { Text(action.destination.label) },
-        expanded = true,
-    )
+        modifier = modifier
+            .size(56.dp)
+            .semantics { contentDescription = action.destination.accessibilityLabel },
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Icon(Icons.Outlined.Add, contentDescription = null)
+    }
 }
