@@ -46,8 +46,13 @@ class DatabaseSeeder @Inject constructor(
 ) {
     suspend fun seedIfNeeded() {
         database.withTransaction {
-            if ((database.metadataDao().version(CATALOGUE_KEY) ?: 0) < CATALOGUE_VERSION) {
-                seedCatalogue()
+            val catalogueVersion = database.metadataDao().version(CATALOGUE_KEY) ?: 0
+            if (catalogueVersion < CATALOGUE_VERSION) {
+                if (catalogueVersion == 0) {
+                    seedCatalogue()
+                } else {
+                    database.catalogueDao().insertExerciseMuscles(CURATED_MAPPINGS)
+                }
                 database.metadataDao().put(SeedMetadataEntity(CATALOGUE_KEY, CATALOGUE_VERSION))
             }
             if ((database.metadataDao().version(CURATED_ONLY_KEY) ?: 0) < CURATED_ONLY_VERSION) {
@@ -507,7 +512,7 @@ class DatabaseSeeder @Inject constructor(
 
     companion object {
         private const val CATALOGUE_KEY = "exercise-catalogue"
-        private const val CATALOGUE_VERSION = 1
+        private const val CATALOGUE_VERSION = 2
         private const val CURATED_ONLY_KEY = "curated-exercise-catalogue"
         private const val CURATED_ONLY_VERSION = 1
         private const val DEMO_KEY = "debug-demo"
@@ -592,23 +597,23 @@ class DatabaseSeeder @Inject constructor(
 
         private fun mapping(exerciseId: String, muscleId: String, role: MuscleRole) = ExerciseMuscleEntity(exerciseId, muscleId, role.name)
         private val CURATED_MAPPINGS = listOf(
-            mapping("core:handstand", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:handstand", "TRICEPS", MuscleRole.SECONDARY), mapping("core:handstand", "CORE", MuscleRole.SECONDARY),
+            mapping("core:handstand", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:handstand", "TRICEPS", MuscleRole.SECONDARY), mapping("core:handstand", "CORE", MuscleRole.SECONDARY), mapping("core:handstand", "TRAPEZIUS", MuscleRole.SECONDARY),
             mapping("core:planche", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:planche", "CHEST", MuscleRole.PRIMARY), mapping("core:planche", "TRICEPS", MuscleRole.SECONDARY), mapping("core:planche", "CORE", MuscleRole.SECONDARY),
-            mapping("core:muscle-up", "LATS", MuscleRole.PRIMARY), mapping("core:muscle-up", "BICEPS", MuscleRole.SECONDARY), mapping("core:muscle-up", "TRICEPS", MuscleRole.SECONDARY), mapping("core:muscle-up", "CHEST", MuscleRole.SECONDARY),
+            mapping("core:muscle-up", "LATS", MuscleRole.PRIMARY), mapping("core:muscle-up", "BICEPS", MuscleRole.SECONDARY), mapping("core:muscle-up", "TRICEPS", MuscleRole.SECONDARY), mapping("core:muscle-up", "CHEST", MuscleRole.SECONDARY), mapping("core:muscle-up", "FOREARMS", MuscleRole.SECONDARY), mapping("core:muscle-up", "RHOMBOIDS", MuscleRole.SECONDARY), mapping("core:muscle-up", "SHOULDERS_REAR", MuscleRole.SECONDARY), mapping("core:muscle-up", "TRAPEZIUS", MuscleRole.SECONDARY),
             mapping("core:bench-press", "CHEST", MuscleRole.PRIMARY), mapping("core:bench-press", "TRICEPS", MuscleRole.SECONDARY), mapping("core:bench-press", "SHOULDERS_FRONT", MuscleRole.SECONDARY),
             mapping("core:dip", "CHEST", MuscleRole.PRIMARY), mapping("core:dip", "TRICEPS", MuscleRole.PRIMARY), mapping("core:dip", "SHOULDERS_FRONT", MuscleRole.SECONDARY),
             mapping("core:leg-raise", "CORE", MuscleRole.PRIMARY), mapping("core:leg-raise", "QUADS", MuscleRole.SECONDARY),
             mapping("core:squat", "QUADS", MuscleRole.PRIMARY), mapping("core:squat", "GLUTES", MuscleRole.PRIMARY), mapping("core:squat", "HAMSTRINGS", MuscleRole.SECONDARY),
-            mapping("core:lunge", "QUADS", MuscleRole.PRIMARY), mapping("core:lunge", "GLUTES", MuscleRole.PRIMARY),
-            mapping("core:cossack-squat", "ADDUCTORS", MuscleRole.PRIMARY), mapping("core:cossack-squat", "QUADS", MuscleRole.PRIMARY), mapping("core:cossack-squat", "GLUTES", MuscleRole.SECONDARY),
+            mapping("core:lunge", "QUADS", MuscleRole.PRIMARY), mapping("core:lunge", "GLUTES", MuscleRole.PRIMARY), mapping("core:lunge", "HAMSTRINGS", MuscleRole.SECONDARY),
+            mapping("core:cossack-squat", "ADDUCTORS", MuscleRole.PRIMARY), mapping("core:cossack-squat", "QUADS", MuscleRole.PRIMARY), mapping("core:cossack-squat", "GLUTES", MuscleRole.SECONDARY), mapping("core:cossack-squat", "ABDUCTORS", MuscleRole.SECONDARY),
             mapping("core:jefferson-curl", "BACK_LOWER", MuscleRole.PRIMARY), mapping("core:jefferson-curl", "HAMSTRINGS", MuscleRole.SECONDARY),
-            mapping("core:pull-up", "LATS", MuscleRole.PRIMARY), mapping("core:pull-up", "BICEPS", MuscleRole.SECONDARY), mapping("core:pull-up", "FOREARMS", MuscleRole.SECONDARY),
-            mapping("core:overhead-press", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:overhead-press", "SHOULDERS_SIDE", MuscleRole.PRIMARY), mapping("core:overhead-press", "TRICEPS", MuscleRole.SECONDARY),
+            mapping("core:pull-up", "LATS", MuscleRole.PRIMARY), mapping("core:pull-up", "BICEPS", MuscleRole.SECONDARY), mapping("core:pull-up", "FOREARMS", MuscleRole.SECONDARY), mapping("core:pull-up", "RHOMBOIDS", MuscleRole.SECONDARY), mapping("core:pull-up", "SHOULDERS_REAR", MuscleRole.SECONDARY), mapping("core:pull-up", "TRAPEZIUS", MuscleRole.SECONDARY),
+            mapping("core:overhead-press", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:overhead-press", "SHOULDERS_SIDE", MuscleRole.PRIMARY), mapping("core:overhead-press", "TRICEPS", MuscleRole.SECONDARY), mapping("core:overhead-press", "TRAPEZIUS", MuscleRole.SECONDARY),
             mapping("core:back-extension", "BACK_LOWER", MuscleRole.PRIMARY), mapping("core:back-extension", "GLUTES", MuscleRole.SECONDARY), mapping("core:back-extension", "HAMSTRINGS", MuscleRole.SECONDARY),
             mapping("core:front-split", "HAMSTRINGS", MuscleRole.PRIMARY), mapping("core:front-split", "QUADS", MuscleRole.SECONDARY),
             mapping("core:forward-fold", "HAMSTRINGS", MuscleRole.PRIMARY), mapping("core:forward-fold", "BACK_LOWER", MuscleRole.SECONDARY),
             mapping("core:side-split", "ADDUCTORS", MuscleRole.PRIMARY), mapping("core:side-split", "HAMSTRINGS", MuscleRole.SECONDARY),
-            mapping("core:bridge", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:bridge", "BACK_LOWER", MuscleRole.PRIMARY), mapping("core:bridge", "QUADS", MuscleRole.SECONDARY),
+            mapping("core:bridge", "SHOULDERS_FRONT", MuscleRole.PRIMARY), mapping("core:bridge", "BACK_LOWER", MuscleRole.PRIMARY), mapping("core:bridge", "QUADS", MuscleRole.SECONDARY), mapping("core:bridge", "GLUTES", MuscleRole.SECONDARY),
         )
 
         private val SKILL_VARIATIONS = listOf(
