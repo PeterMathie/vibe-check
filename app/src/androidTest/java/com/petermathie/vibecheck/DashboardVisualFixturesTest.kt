@@ -261,4 +261,19 @@ class DashboardVisualFixturesTest {
             compose.onNodeWithText(label).assertDoesNotExist()
         }
     }
+
+    @Test
+    fun retroDefaultNavigationKeepsProgressLabelOnOneLine() {
+        var maximumLabelHeight = 0f
+        compose.setContent {
+            maximumLabelHeight = with(LocalDensity.current) { 24.dp.toPx() }
+            Box(Modifier.width(411.dp)) {
+                VibeCheckTheme(VibePalettes.Mono.dark, VibeVisualStyle.RETRO_FUTURE) {
+                    PrimaryNavigationBar(Destination.PROGRESS) {}
+                }
+            }
+        }
+        val progress = compose.onNodeWithText("Progress", useUnmergedTree = true).assertIsDisplayed()
+        assertTrue(progress.fetchSemanticsNode().boundsInRoot.height <= maximumLabelHeight)
+    }
 }

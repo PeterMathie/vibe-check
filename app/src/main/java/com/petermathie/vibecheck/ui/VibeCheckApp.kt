@@ -96,7 +96,9 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -376,7 +378,16 @@ internal fun PrimaryNavigationBar(selected: Destination, onSelect: (Destination)
                 },
                 icon = { Icon(item.icon, contentDescription = if (showLabels) null else item.label) },
                 label = if (showLabels) {
-                    { Text(item.label) }
+                    {
+                        Text(
+                            item.label,
+                            maxLines = 1,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontFamily = FontFamily.SansSerif,
+                                letterSpacing = 0.sp,
+                            ),
+                        )
+                    }
                 } else {
                     null
                 },
