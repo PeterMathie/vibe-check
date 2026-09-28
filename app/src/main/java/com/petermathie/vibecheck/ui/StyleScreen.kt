@@ -155,9 +155,13 @@ private fun VisualStylePreview(style: VibeVisualStyle) {
                 color = if (tokens.showInstrumentDetails) tokens.instrumentSignal else palette.textSecondary,
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("72.4 kg", style = typography.metricCompact, color = palette.accent)
                 Text(
-                    "  SAMPLE PROGRESS",
+                    if (tokens.showInstrumentDetails) "SCAN 01" else "72.4 kg",
+                    style = typography.metricCompact,
+                    color = palette.accent,
+                )
+                Text(
+                    if (tokens.showInstrumentDetails) "  BODY SCANNER" else "  SAMPLE PROGRESS",
                     modifier = Modifier.weight(1f),
                     style = typography.annotation,
                     color = palette.textSecondary,
@@ -174,20 +178,19 @@ private fun VisualStylePreview(style: VibeVisualStyle) {
                     val x = size.width * column / 8f
                     drawLine(grid.copy(alpha = gridAlpha), Offset(x, 0f), Offset(x, size.height), 1f)
                 }
-                val trace = Path().apply {
-                    moveTo(0f, size.height * 0.72f)
-                    lineTo(size.width * 0.22f, size.height * 0.58f)
-                    lineTo(size.width * 0.45f, size.height * 0.66f)
-                    lineTo(size.width * 0.7f, size.height * 0.28f)
-                    lineTo(size.width, size.height * 0.38f)
+                if (!tokens.showInstrumentDetails) {
+                    val trace = Path().apply {
+                        moveTo(0f, size.height * 0.72f)
+                        lineTo(size.width * 0.22f, size.height * 0.58f)
+                        lineTo(size.width * 0.45f, size.height * 0.66f)
+                        lineTo(size.width * 0.7f, size.height * 0.28f)
+                        lineTo(size.width, size.height * 0.38f)
+                    }
+                    drawPath(trace, palette.accent, style = Stroke(2.dp.toPx()))
+                    val marker = Offset(size.width * 0.7f, size.height * 0.28f)
+                    drawLine(palette.accent, marker.copy(x = marker.x - 5.dp.toPx()), marker.copy(x = marker.x + 5.dp.toPx()), 1.5.dp.toPx())
+                    drawLine(palette.accent, marker.copy(y = marker.y - 5.dp.toPx()), marker.copy(y = marker.y + 5.dp.toPx()), 1.5.dp.toPx())
                 }
-                if (tokens.showInstrumentDetails) {
-                    drawPath(trace, palette.accent.copy(alpha = tokens.graphGlowAlpha), style = Stroke(7.dp.toPx()))
-                }
-                drawPath(trace, palette.accent, style = Stroke(2.dp.toPx()))
-                val marker = Offset(size.width * 0.7f, size.height * 0.28f)
-                drawLine(palette.accent, marker.copy(x = marker.x - 5.dp.toPx()), marker.copy(x = marker.x + 5.dp.toPx()), 1.5.dp.toPx())
-                drawLine(palette.accent, marker.copy(y = marker.y - 5.dp.toPx()), marker.copy(y = marker.y + 5.dp.toPx()), 1.5.dp.toPx())
                 val bodyX = size.width * 0.88f
                 drawCircle(palette.diagramLine, 4.dp.toPx(), Offset(bodyX, 11.dp.toPx()), style = Stroke(1.dp.toPx()))
                 drawLine(palette.diagramLine, Offset(bodyX, 16.dp.toPx()), Offset(bodyX, 49.dp.toPx()), 1.dp.toPx())
