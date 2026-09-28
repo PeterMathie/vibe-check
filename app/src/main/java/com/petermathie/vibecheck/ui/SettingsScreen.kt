@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
@@ -24,6 +25,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -343,15 +347,22 @@ private fun SettingToggle(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MeasurementsScreen(vm:EditorViewModel) {
     val haptics = rememberVibeHaptics()
     val rows by vm.measurements.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     val today = LocalDate.now()
     var selectedDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
     var displayedMonth by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
+    var addPhotoDialog by rememberSaveable { mutableStateOf(false) }
+    var photoDatePicker by rememberSaveable { mutableStateOf(false) }
+    var pendingPhotoDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
+    var importPhotoDay by remember { mutableStateOf<Long?>(null) }
     var value by remember { mutableStateOf("") }
     var unit by remember { mutableStateOf("kg") }
     var note by remember { mutableStateOf("") }
@@ -361,11 +372,13 @@ fun MeasurementsScreen(vm:EditorViewModel) {
     val prefs = remember(context) { context.getSharedPreferences("body-layout", 0) }
     val directory = File(context.filesDir, "progress-photos")
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val targetDay = importPhotoDay ?: selectedDay
+        importPhotoDay = null
         if (uri != null) scope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     directory.mkdirs()
-                    val start = LocalDate.ofEpochDay(selectedDay).atTime(8, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                    val start = LocalDate.ofEpochDay(targetDay).atTime(8, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
                     val timestamp = start + System.currentTimeMillis() % (12 * 60 * 60 * 1000)
                     requireNotNull(context.contentResolver.openInputStream(uri)).use { input ->
                         File(directory, "$timestamp.jpg").outputStream().use { input.copyTo(it) }
@@ -415,13 +428,6 @@ fun MeasurementsScreen(vm:EditorViewModel) {
     }
     val selectedDate = LocalDate.ofEpochDay(selectedDay)
     val month = YearMonth.parse(displayedMonth)
-    RegisterAppFabAction(
-        owner = Destination.MEASUREMENTS,
-        destination = AppFabDestination.AddProgressPhoto,
-        visible = editing == null,
-    ) {
-        picker.launch(arrayOf("image/*"))
-    }
     val availableCardKeys = buildList {
         if (bodyweights.isNotEmpty()) add("trend")
         add("calendar")
@@ -506,34 +512,70 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                                 Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium)
                                 VibeActionButton("›", { displayedMonth = month.plusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Next month" }, importance = ActionImportance.COMPACT)
                             }
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .semantics { contentDescription = "Bodyweight calendar weekday labels" },
-                            ) {
-                                listOf("M", "T", "W", "T", "F", "S", "S").forEach {
-                                    Text(it, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.labelSmall)
-                                }
-                            }
-                            val leading = month.atDay(1).dayOfWeek.value - 1
-                            val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
-                            repeat(cellCount / 7) { week ->
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .semantics { contentDescription = "Bodyweight calendar week ${week + 1}" },
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    repeat(7) { weekday ->
-                                        val dayNumber = week * 7 + weekday - leading + 1
-                                        if (dayNumber !in 1..month.lengthOfMonth()) Spacer(Modifier.weight(1f).height(64.dp)) else {
-                                            val date = month.atDay(dayNumber)
-                                            val epochDay = date.toEpochDay()
-                                            val measurement = weightsByDay[epochDay]
-                                            Surface(onClick = { selectedDay = epochDay; displayedMonth = YearMonth.from(date).toString() }, color = if (epochDay == selectedDay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small, modifier = Modifier.weight(1f).height(64.dp)) {
-                                                Column(Modifier.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                                    Text(dayNumber.toString(), style = MaterialTheme.typography.labelSmall)
-                                                    measurement?.let { Text(formatBodyweight(it.value), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                            BoxWithConstraints {
+                                val fontScale = LocalDensity.current.fontScale
+                                val cellHeight = if (fontScale >= 1.8f) 72.dp else 64.dp
+                                val showMeasurementText = maxWidth / 7 >= 48.dp && fontScale < 1.8f
+                                val leading = month.atDay(1).dayOfWeek.value - 1
+                                val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .semantics { contentDescription = "Bodyweight calendar weekday labels" },
+                                    ) {
+                                        listOf("M", "T", "W", "T", "F", "S", "S").forEach {
+                                            Text(it, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                        }
+                                    }
+                                    repeat(cellCount / 7) { week ->
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .semantics { contentDescription = "Bodyweight calendar week ${week + 1}" },
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        ) {
+                                            repeat(7) { weekday ->
+                                                val dayNumber = week * 7 + weekday - leading + 1
+                                                if (dayNumber !in 1..month.lengthOfMonth()) {
+                                                    Spacer(Modifier.weight(1f).height(cellHeight))
+                                                } else {
+                                                    val date = month.atDay(dayNumber)
+                                                    val epochDay = date.toEpochDay()
+                                                    val measurement = weightsByDay[epochDay]
+                                                    val measurementDescription = measurement?.let {
+                                                        ", bodyweight ${formatBodyweight(it.value)} ${it.unit}"
+                                                    }.orEmpty()
+                                                    Surface(
+                                                        onClick = {
+                                                            selectedDay = epochDay
+                                                            displayedMonth = YearMonth.from(date).toString()
+                                                        },
+                                                        color = if (epochDay == selectedDay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                                        shape = MaterialTheme.shapes.small,
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .height(cellHeight)
+                                                            .semantics {
+                                                                contentDescription = "${date.format(DateTimeFormatter.ofPattern("d MMMM yyyy"))}$measurementDescription"
+                                                            },
+                                                    ) {
+                                                        Column(
+                                                            Modifier.padding(5.dp),
+                                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                                        ) {
+                                                            Text(dayNumber.toString(), style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                                            if (showMeasurementText) {
+                                                                measurement?.let {
+                                                                    Text(
+                                                                        formatBodyweight(it.value),
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        maxLines = 1,
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -559,8 +601,28 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                                 style = MaterialTheme.typography.titleLarge,
                             )
                             selectedMeasurement?.let { row -> Text("Bodyweight: ${formatBodyweight(row.value)} ${row.unit}") }
-                            Column(Modifier.semantics { contentDescription = "Progress photos actions" }) {
-                                TextButton(onClick = { exporter.launch("progress-photos.zip") }) { Text("Export photos separately") }
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .semantics { contentDescription = "Progress photos actions" },
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Button(
+                                    onClick = {
+                                        focusManager.clearFocus(force = true)
+                                        keyboardController?.hide()
+                                        pendingPhotoDay = selectedDay
+                                        addPhotoDialog = true
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .semantics { contentDescription = "Add progress photo" },
+                                ) { Text("Add photo") }
+                                TextButton(
+                                    onClick = { exporter.launch("progress-photos.zip") },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                                ) { Text("Export photos separately") }
                             }
                             if (selectedPhotos.isEmpty()) Text("No photo for this day", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             selectedPhotos.forEach { file ->
@@ -585,6 +647,98 @@ fun MeasurementsScreen(vm:EditorViewModel) {
         var amount by remember(row.id){mutableStateOf(row.value.toString())}
         var notes by remember(row.id){mutableStateOf(row.notes)}
         AlertDialog(onDismissRequest={editing=null},title={Text("${row.metric} (${row.unit})")},text={Column{EditField("Value",amount){amount=it};EditField("Notes",notes){notes=it}}},confirmButton={TextButton(enabled=amount.toDoubleOrNull()?.isFinite()==true,onClick={vm.save(row.copy(value=amount.toDouble(),notes=notes));editing=null}){Text("Save")}},dismissButton={TextButton(onClick={editing=null}){Text("Cancel")}})
+    }
+    if (addPhotoDialog) {
+        AlertDialog(
+            onDismissRequest = { addPhotoDialog = false },
+            modifier = Modifier.semantics { contentDescription = "Add progress photo dialog" },
+            title = { Text("Add progress photo") },
+            text = {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text("Photo date", style = MaterialTheme.typography.titleMedium)
+                    OutlinedButton(
+                        onClick = {
+                            addPhotoDialog = false
+                            photoDatePicker = true
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .semantics { contentDescription = "Choose progress photo date" },
+                    ) {
+                        Text(
+                            LocalDate.ofEpochDay(pendingPhotoDay).format(
+                                DateTimeFormatter.ofPattern("d MMMM yyyy"),
+                            ),
+                        )
+                    }
+                    Text(
+                        "The selected image is copied into private app storage and associated with this date.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = {
+                            importPhotoDay = pendingPhotoDay
+                            addPhotoDialog = false
+                            picker.launch(arrayOf("image/*"))
+                        },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Choose photo") }
+                    TextButton(
+                        onClick = { addPhotoDialog = false },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) { Text("Cancel") }
+                }
+            },
+        )
+    }
+    if (photoDatePicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = pendingPhotoDay * 86_400_000L,
+        )
+        DatePickerDialog(
+            onDismissRequest = {
+                photoDatePicker = false
+                addPhotoDialog = true
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let {
+                            pendingPhotoDay = Math.floorDiv(it, 86_400_000L)
+                        }
+                        photoDatePicker = false
+                        addPhotoDialog = true
+                    },
+                ) { Text("Use date") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        photoDatePicker = false
+                        addPhotoDialog = true
+                    },
+                ) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(
+                state = datePickerState,
+                title = { Text("Select photo date", Modifier.padding(start = 24.dp, top = 16.dp)) },
+            )
+        }
     }
 }
 
