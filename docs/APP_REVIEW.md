@@ -83,7 +83,7 @@ Bodyweight is available as a trend and a calendar so a value is easy to find in 
 
 ![Settings and data screen with unit, anatomy, rest, haptics, reduced motion, timer permissions, JSON backup/import, CSV export, demo removal, and notices](images/app-review/13-settings.png)
 
-Settings use switches for binary preferences and direct actions for operations. The Ocean, Sunset, Forest and Mono presets live behind **Colour palette** and update the app immediately; **Follow system** is the default appearance, with persistent **Dark** and **Light** overrides. JSON backup/import, CSV export, timer permission routes, demo-data removal and open-source notices are deliberately visible rather than hidden in platform menus.
+Settings use switches for binary preferences and direct actions for operations. The **Style and colour** destination offers independent Standard and Retro Futuristic visual styles, Ocean/Sunset/Forest/Mono palettes, and **System**, **Dark**, or **Light** appearance. Choices update immediately and persist through structured JSON backup/restore. JSON backup/import, CSV export, timer permission routes, demo-data removal and open-source notices are deliberately visible rather than hidden in platform menus.
 
 ## Feature overview
 

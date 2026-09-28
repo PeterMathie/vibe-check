@@ -13,7 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
-import com.petermathie.vibecheck.ui.theme.VibeDashboardTypography
+import com.petermathie.vibecheck.ui.theme.LocalVibeDashboardTypography
 import com.petermathie.vibecheck.ui.theme.VibeShapes
 import com.petermathie.vibecheck.ui.theme.VibeSpacing
 
@@ -45,12 +45,13 @@ fun VibeStatusPill(
     modifier: Modifier = Modifier,
     colour: Color = LocalVibePalette.current.accent,
 ) {
+    val typography = LocalVibeDashboardTypography.current
     Text(
         text,
         modifier
             .background(colour.copy(alpha = 0.12f), RoundedCornerShape(50))
             .padding(horizontal = VibeSpacing.compact, vertical = VibeSpacing.xSmall),
         color = colour,
-        style = VibeDashboardTypography.label,
+        style = typography.label,
     )
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -36,11 +37,14 @@ import androidx.compose.ui.unit.dp
 import com.petermathie.vibecheck.ui.theme.LocalVibeMotion
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
+import com.petermathie.vibecheck.ui.theme.LocalVibeStyleTokens
+import com.petermathie.vibecheck.ui.theme.LocalVibeVisualStyle
 import com.petermathie.vibecheck.ui.theme.LocalVibeSurfaceLevel
 import com.petermathie.vibecheck.ui.theme.VibeElevations
 import com.petermathie.vibecheck.ui.theme.VibeShapes
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
 
 @Composable
 fun VibeSurface(
@@ -53,6 +57,8 @@ fun VibeSurface(
     content: @Composable BoxScope.() -> Unit,
 ) {
     val palette = LocalVibePalette.current
+    val visualStyle = LocalVibeVisualStyle.current
+    val styleTokens = LocalVibeStyleTokens.current
     val reducedMotion = LocalVibeReducedMotion.current
     val motion = LocalVibeMotion.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -69,13 +75,16 @@ fun VibeSurface(
         if (reducedMotion) snap() else tween(if (pressed) motion.pressInMillis else motion.pressOutMillis),
         label = "surface shadow",
     )
-    val resolvedShape = shape ?: RoundedCornerShape(
-        when (level) {
-            VibeSurfaceLevel.PAGE, VibeSurfaceLevel.INSET -> VibeShapes.control
-            VibeSurfaceLevel.FLOATING, VibeSurfaceLevel.MODAL -> VibeShapes.panel
-            else -> VibeShapes.card
-        },
-    )
+    val shapeSize = when (level) {
+        VibeSurfaceLevel.PAGE, VibeSurfaceLevel.INSET -> VibeShapes.control
+        VibeSurfaceLevel.FLOATING, VibeSurfaceLevel.MODAL -> VibeShapes.panel
+        else -> VibeShapes.card
+    }
+    val resolvedShape = shape ?: if (styleTokens.clippedCorners) {
+        CutCornerShape(styleTokens.cornerCut.coerceAtMost(shapeSize))
+    } else {
+        RoundedCornerShape(shapeSize)
+    }
     val fill = when (level) {
         VibeSurfaceLevel.PAGE -> palette.background
         VibeSurfaceLevel.INSET -> palette.surfaceInset
@@ -122,9 +131,36 @@ fun VibeSurface(
                     if (elevation.topEdgeAlpha > 0f) {
                         drawRect(highlight, topLeft = Offset.Zero, size = size.copy(height = size.height * 0.18f))
                     }
+                    if (visualStyle == VibeVisualStyle.RETRO_FUTURE && level != VibeSurfaceLevel.PAGE) {
+                        val tick = 7.dp.toPx()
+                        val edge = styleTokens.borderWidth.toPx() / 2f
+                        val cut = styleTokens.cornerCut.toPx()
+                        val signal = styleTokens.instrumentSignal.copy(alpha = if (palette.isDark) 0.52f else 0.42f)
+                        drawLine(signal, Offset(edge, cut), Offset(cut, edge), styleTokens.borderWidth.toPx())
+                        drawLine(signal, Offset(cut, edge), Offset(cut + tick, edge), styleTokens.borderWidth.toPx())
+                        drawLine(signal, Offset(edge, cut), Offset(edge, cut + tick), styleTokens.borderWidth.toPx())
+                        drawLine(
+                            signal,
+                            Offset(size.width - cut, size.height - edge),
+                            Offset(size.width - edge, size.height - cut),
+                            styleTokens.borderWidth.toPx(),
+                        )
+                        drawLine(
+                            signal,
+                            Offset(size.width - cut - tick, size.height - edge),
+                            Offset(size.width - cut, size.height - edge),
+                            styleTokens.borderWidth.toPx(),
+                        )
+                        drawLine(
+                            signal,
+                            Offset(size.width - edge, size.height - cut - tick),
+                            Offset(size.width - edge, size.height - cut),
+                            styleTokens.borderWidth.toPx(),
+                        )
+                    }
                 }
             }
-            .border(BorderStroke(1.dp, borderColor), resolvedShape)
+            .border(BorderStroke(styleTokens.borderWidth, borderColor), resolvedShape)
             .then(if (focused) Modifier.border(2.dp, palette.focusRing, resolvedShape) else Modifier)
             .then(interactive)
             .semantics {

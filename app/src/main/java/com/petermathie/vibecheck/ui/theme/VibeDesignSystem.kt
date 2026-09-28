@@ -88,7 +88,7 @@ data class VibePalettePreset(
 )
 
 enum class VibeThemeMode(val id: String, val displayName: String) {
-    SYSTEM("system", "Follow system"),
+    SYSTEM("system", "System"),
     DARK("dark", "Dark"),
     LIGHT("light", "Light");
 
@@ -342,6 +342,7 @@ private val VibeMaterialTypography = Typography(
 @Composable
 fun VibeCheckTheme(
     palette: VibePalette = VibePalettes.Ocean.dark,
+    visualStyle: VibeVisualStyle = VibeVisualStyle.STANDARD,
     content: @Composable () -> Unit,
 ) {
     val preferences=LocalContext.current.getSharedPreferences("settings",0)
@@ -429,13 +430,33 @@ fun VibeCheckTheme(
     }
     androidx.compose.runtime.CompositionLocalProvider(
         LocalVibePalette provides palette,
+        LocalVibeVisualStyle provides visualStyle,
+        LocalVibeStyleTokens provides VibeVisualStyles.resolve(visualStyle, palette, reducedMotion),
+        LocalVibeDashboardTypography provides VibeVisualStyles.dashboardTypography(visualStyle),
         LocalVibeReducedMotion provides reducedMotion,
         LocalVibeMotion provides VibeMotion.resolve(reducedMotion),
         LocalRippleConfiguration provides if(reducedMotion) null else RippleConfiguration(),
     ) {
         MaterialTheme(
             colorScheme = scheme,
-            typography = VibeMaterialTypography,
+            typography = if (visualStyle == VibeVisualStyle.RETRO_FUTURE) {
+                VibeMaterialTypography.copy(
+                    labelLarge = VibeMaterialTypography.labelLarge.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.7.sp,
+                    ),
+                    labelMedium = VibeMaterialTypography.labelMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.6.sp,
+                    ),
+                    labelSmall = VibeMaterialTypography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.5.sp,
+                    ),
+                )
+            } else {
+                VibeMaterialTypography
+            },
             shapes = VibeMaterialShapes,
             content = content,
         )

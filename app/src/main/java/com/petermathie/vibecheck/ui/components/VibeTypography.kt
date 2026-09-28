@@ -8,7 +8,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
-import com.petermathie.vibecheck.ui.theme.VibeDashboardTypography
+import com.petermathie.vibecheck.ui.theme.LocalVibeDashboardTypography
 
 @Composable
 fun VibeMetric(
@@ -17,10 +17,11 @@ fun VibeMetric(
     accessibleValue: String = value,
     compact: Boolean = false,
 ) {
+    val typography = LocalVibeDashboardTypography.current
     Text(
         value,
         modifier.clearAndSetSemantics { contentDescription = accessibleValue },
-        style = if (compact) VibeDashboardTypography.metricCompact else VibeDashboardTypography.metric,
+        style = if (compact) typography.metricCompact else typography.metric,
     )
 }
 
@@ -30,6 +31,7 @@ fun VibeMicroLabel(
     modifier: Modifier = Modifier,
     color: Color = LocalVibePalette.current.textSecondary,
 ) {
+    val typography = LocalVibeDashboardTypography.current
     val rendered = if (label.length <= 18) label.uppercase() else label
-    Text(rendered, modifier, color = color, style = VibeDashboardTypography.microLabel, overflow = TextOverflow.Visible)
+    Text(rendered, modifier, color = color, style = typography.microLabel, overflow = TextOverflow.Visible)
 }

@@ -2,6 +2,8 @@ package com.petermathie.vibecheck.data
 
 import android.content.SharedPreferences
 import com.petermathie.vibecheck.ui.theme.VibePalettes
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
+import com.petermathie.vibecheck.ui.theme.VibeThemeMode
 import org.json.JSONObject
 
 /** Only durable profile and presentation choices belong in a backup, never running timers. */
@@ -12,7 +14,9 @@ object BackupPreferences {
     fun attach(json: String, preferences: SharedPreferences): String {
         val values = JSONObject()
         preferences.all.forEach { (key, value) ->
-            if (key in booleans || key == "palette" || key == "themeMode") values.put(key, value)
+            if (key in booleans || key == "palette" || key == "themeMode" || key == "visualStyle") {
+                values.put(key, value)
+            }
         }
         return JSONObject(json).put("preferences", values).toString(2)
     }
@@ -26,12 +30,16 @@ object BackupPreferences {
                 in colours -> value is Number && value.toDouble() == value.toInt().toDouble()
                 "palette" -> value is String
                 "themeMode" -> value is String
+                "visualStyle" -> value is String
                 else -> false
             }) { "Invalid preference: $key" }
         }
         if (values.has("palette")) values.put("palette", VibePalettes.normalizeId(values.getString("palette")))
         if (values.has("themeMode")) {
-            values.put("themeMode", com.petermathie.vibecheck.ui.theme.VibeThemeMode.fromPreference(values.getString("themeMode")).id)
+            values.put("themeMode", VibeThemeMode.fromPreference(values.getString("themeMode")).id)
+        }
+        if (values.has("visualStyle")) {
+            values.put("visualStyle", VibeVisualStyle.fromPreference(values.getString("visualStyle")).id)
         }
         colours.forEach(values::remove)
         return values
@@ -46,7 +54,11 @@ object BackupPreferences {
                     "palette" -> putString(key, VibePalettes.normalizeId(values.getString(key)))
                     "themeMode" -> putString(
                         key,
-                        com.petermathie.vibecheck.ui.theme.VibeThemeMode.fromPreference(values.getString(key)).id,
+                        VibeThemeMode.fromPreference(values.getString(key)).id,
+                    )
+                    "visualStyle" -> putString(
+                        key,
+                        VibeVisualStyle.fromPreference(values.getString(key)).id,
                     )
                 }
             }

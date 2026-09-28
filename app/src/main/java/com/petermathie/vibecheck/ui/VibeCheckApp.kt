@@ -98,6 +98,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.domain.model.ActivityDay
@@ -122,7 +123,9 @@ import com.petermathie.vibecheck.ui.theme.VibeShapes
 import com.petermathie.vibecheck.ui.theme.VibeSpacing
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
 import com.petermathie.vibecheck.ui.theme.LocalVibeMotion
+import com.petermathie.vibecheck.ui.theme.VibeBackdropMode
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
 import com.petermathie.vibecheck.ui.theme.habitHeatmapColors
 import com.petermathie.vibecheck.ui.theme.heatmapOutlineColor
 import com.petermathie.vibecheck.ui.theme.freshnessColors
@@ -149,6 +152,25 @@ internal enum class Destination(val label: String, val icon: ImageVector) {
 }
 
 @Composable
+internal fun rememberVibeVisualStyle(prefs: android.content.SharedPreferences): VibeVisualStyle {
+    var revision by remember { mutableIntStateOf(0) }
+    DisposableEffect(prefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == "visualStyle") revision++
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    revision
+    val stored = prefs.getString("visualStyle", VibeVisualStyle.STANDARD.id)
+    val resolved = VibeVisualStyle.fromPreference(stored)
+    LaunchedEffect(prefs, stored, resolved) {
+        if (stored != resolved.id) prefs.edit().putString("visualStyle", resolved.id).apply()
+    }
+    return resolved
+}
+
+@Composable
 fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
     val editor: EditorViewModel = hiltViewModel()
     val error by editor.error.collectAsStateWithLifecycle()
@@ -165,6 +187,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
         mutableStateOf(VibeThemeMode.fromPreference(prefs.getString("themeMode", null)))
     }
     val palette = rememberVibePalette(prefs)
+    val visualStyle = rememberVibeVisualStyle(prefs)
     val haptics = rememberVibeHaptics()
     DisposableEffect(prefs) {
         val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { preferences, key ->
@@ -177,7 +200,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
         onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }
 
-    VibeCheckTheme(palette) {
+    VibeCheckTheme(palette, visualStyle) {
         val motion = LocalVibeMotion.current
         val reducedMotion = LocalVibeReducedMotion.current
         val travelPx = with(LocalDensity.current) { motion.travelDp.dp.roundToPx() }
@@ -215,8 +238,13 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                     PrimaryNavigationBar(destination) { destination = it }
                 },
             ) { padding ->
+            TechnicalBackdrop(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                mode = VibeBackdropMode.ORTHOGRAPHIC,
+                enabled = visualStyle == VibeVisualStyle.RETRO_FUTURE,
+            ) {
             BackHandler(destination in moreDestinations) { destination = Destination.MORE }
-            Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize()) {
                 if(error != null) TextButton(onClick = { editor.error.value = null }) { Text(error.orEmpty(),color=MaterialTheme.colorScheme.error) }
                 AnimatedContent(
                     targetState = destination,
@@ -271,12 +299,15 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         viewModel.removeDemoData(result)
                     }
                     Destination.STYLE -> StyleScreen(
+                        visualStyle,
+                        { prefs.edit().putString("visualStyle", it.id).apply() },
                         paletteId,
                         { paletteId = it; prefs.edit().putString("palette", it).apply() },
                         themeMode,
                         { themeMode = it; prefs.edit().putString("themeMode", it.id).apply() },
                     ) { result -> viewModel.removeDemoData(result) }
                     Destination.ARCHIVE -> ArchiveScreen(editor)
+                }
                 }
                 }
                 }
@@ -331,6 +362,8 @@ private val moreDestinations = setOf(
 internal fun PrimaryNavigationBar(selected: Destination, onSelect: (Destination) -> Unit) {
     val selectedItem = if (selected in moreDestinations) Destination.MORE else selected
     val haptics = rememberVibeHaptics()
+    val showLabels = LocalConfiguration.current.screenWidthDp >= 360 &&
+        LocalDensity.current.fontScale < 1.8f
     NavigationBar(Modifier.fillMaxWidth().navigationBarsPadding()) {
         primaryDestinations.forEach { item ->
             NavigationBarItem(
@@ -341,8 +374,13 @@ internal fun PrimaryNavigationBar(selected: Destination, onSelect: (Destination)
                         onSelect(item)
                     }
                 },
-                icon = { Icon(item.icon, contentDescription = null) },
-                label = { Text(item.label) },
+                icon = { Icon(item.icon, contentDescription = if (showLabels) null else item.label) },
+                label = if (showLabels) {
+                    { Text(item.label) }
+                } else {
+                    null
+                },
+                alwaysShowLabel = showLabels,
             )
         }
     }
@@ -894,9 +932,7 @@ internal fun VibeCard(
         }
         if (technicalBackdrop) {
             TechnicalBackdrop(
-                Modifier
-                    .fillMaxSize()
-                    .semantics { contentDescription = "Freshness panel texture" },
+                Modifier.fillMaxSize().testTag("freshness-panel-texture"),
             ) {
                 cardContent()
             }
