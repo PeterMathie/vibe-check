@@ -32,6 +32,7 @@ class VibeVisualStyleTest {
         assertEquals(0f, tokens.graphGlowAlpha)
         assertFalse(tokens.showInstrumentDetails)
         assertFalse(tokens.scannerSweepEnabled)
+        assertEquals(0.dp, tokens.anatomyDepthOffset)
         assertEquals(VibeDashboardTypography, VibeVisualStyles.dashboardTypography(VibeVisualStyle.STANDARD))
     }
 
@@ -44,7 +45,9 @@ class VibeVisualStyleTest {
             assertTrue(normal.showInstrumentDetails)
             assertTrue(normal.graphGlowAlpha in 0.01f..0.2f)
             assertTrue(normal.scannerSweepEnabled)
+            assertTrue(normal.anatomyDepthOffset > 0.dp)
             assertFalse(reduced.scannerSweepEnabled)
+            assertEquals(0.dp, reduced.anatomyDepthOffset)
             assertEquals(normal.instrumentSignal, reduced.instrumentSignal)
             assertContrast(normal.instrumentSignal, palette.surfaceInset, 3.0)
             assertContrast(normal.instrumentSignal, palette.background, 3.0)

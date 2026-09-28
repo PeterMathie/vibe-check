@@ -211,6 +211,17 @@ fun MuscleMap(
                 y += spacing
                 index++
             }
+            val horizonY = size.height * 0.68f
+            val vanishingPoint = Offset(size.width / 2f, horizonY)
+            repeat(9) { ray ->
+                val bottomX = size.width * ray / 8f
+                drawLine(minor, vanishingPoint, Offset(bottomX, size.height), 1f)
+            }
+            repeat(5) { line ->
+                val depth = (line + 1) / 5f
+                val floorY = horizonY + (size.height - horizonY) * depth * depth
+                drawLine(if (line == 4) major else minor, Offset(0f, floorY), Offset(size.width, floorY), 1f)
+            }
             val tick = (size.minDimension * 0.025f).coerceIn(4f, 10f)
             repeat(9) { marker ->
                 val markerY = size.height * marker / 8f
@@ -252,6 +263,24 @@ fun MuscleMap(
             outlineBounds.top,
             outlineBounds.bottom,
         )
+        val depthOffset = styleTokens.anatomyDepthOffset.toPx()
+        if (visualStyle == VibeVisualStyle.RETRO_FUTURE && depthOffset > 0f) {
+            withTransform({
+                translate(transform.offsetX + depthOffset, transform.offsetY + depthOffset)
+                scale(transform.scaleX, transform.scaleY, Offset.Zero)
+            }) {
+                outlines.forEach { item ->
+                    drawPathWithMirror(
+                        item.path,
+                        item.def.side,
+                        diagram.centerX,
+                        Color.Transparent,
+                        styleTokens.instrumentSignal.copy(alpha = if (palette.isDark) 0.16f else 0.1f),
+                        strokeWidth = 3f,
+                    )
+                }
+            }
+        }
         withTransform({
             translate(transform.offsetX, transform.offsetY)
             scale(transform.scaleX, transform.scaleY, Offset.Zero)
@@ -282,6 +311,16 @@ fun MuscleMap(
             muscles.forEach { item ->
                 val color = animatedColors.getValue(item.def.group)
                 val selected = item.def.group == selectedMuscleId
+                if (selected && visualStyle == VibeVisualStyle.RETRO_FUTURE) {
+                    drawPathWithMirror(
+                        path = item.path,
+                        side = item.def.side,
+                        centerX = diagram.centerX,
+                        color = Color.Transparent,
+                        strokeColor = color.copy(alpha = if (palette.isDark) 0.26f else 0.18f),
+                        strokeWidth = 12f,
+                    )
+                }
                 if (item.def.group in celebratedMuscleIds) {
                     drawPathWithMirror(
                         path = item.path,

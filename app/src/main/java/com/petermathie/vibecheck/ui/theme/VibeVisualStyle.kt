@@ -40,6 +40,7 @@ data class VibeStyleTokens(
     val graphGlowAlpha: Float,
     val showInstrumentDetails: Boolean,
     val scannerSweepEnabled: Boolean,
+    val anatomyDepthOffset: Dp,
 )
 
 object VibeVisualStyles {
@@ -65,6 +66,7 @@ object VibeVisualStyles {
             graphGlowAlpha = 0f,
             showInstrumentDetails = false,
             scannerSweepEnabled = false,
+            anatomyDepthOffset = 0.dp,
         )
 
         VibeVisualStyle.RETRO_FUTURE -> VibeStyleTokens(
@@ -81,6 +83,7 @@ object VibeVisualStyles {
             graphGlowAlpha = if (palette.isDark) 0.16f else 0.09f,
             showInstrumentDetails = true,
             scannerSweepEnabled = !reducedMotion,
+            anatomyDepthOffset = if (reducedMotion) 0.dp else 2.dp,
         )
     }
 

@@ -136,6 +136,8 @@ fun VibeSurface(
                         val edge = styleTokens.borderWidth.toPx() / 2f
                         val cut = styleTokens.cornerCut.toPx()
                         val signal = styleTokens.instrumentSignal.copy(alpha = if (palette.isDark) 0.52f else 0.42f)
+                        val projectedEdge = styleTokens.instrumentSignal.copy(alpha = if (palette.isDark) 0.12f else 0.08f)
+                        val projection = 2.dp.toPx()
                         drawLine(signal, Offset(edge, cut), Offset(cut, edge), styleTokens.borderWidth.toPx())
                         drawLine(signal, Offset(cut, edge), Offset(cut + tick, edge), styleTokens.borderWidth.toPx())
                         drawLine(signal, Offset(edge, cut), Offset(edge, cut + tick), styleTokens.borderWidth.toPx())
@@ -155,6 +157,18 @@ fun VibeSurface(
                             signal,
                             Offset(size.width - edge, size.height - cut - tick),
                             Offset(size.width - edge, size.height - cut),
+                            styleTokens.borderWidth.toPx(),
+                        )
+                        drawLine(
+                            projectedEdge,
+                            Offset(cut + tick, size.height - edge - projection),
+                            Offset(size.width - cut, size.height - edge - projection),
+                            styleTokens.borderWidth.toPx(),
+                        )
+                        drawLine(
+                            projectedEdge,
+                            Offset(size.width - edge - projection, cut),
+                            Offset(size.width - edge - projection, size.height - cut - tick),
                             styleTokens.borderWidth.toPx(),
                         )
                     }
