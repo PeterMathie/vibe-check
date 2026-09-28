@@ -6,6 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.dp
@@ -16,10 +18,17 @@ import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.ProgrammeEntity
 import com.petermathie.vibecheck.data.local.TrackerEntity
 import com.petermathie.vibecheck.ui.ArchiveScreen
+import com.petermathie.vibecheck.ui.AppFabHostState
+import com.petermathie.vibecheck.ui.AppFloatingAction
 import com.petermathie.vibecheck.ui.Destination
 import com.petermathie.vibecheck.ui.EditorViewModel
+import com.petermathie.vibecheck.ui.ExerciseEditor
+import com.petermathie.vibecheck.ui.MeasurementsScreen
 import com.petermathie.vibecheck.ui.MoreScreen
+import com.petermathie.vibecheck.ui.LocalAppFabClearance
+import com.petermathie.vibecheck.ui.LocalAppFabHost
 import com.petermathie.vibecheck.ui.PrimaryNavigationBar
+import com.petermathie.vibecheck.ui.ProgrammeEditor
 import com.petermathie.vibecheck.ui.TrackerScreen
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import org.junit.Rule
@@ -48,10 +57,31 @@ class NavigationUiTest {
                 var destination by remember { mutableStateOf(Destination.HOME) }
                 Column(Modifier.width(320.dp)) {
                     Box(Modifier.weight(1f).fillMaxWidth()) {
-                        when (destination) {
-                            Destination.MORE -> MoreScreen { destination = it }
-                            Destination.HABITS -> TrackerScreen(viewModel)
-                            else -> Unit
+                        val fabHost = remember(destination) { AppFabHostState(destination) }
+                        CompositionLocalProvider(
+                            LocalAppFabHost provides fabHost,
+                            LocalAppFabClearance provides 88.dp,
+                        ) {
+                            when (destination) {
+                                Destination.MORE -> MoreScreen { destination = it }
+                                Destination.PROGRAMMES -> ProgrammeEditor(
+                                    viewModel,
+                                    com.petermathie.vibecheck.domain.model.TrainingMode.STRENGTH,
+                                    {},
+                                    { _, _ -> },
+                                )
+                                Destination.HABITS -> TrackerScreen(viewModel)
+                                Destination.MEASUREMENTS -> MeasurementsScreen(viewModel)
+                                Destination.EXERCISES -> ExerciseEditor(viewModel)
+                                else -> Unit
+                            }
+                            fabHost.action?.takeIf { it.visible }?.let {
+                                AppFloatingAction(
+                                    it,
+                                    fabHost,
+                                    Modifier.align(Alignment.BottomStart).padding(16.dp),
+                                )
+                            }
                         }
                     }
                     PrimaryNavigationBar(destination) { destination = it }
@@ -63,10 +93,20 @@ class NavigationUiTest {
             compose.onNodeWithText(it).assertIsDisplayed()
         }
         compose.onNodeWithText("Workout").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
+        compose.onNodeWithText("Plans").performClick()
+        compose.onNodeWithContentDescription("Create new programme").assertIsDisplayed()
         compose.onNodeWithText("Habits").performClick()
-        compose.onNodeWithText("New habit").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Create new habit").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("Body").assertIsDisplayed()
+        compose.onNodeWithText("Body").performClick()
+        compose.onNodeWithContentDescription("Add progress photo").assertIsDisplayed()
         compose.onNodeWithText("More").assertIsDisplayed()
+        compose.onNodeWithText("More").performClick()
+        compose.onNodeWithText("Exercises").performClick()
+        compose.onNodeWithContentDescription("Add custom exercise").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add progress photo").assertDoesNotExist()
     }
 
     @Test

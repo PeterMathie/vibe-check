@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,6 +47,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +64,9 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -174,6 +179,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
 
     VibeCheckTheme(palette) {
         val motion = LocalVibeMotion.current
+        val reducedMotion = LocalVibeReducedMotion.current
         val travelPx = with(LocalDensity.current) { motion.travelDp.dp.roundToPx() }
         if (state.selectedHistoryDay != null) {
             BackHandler { viewModel.selectHistoryDay(null) }
@@ -185,12 +191,30 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
             return@VibeCheckTheme
         }
 
-        Scaffold(
-            containerColor = palette.background,
-            bottomBar = {
-                PrimaryNavigationBar(destination) { destination = it }
-            },
-        ) { padding ->
+        val fabHost = remember(destination) { AppFabHostState(destination) }
+        val density = LocalDensity.current
+        val imeVisible = androidx.compose.foundation.layout.WindowInsets.ime.getBottom(density) > 0
+        val fabAction = fabHost.action.visibleUnlessBlocked(fabHost.dragging, imeVisible)
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalAppFabHost provides fabHost,
+            LocalAppFabClearance provides if (fabAction == null) 0.dp else 88.dp,
+        ) {
+            Scaffold(
+                containerColor = palette.background,
+                floatingActionButtonPosition = FabPosition.Start,
+                floatingActionButton = {
+                    AnimatedVisibility(
+                        visible = fabAction != null,
+                        enter = if (reducedMotion) EnterTransition.None else fadeIn(),
+                        exit = if (reducedMotion) ExitTransition.None else fadeOut(),
+                    ) {
+                        fabAction?.let { AppFloatingAction(it, fabHost) }
+                    }
+                },
+                bottomBar = {
+                    PrimaryNavigationBar(destination) { destination = it }
+                },
+            ) { padding ->
             BackHandler(destination in moreDestinations) { destination = Destination.MORE }
             Column(Modifier.fillMaxSize().padding(padding)) {
                 if(error != null) TextButton(onClick = { editor.error.value = null }) { Text(error.orEmpty(),color=MaterialTheme.colorScheme.error) }
@@ -253,6 +277,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         { themeMode = it; prefs.edit().putString("themeMode", it.id).apply() },
                     ) { result -> viewModel.removeDemoData(result) }
                     Destination.ARCHIVE -> ArchiveScreen(editor)
+                }
                 }
                 }
             }
@@ -483,17 +508,19 @@ internal fun HomeScreen(
                 .padding(horizontal = horizontalGutter, vertical = verticalPadding),
             verticalArrangement = Arrangement.spacedBy(sectionSpacing),
         ) {
-        VibeCard(modifier = Modifier.height(freshnessPanelHeight), fillHeight = true) {
-            TechnicalBackdrop(Modifier.fillMaxWidth()) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "FRESHNESS",
-                        modifier = Modifier.weight(1f),
-                        color = palette.accent,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
-                    ModeSelector(state.mode, onModeChange, Modifier.weight(1.45f))
-                }
+        VibeCard(
+            modifier = Modifier.height(freshnessPanelHeight),
+            fillHeight = true,
+            technicalBackdrop = true,
+        ) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "FRESHNESS",
+                    modifier = Modifier.weight(1f),
+                    color = palette.accent,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                ModeSelector(state.mode, onModeChange, Modifier.weight(1.45f))
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 Column(
@@ -609,6 +636,12 @@ internal fun HomeScreen(
                     selectedDate = selectedRecencyDate,
                     today = today,
                     compact = compactHomeChrome,
+                    expandRows = compactHomeChrome && state.activeWorkout == null,
+                    modifier = if (compactHomeChrome && state.activeWorkout == null) {
+                        Modifier.weight(1f, fill = true)
+                    } else {
+                        Modifier
+                    },
                     onDayClick = { date ->
                         onRecencyDayChange(date.toEpochDay())
                         onDayClick(date.toEpochDay())
@@ -626,10 +659,16 @@ internal fun HomeScreen(
             if (compactHomeChrome) {
                 VibeSurface(
                     level = VibeSurfaceLevel.CARD,
-                    modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Work tracker card" },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (state.activeWorkout == null) Modifier.weight(1f, fill = true) else Modifier)
+                        .semantics { contentDescription = "Work tracker card" },
                 ) {
                     Column(
-                        Modifier.fillMaxWidth().padding(horizontal = VibeSpacing.small, vertical = VibeSpacing.xSmall),
+                        Modifier
+                            .fillMaxWidth()
+                            .then(if (state.activeWorkout == null) Modifier.fillMaxHeight() else Modifier)
+                            .padding(horizontal = VibeSpacing.small, vertical = VibeSpacing.xSmall),
                         verticalArrangement = Arrangement.spacedBy(VibeSpacing.xSmall),
                         content = trackerContent,
                     )
@@ -664,6 +703,8 @@ private fun MonthlyActivityHeatmap(
     selectedDate: LocalDate,
     today: LocalDate,
     compact: Boolean = false,
+    expandRows: Boolean = false,
+    modifier: Modifier = Modifier,
     onDayClick: (LocalDate) -> Unit,
     onMonthChange: (YearMonth) -> Unit,
 ) {
@@ -673,62 +714,80 @@ private fun MonthlyActivityHeatmap(
     val counts = days.associate { it.epochDay to it.activityCount }
     val leadingDays = range.firstDate.dayOfWeek.value % 7
     val weekCount = (leadingDays + range.dayCount + 6) / 7
-    Row(
-        Modifier.fillMaxWidth().semantics { contentDescription = "Freshness month navigation" },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    Column(
+        modifier.fillMaxWidth(),
     ) {
-        VibeActionButton("Earlier", { onMonthChange(range.month.minusMonths(1)) }, importance = ActionImportance.COMPACT)
-        Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (compact) {
-                Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelSmall)
+        Row(
+            Modifier.fillMaxWidth().semantics { contentDescription = "Freshness month navigation" },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            VibeActionButton("Earlier", { onMonthChange(range.month.minusMonths(1)) }, importance = ActionImportance.COMPACT)
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (compact) {
+                    Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(
+                    range.month.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
             }
-            Text(
-                range.month.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
-                style = MaterialTheme.typography.labelSmall,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            VibeActionButton(
+                "Later",
+                { onMonthChange(range.month.plusMonths(1)) },
+                importance = ActionImportance.COMPACT,
+                enabled = range.month < YearMonth.from(today),
             )
         }
-        VibeActionButton(
-            "Later",
-            { onMonthChange(range.month.plusMonths(1)) },
-            importance = ActionImportance.COMPACT,
-            enabled = range.month < YearMonth.from(today),
-        )
-    }
-    val outerCount = if (compact) 7 else weekCount
-    val innerCount = if (compact) weekCount else 7
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        repeat(outerCount) { outer ->
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                repeat(innerCount) { inner ->
-                    val week = if (compact) inner else outer
-                    val weekday = if (compact) outer else inner
-                    val dayOfMonth = week * 7 + weekday - leadingDays + 1
-                    if (dayOfMonth in 1..range.dayCount) {
-                        val date = range.month.atDay(dayOfMonth)
-                        val count = counts[date.toEpochDay()] ?: 0
-                        val color = heatmapColors.forLevel(count.coerceAtMost(3))
-                        val outlineColor = when {
-                            date == selectedDate || date == today -> palette.heatmapOutlineColor(color)
-                            else -> Color.Transparent
+        val outerCount = if (compact) 7 else weekCount
+        val innerCount = if (compact) weekCount else 7
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier)
+                .semantics { contentDescription = "Activity heatmap grid, $weekCount weeks" },
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            repeat(outerCount) { outer ->
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .then(if (expandRows) Modifier.fillMaxHeight() else Modifier),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    repeat(innerCount) { inner ->
+                        val week = if (compact) inner else outer
+                        val weekday = if (compact) outer else inner
+                        val dayOfMonth = week * 7 + weekday - leadingDays + 1
+                        val cellModifier = Modifier
+                            .fillMaxWidth()
+                            .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier.height(14.dp))
+                        if (dayOfMonth in 1..range.dayCount) {
+                            val date = range.month.atDay(dayOfMonth)
+                            val count = counts[date.toEpochDay()] ?: 0
+                            val color = heatmapColors.forLevel(count.coerceAtMost(3))
+                            val outlineColor = when {
+                                date == selectedDate || date == today -> palette.heatmapOutlineColor(color)
+                                else -> Color.Transparent
+                            }
+                            Box(
+                                cellModifier
+                                    .semantics {
+                                        contentDescription = "$date: $count activities" +
+                                            if (date == selectedDate) ", selected freshness date" else ""
+                                    }
+                                    .background(color, RoundedCornerShape(VibeShapes.tooltip))
+                                    .border(
+                                        width = if (date == selectedDate) 2.dp else 1.dp,
+                                        color = outlineColor,
+                                        shape = RoundedCornerShape(VibeShapes.tooltip),
+                                    )
+                                    .clickable { onDayClick(date) },
+                            )
+                        } else {
+                            Spacer(cellModifier)
                         }
-                        Box(
-                            Modifier.fillMaxWidth().height(14.dp)
-                                .semantics {
-                                    contentDescription = "$date: $count activities" +
-                                        if (date == selectedDate) ", selected freshness date" else ""
-                                }
-                                .background(color, RoundedCornerShape(VibeShapes.tooltip))
-                                .border(
-                                    width = if (date == selectedDate) 2.dp else 1.dp,
-                                    color = outlineColor,
-                                    shape = RoundedCornerShape(VibeShapes.tooltip),
-                                )
-                                .clickable { onDayClick(date) },
-                        )
-                    } else {
-                        Spacer(Modifier.fillMaxWidth().height(14.dp))
                     }
                 }
             }
@@ -817,6 +876,7 @@ private fun ExerciseLibraryScreen(exercises: List<ExerciseSummary>, onSearch: (S
 internal fun VibeCard(
    modifier: Modifier = Modifier,
    fillHeight: Boolean = false,
+   technicalBackdrop: Boolean = false,
    content: @Composable ColumnScope.() -> Unit,
 ) {
     VibeSurface(
@@ -824,7 +884,25 @@ internal fun VibeCard(
         modifier = modifier.fillMaxWidth(),
     ) {
         val contentModifier = if (fillHeight) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
-        Column(contentModifier.padding(VibeSpacing.medium), verticalArrangement = Arrangement.spacedBy(VibeSpacing.small)) { content() }
+        val cardContent: @Composable () -> Unit = {
+            Column(
+                contentModifier.padding(VibeSpacing.medium),
+                verticalArrangement = Arrangement.spacedBy(VibeSpacing.small),
+            ) {
+                content()
+            }
+        }
+        if (technicalBackdrop) {
+            TechnicalBackdrop(
+                Modifier
+                    .fillMaxSize()
+                    .semantics { contentDescription = "Freshness panel texture" },
+            ) {
+                cardContent()
+            }
+        } else {
+            cardContent()
+        }
     }
 }
 
@@ -844,7 +922,12 @@ internal fun ScreenList(
                     modifier = Modifier
                         .fillMaxSize()
                         .reorderScrollViewport(reorderContext),
-                    contentPadding = PaddingValues(horizontal = sidePadding, vertical = VibeSpacing.medium),
+                    contentPadding = PaddingValues(
+                        start = sidePadding,
+                        top = VibeSpacing.medium,
+                        end = sidePadding,
+                        bottom = VibeSpacing.medium + LocalAppFabClearance.current,
+                    ),
                     verticalArrangement = Arrangement.spacedBy(VibeSpacing.medium),
                     content = content,
                 )

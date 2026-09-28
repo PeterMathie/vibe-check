@@ -45,18 +45,16 @@ fun TrackerScreen(vm: EditorViewModel) {
     val trackerOrder = rememberReorderState(activeTrackers.map { it.id }) { key, from, to ->
         vm.moveTracker(key as String, to - from)
     }
+    RegisterAppFabAction(
+        owner = Destination.HABITS,
+        destination = AppFabDestination.NewHabit,
+        visible = newHabit == null && settings == null && field == null && deleteCandidate == null,
+    ) {
+        newHabit = TrackerEntity(newId(), "", false)
+    }
     ScreenList {
         item {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                Text("Habits", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                Button(
-                    onClick = { newHabit = TrackerEntity(newId(), "", false) },
-                    shape = MaterialTheme.shapes.medium,
-                ) { Text("New habit") }
-            }
+            Text("Habits", style = MaterialTheme.typography.headlineSmall)
         }
         if (activeTrackers.isEmpty()) {
             item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a habit to record today's entry.") }

@@ -70,6 +70,15 @@ fun WorkoutEditor(
     var bodyweight by remember { mutableStateOf(false) }
     var editDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    if (workout != null) {
+        RegisterAppFabAction(
+            owner = Destination.ACTIVE_WORKOUT,
+            destination = AppFabDestination.AddWorkoutExercise,
+            visible = !add && !bodyweight && !editDate && !confirmDelete,
+        ) {
+            add = true
+        }
+    }
     if (workout == null) {
         Button(
             onClick = onChoose,
@@ -91,7 +100,12 @@ fun WorkoutEditor(
             .fillMaxSize()
             .imePadding()
             .semantics { contentDescription = "Workout exercise list" },
-        contentPadding = PaddingValues(12.dp),
+        contentPadding = PaddingValues(
+            start = 12.dp,
+            top = 12.dp,
+            end = 12.dp,
+            bottom = 12.dp + LocalAppFabClearance.current,
+        ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item {
@@ -122,7 +136,6 @@ fun WorkoutEditor(
             )
         }
         item {
-            VibeActionButton("Add exercise to workout", { add = true }, importance = ActionImportance.SECONDARY)
             val workoutRowIds = rows.mapTo(mutableSetOf()) { it.id }
             val canFinish = validEntryRows.values.none { !it } &&
                 entryDrafts.none { it.workoutExerciseId in workoutRowIds && hasInvalidQuantitativeInput(it) } &&

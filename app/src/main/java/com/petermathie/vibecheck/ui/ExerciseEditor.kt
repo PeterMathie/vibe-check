@@ -65,6 +65,19 @@ fun ExerciseEditor(vm: EditorViewModel) {
     val visibleExercises = filteredExercises.filter {
         it.tag == exerciseType || it.tag == "BOTH"
     }
+    RegisterAppFabAction(
+        owner = Destination.EXERCISES,
+        destination = AppFabDestination.NewExercise,
+        visible = selected == null &&
+            configuring == null &&
+            configuringVariation == null &&
+            videoExerciseId == null &&
+            playingVideo == null &&
+            deletingVideo == null &&
+            variation == null,
+    ) {
+        selected = ExerciseEntity(newId(), "", exerciseType, "WEIGHT_REPS", null, null, "custom", true)
+    }
     ScreenList {
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -79,21 +92,7 @@ fun ExerciseEditor(vm: EditorViewModel) {
                     }
                 }
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                EditField("Name, alias or muscle", query, Modifier.weight(1f)) { query = it }
-                IconButton(
-                    onClick = {
-                        selected = ExerciseEntity(newId(), "", exerciseType, "WEIGHT_REPS", null, null, "custom", true)
-                    },
-                    modifier = Modifier.semantics { contentDescription = "Add custom exercise" },
-                ) {
-                    Icon(Icons.Outlined.Add, contentDescription = null)
-                }
-            }
+            EditField("Name, alias or muscle", query) { query = it }
         }
         items(visibleExercises,key={it.id}) { e ->
             VibeCard {

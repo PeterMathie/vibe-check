@@ -415,6 +415,13 @@ fun MeasurementsScreen(vm:EditorViewModel) {
     }
     val selectedDate = LocalDate.ofEpochDay(selectedDay)
     val month = YearMonth.parse(displayedMonth)
+    RegisterAppFabAction(
+        owner = Destination.MEASUREMENTS,
+        destination = AppFabDestination.AddProgressPhoto,
+        visible = editing == null,
+    ) {
+        picker.launch(arrayOf("image/*"))
+    }
     val availableCardKeys = buildList {
         if (bodyweights.isNotEmpty()) add("trend")
         add("calendar")
@@ -470,45 +477,64 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                 "trend" -> if (bodyweights.isNotEmpty()) item {
                     ReorderItem(reorder, cardKey, index, Modifier.fillMaxWidth()) {
                         VibeCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Bodyweight trend", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                            ReorderHandle(reorder, cardKey, "Bodyweight trend")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Bodyweight trend", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                                ReorderHandle(reorder, cardKey, "Bodyweight trend")
                             }
-                        }
-                        MiniChart(values = bodyweights.map { if (it.unit.equals("lb", true)) it.value / 2.2046226218 else it.value }, dates = bodyweights.map { it.recordedAt }, unit = "kg") { idx ->
-                            val day = Instant.ofEpochMilli(bodyweights[idx].recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()
-                            selectedDay = day.toEpochDay(); displayedMonth = YearMonth.from(day).toString()
+                            MiniChart(values = bodyweights.map { if (it.unit.equals("lb", true)) it.value / 2.2046226218 else it.value }, dates = bodyweights.map { it.recordedAt }, unit = "kg") { idx ->
+                                val day = Instant.ofEpochMilli(bodyweights[idx].recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+                                selectedDay = day.toEpochDay(); displayedMonth = YearMonth.from(day).toString()
+                            }
                         }
                     }
                 }
                 "calendar" -> item {
                     ReorderItem(reorder, cardKey, index, Modifier.fillMaxWidth()) {
-                        VibeCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Calendar", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                            ReorderHandle(reorder, cardKey, "Calendar")
+                        VibeCard(modifier = Modifier.semantics { contentDescription = "Bodyweight calendar card" }) {
+                            Row(
+                                modifier = Modifier.semantics { contentDescription = "Bodyweight calendar heading" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Calendar", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                                ReorderHandle(reorder, cardKey, "Calendar")
                             }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            VibeActionButton("‹", { displayedMonth = month.minusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Previous month" }, importance = ActionImportance.COMPACT)
-                            Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium)
-                            VibeActionButton("›", { displayedMonth = month.plusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Next month" }, importance = ActionImportance.COMPACT)
-                        }
-                        Row(Modifier.fillMaxWidth()) { listOf("M", "T", "W", "T", "F", "S", "S").forEach { Text(it, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.labelSmall) } }
-                        val leading = month.atDay(1).dayOfWeek.value - 1
-                        val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
-                        repeat(cellCount / 7) { week ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                repeat(7) { weekday ->
-                                    val dayNumber = week * 7 + weekday - leading + 1
-                                    if (dayNumber !in 1..month.lengthOfMonth()) Spacer(Modifier.weight(1f).height(64.dp)) else {
-                                        val date = month.atDay(dayNumber)
-                                        val epochDay = date.toEpochDay()
-                                        val measurement = weightsByDay[epochDay]
-                                        Surface(onClick = { selectedDay = epochDay; displayedMonth = YearMonth.from(date).toString() }, color = if (epochDay == selectedDay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small, modifier = Modifier.weight(1f).height(64.dp)) {
-                                            Column(Modifier.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                                Text(dayNumber.toString(), style = MaterialTheme.typography.labelSmall)
-                                                measurement?.let { Text(formatBodyweight(it.value), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                            Row(
+                                modifier = Modifier.semantics { contentDescription = "Bodyweight calendar month controls" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                VibeActionButton("‹", { displayedMonth = month.minusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Previous month" }, importance = ActionImportance.COMPACT)
+                                Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium)
+                                VibeActionButton("›", { displayedMonth = month.plusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Next month" }, importance = ActionImportance.COMPACT)
+                            }
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .semantics { contentDescription = "Bodyweight calendar weekday labels" },
+                            ) {
+                                listOf("M", "T", "W", "T", "F", "S", "S").forEach {
+                                    Text(it, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                            val leading = month.atDay(1).dayOfWeek.value - 1
+                            val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
+                            repeat(cellCount / 7) { week ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .semantics { contentDescription = "Bodyweight calendar week ${week + 1}" },
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    repeat(7) { weekday ->
+                                        val dayNumber = week * 7 + weekday - leading + 1
+                                        if (dayNumber !in 1..month.lengthOfMonth()) Spacer(Modifier.weight(1f).height(64.dp)) else {
+                                            val date = month.atDay(dayNumber)
+                                            val epochDay = date.toEpochDay()
+                                            val measurement = weightsByDay[epochDay]
+                                            Surface(onClick = { selectedDay = epochDay; displayedMonth = YearMonth.from(date).toString() }, color = if (epochDay == selectedDay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small, modifier = Modifier.weight(1f).height(64.dp)) {
+                                                Column(Modifier.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Text(dayNumber.toString(), style = MaterialTheme.typography.labelSmall)
+                                                    measurement?.let { Text(formatBodyweight(it.value), style = MaterialTheme.typography.labelSmall, maxLines = 1) }
+                                                }
                                             }
                                         }
                                     }
@@ -519,23 +545,37 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                 }
                 "photos" -> item {
                     ReorderItem(reorder, cardKey, index, Modifier.fillMaxWidth()) {
-                        VibeCard {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Photos", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                            ReorderHandle(reorder, cardKey, "Photos")
+                        VibeCard(modifier = Modifier.semantics { contentDescription = "Progress photos card" }) {
+                            Row(
+                                modifier = Modifier.semantics { contentDescription = "Progress photos heading" },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("Photos", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                                ReorderHandle(reorder, cardKey, "Photos")
                             }
+                            Text(
+                                selectedDate.format(DateTimeFormatter.ofPattern("d MMMM yyyy")),
+                                modifier = Modifier.semantics { contentDescription = "Progress photos date" },
+                                style = MaterialTheme.typography.titleLarge,
+                            )
+                            selectedMeasurement?.let { row -> Text("Bodyweight: ${formatBodyweight(row.value)} ${row.unit}") }
+                            Column(Modifier.semantics { contentDescription = "Progress photos actions" }) {
+                                TextButton(onClick = { exporter.launch("progress-photos.zip") }) { Text("Export photos separately") }
+                            }
+                            if (selectedPhotos.isEmpty()) Text("No photo for this day", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            selectedPhotos.forEach { file ->
+                                val bitmap = remember(file, refresh) { android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }) }
+                                bitmap?.let {
+                                    androidx.compose.foundation.Image(
+                                        it.asImageBitmap(),
+                                        contentDescription = "Progress photo for selected day",
+                                        modifier = Modifier.fillMaxWidth().height(240.dp),
+                                    )
+                                }
+                                TextButton(onClick = { if (file.delete()) { refresh++; message = "Photo removed" } else message = "Could not remove photo" }) { Text("Delete photo") }
+                            }
+                            Text(message)
                         }
-                        Text(selectedDate.format(DateTimeFormatter.ofPattern("d MMMM yyyy")), style = MaterialTheme.typography.titleLarge)
-                        selectedMeasurement?.let { row -> Text("Bodyweight: ${formatBodyweight(row.value)} ${row.unit}") }
-                        TextButton(onClick = { picker.launch(arrayOf("image/*")) }) { Text("Add progress photo") }
-                        TextButton(onClick = { exporter.launch("progress-photos.zip") }) { Text("Export photos separately") }
-                        if (selectedPhotos.isEmpty()) Text("No photo for this day", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        selectedPhotos.forEach { file ->
-                            val bitmap = remember(file, refresh) { android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = 4 }) }
-                            bitmap?.let { androidx.compose.foundation.Image(it.asImageBitmap(), contentDescription = "Progress photo ${file.name}", modifier = Modifier.fillMaxWidth().height(240.dp)) }
-                            TextButton(onClick = { if (file.delete()) { refresh++; message = "Photo removed" } else message = "Could not remove photo" }) { Text("Delete photo") }
-                        }
-                        Text(message)
                     }
                 }
             }

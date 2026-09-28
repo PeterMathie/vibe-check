@@ -90,7 +90,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             db.withTransaction { rows.forEachIndexed { i,e -> dao.entry(e.copy(position=i)) } }
         }
     }
-    fun save(row: ProgrammeDayEntity) = write { dao.day(row) }
+    fun save(row: ProgrammeDayEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.day(row) }
     fun save(row: ProgrammeExerciseEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.entry(row) }
     fun save(row: WorkoutEntity) = write { dao.workout(row) }
     fun changeWorkoutDate(row: WorkoutEntity, end: Long) = write {

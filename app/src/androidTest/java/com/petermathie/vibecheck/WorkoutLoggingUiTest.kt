@@ -3,9 +3,14 @@ package com.petermathie.vibecheck
 import android.content.Context
 import androidx.compose.ui.test.*
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
@@ -17,6 +22,11 @@ import com.petermathie.vibecheck.data.TrainingRepository
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.ui.EditorViewModel
+import com.petermathie.vibecheck.ui.AppFabHostState
+import com.petermathie.vibecheck.ui.AppFloatingAction
+import com.petermathie.vibecheck.ui.Destination
+import com.petermathie.vibecheck.ui.LocalAppFabClearance
+import com.petermathie.vibecheck.ui.LocalAppFabHost
 import com.petermathie.vibecheck.ui.WorkoutEditor
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
@@ -46,10 +56,32 @@ class WorkoutLoggingUiTest {
         val workoutId = startPushWorkout(context)
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent {
-            VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) }
+            VibeCheckTheme {
+                val host = remember { AppFabHostState(Destination.ACTIVE_WORKOUT) }
+                CompositionLocalProvider(
+                    LocalAppFabHost provides host,
+                    LocalAppFabClearance provides 88.dp,
+                ) {
+                    Box(Modifier.fillMaxSize()) {
+                        WorkoutEditor(viewModel, workoutId, {}, {})
+                        host.action?.takeIf { it.visible }?.let {
+                            AppFloatingAction(
+                                it,
+                                host,
+                                Modifier.align(Alignment.BottomStart).padding(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Choose exercise").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add exercise to workout").assertDoesNotExist()
+        compose.onNodeWithText("Close").performClick()
+        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed()
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()

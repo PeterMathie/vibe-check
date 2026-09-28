@@ -122,3 +122,18 @@ Trackers contain any combination of Boolean, number, duration, count, rating, te
 Every screen consumes semantic tokens for colour, typography, spacing, shape and motion. The four curated Ocean, Sunset, Forest and Mono presets provide complete light/dark Material roles and matching Freshness colours without screen-specific overrides. Appearance defaults to **Follow system**, while explicit **Dark** and **Light** choices persist across launches and backups. Dark variants use restrained layered neutral surfaces; Ocean dark maps its core roles to the official [VS Code Dark Modern theme](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_modern.json) while retaining Vibe Check's own semantic Freshness colours and mobile state treatments.
 
 Habit heat maps use a separate four-state scale: neutral/no activity, low, medium and strong. Every preset preserves that perceptual order; dark themes increase visual intensity rather than making low values disappear into the background. Habit choice previews, calendars and legends use the same centralized scale.
+
+The app scaffold owns one context-sensitive extended Add FAB at logical bottom-start. It appears only for an available page-primary creation action and adds bottom scroll clearance without consuming page layout:
+
+| Context | Shared action |
+|---|---|
+| Programme list | New programme |
+| Programme editor | Add exercise or stretch, with day/type choice when needed |
+| Habits | New habit |
+| Exercise catalogue | New exercise |
+| Active workout | Add exercise |
+| Bodyweight and photos | Add photo for the selected day |
+
+Home, Progress, More, History, Settings, Style and Archive deliberately have no shared Add action. Inline controls remain where they confirm a form or add within a nested structure: saving bodyweight, adding a set inside an exercise, adding a habit measurement or choice, adding a variation, attaching media, and export/restore actions. The shared FAB hides while the keyboard, a modal flow or a reorder drag owns interaction, and its visibility change is immediate under reduced motion.
+
+The Freshness panel uses one clipped cached technical texture across its complete surface, including title, maps and legend. With no active workout at default type on a reference phone, the Work tracker consumes the measured remaining height without changing Freshness geometry or creating a scroll range, and its calendar divides the available grid height evenly across the displayed four, five or six week rows. Active workouts, constrained widths and larger type may scroll.

@@ -370,7 +370,17 @@ fun ReorderOverlayHost(
         }
         val entry = registry.entry
         val startBounds = entry?.state?.dragStartBounds()
-        if (entry != null && startBounds != null && entry.state.isDraggingSession(entry.key, entry.token)) {
+        val dragging = entry != null && startBounds != null && entry.state.isDraggingSession(entry.key, entry.token)
+        val fabHost = LocalAppFabHost.current
+        DisposableEffect(fabHost, dragging) {
+            fabHost?.updateDragging(dragging)
+            onDispose {
+                if (dragging) fabHost?.updateDragging(false)
+            }
+        }
+        if (dragging) {
+            requireNotNull(entry)
+            requireNotNull(startBounds)
             val viewportTop = entry.scrollContext?.viewportTop?.takeIf(Float::isFinite) ?: hostBounds.top
             val viewportBottom = entry.scrollContext?.viewportBottom?.takeIf(Float::isFinite) ?: hostBounds.bottom
             val overlayTop = entry.state.overlayTop()

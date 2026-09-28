@@ -55,10 +55,14 @@ fun ProgrammeEditor(
     var expandedProgrammeId by rememberSaveable { mutableStateOf<String?>(null) }
     var rename by remember { mutableStateOf<ProgrammeEntity?>(null) }
     var addExerciseDayId by rememberSaveable { mutableStateOf<String?>(null) }
+    var addExerciseActivityTag by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingAddDayChoice by rememberSaveable { mutableStateOf(false) }
+    var pendingAddTypeDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var editPrescription by remember { mutableStateOf<ProgrammeExerciseEntity?>(null) }
     var pendingStartDayId by rememberSaveable { mutableStateOf<String?>(null) }
     val programmeRows = programmes.filter { it.mode == mode.name }.sortedBy { it.position }
     val selectedProgramme = programmes.find { it.id == selected }
+    var generatedEmptyDayId by rememberSaveable(selectedProgramme?.id) { mutableStateOf<String?>(null) }
     var programmeName by rememberSaveable(selectedProgramme?.id, selectedProgramme?.name) {
         mutableStateOf(selectedProgramme?.name.orEmpty())
     }
@@ -75,6 +79,59 @@ fun ProgrammeEditor(
     fun requestStart(dayId: String) {
         if (activeWorkout != null && activeWorkout.programmeDayId != dayId) pendingStartDayId = dayId
         else onStart(dayId, false)
+    }
+    val availableAddTypes = exercises
+        .filterNot { it.isArchived }
+        .map { it.tag }
+        .filter { it in setOf(TrainingMode.STRENGTH.name, TrainingMode.STRETCHING.name) }
+        .toSet()
+    fun chooseAddType(dayId: String) {
+        if (availableAddTypes.size > 1) {
+            pendingAddTypeDayId = dayId
+        } else {
+            addExerciseDayId = dayId
+            addExerciseActivityTag = availableAddTypes.singleOrNull()
+        }
+    }
+    fun requestAddProgrammeItem() {
+        when (dayRows.size) {
+            0 -> generatedEmptyDayId?.let(::chooseAddType) ?: selectedProgramme?.let { programme ->
+                val dayId = newId()
+                generatedEmptyDayId = dayId
+                val day = ProgrammeDayEntity(
+                    id = dayId,
+                    programmeId = programme.id,
+                    name = if (programme.mode == TrainingMode.STRETCHING.name) "Stretching" else "Workout",
+                    position = 0,
+                )
+                vm.save(day) { chooseAddType(day.id) }
+            }
+            1 -> chooseAddType(dayRows.single().id)
+            else -> pendingAddDayChoice = true
+        }
+    }
+    val programmeModalOpen = rename != null ||
+        addExerciseDayId != null ||
+        pendingAddDayChoice ||
+        pendingAddTypeDayId != null ||
+        editPrescription != null ||
+        pendingStartDayId != null
+    if (selected == null) {
+        RegisterAppFabAction(
+            owner = Destination.PROGRAMMES,
+            destination = AppFabDestination.NewProgramme,
+            visible = !programmeModalOpen,
+        ) {
+            rename = ProgrammeEntity(newId(), "", mode.name, false)
+        }
+    } else {
+        RegisterAppFabAction(
+            owner = Destination.PROGRAMMES,
+            destination = AppFabDestination.AddProgrammeItem,
+            enabled = availableAddTypes.isNotEmpty(),
+            visible = !programmeModalOpen && availableAddTypes.isNotEmpty(),
+            onClick = ::requestAddProgrammeItem,
+        )
     }
     BackHandler(selected != null) { selected = null }
     ScreenList {
@@ -182,17 +239,6 @@ fun ProgrammeEditor(
                     }
                 }
             }
-            item {
-                Button(
-                    onClick = { rename = ProgrammeEntity(newId(), "", mode.name, false) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "Add programme" },
-                    shape = MaterialTheme.shapes.medium,
-                ) {
-                    Icon(Icons.Outlined.Add, contentDescription = null)
-                }
-            }
         } else {
             item {
                 OutlinedTextField(
@@ -286,11 +332,6 @@ fun ProgrammeEditor(
                             }
                         }
                         }
-                        Button(
-                            onClick = { addExerciseDayId = d.id },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
-                        ) { Icon(Icons.Outlined.Add, contentDescription = "Add exercise") }
                     }
                 }
             }
@@ -333,8 +374,72 @@ fun ProgrammeEditor(
             rename = null
         }
     }
+    if (pendingAddDayChoice) {
+        AlertDialog(
+            onDismissRequest = { pendingAddDayChoice = false },
+            title = { Text("Choose programme day") },
+            text = {
+                Column {
+                    dayRows.forEach { day ->
+                        TextButton(
+                            onClick = {
+                                pendingAddDayChoice = false
+                                chooseAddType(day.id)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(day.name)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingAddDayChoice = false }) { Text("Cancel") }
+            },
+        )
+    }
+    pendingAddTypeDayId?.let { targetDayId ->
+        AlertDialog(
+            onDismissRequest = { pendingAddTypeDayId = null },
+            title = { Text("Add to programme") },
+            text = {
+                Column {
+                    if (TrainingMode.STRENGTH.name in availableAddTypes) {
+                        TextButton(
+                            onClick = {
+                                pendingAddTypeDayId = null
+                                addExerciseDayId = targetDayId
+                                addExerciseActivityTag = TrainingMode.STRENGTH.name
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Add exercise") }
+                    }
+                    if (TrainingMode.STRETCHING.name in availableAddTypes) {
+                        TextButton(
+                            onClick = {
+                                pendingAddTypeDayId = null
+                                addExerciseDayId = targetDayId
+                                addExerciseActivityTag = TrainingMode.STRETCHING.name
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Add stretch") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingAddTypeDayId = null }) { Text("Cancel") }
+            },
+        )
+    }
     addExerciseDayId?.let { targetDayId ->
-        ExercisePicker(vm, { addExerciseDayId = null }) { exercise ->
+        ExercisePicker(
+            vm = vm,
+            onDismiss = {
+                addExerciseDayId = null
+                addExerciseActivityTag = null
+            },
+            activityTag = addExerciseActivityTag,
+        ) { exercise ->
             vm.save(
                 ProgrammeExerciseEntity(
                     newId(),
@@ -352,6 +457,7 @@ fun ProgrammeEditor(
                 ),
             ) { haptics.perform(VibeHapticEvent.SUCCESS) }
             addExerciseDayId = null
+            addExerciseActivityTag = null
         }
     }
     editPrescription?.let { assignment ->
@@ -453,7 +559,12 @@ fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, allowEmpty
 }
 
 @Composable
-fun ExercisePicker(vm: EditorViewModel, onDismiss: () -> Unit, onChoose: (ExerciseEntity) -> Unit) {
+fun ExercisePicker(
+    vm: EditorViewModel,
+    onDismiss: () -> Unit,
+    activityTag: String? = null,
+    onChoose: (ExerciseEntity) -> Unit,
+) {
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val mappings by vm.mappings.collectAsStateWithLifecycle()
@@ -464,9 +575,17 @@ fun ExercisePicker(vm: EditorViewModel, onDismiss: () -> Unit, onChoose: (Exerci
     val mappedIds = mappings.filter { it.muscleId in muscleIds }.map { it.exerciseId }.toSet()
     AlertDialog(onDismissRequest = onDismiss, title = { Text("Choose exercise") }, text = {
         Column { OutlinedTextField(query, { query = it }, label = { Text("Name, alias or muscle") })
-            LazyColumn(Modifier.heightIn(max = 420.dp)) { items(exercises.filter { !it.isArchived && (it.canonicalName.contains(query, true) || it.id in aliasIds || it.id in mappedIds) }) { e ->
+            LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                items(
+                    exercises.filter {
+                        !it.isArchived &&
+                            (activityTag == null || it.tag == activityTag) &&
+                            (it.canonicalName.contains(query, true) || it.id in aliasIds || it.id in mappedIds)
+                    },
+                ) { e ->
                 Text(e.canonicalName, Modifier.fillMaxWidth().clickable { onChoose(e) }.padding(vertical = 14.dp))
-            } }
+                }
+            }
         }
     }, confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } })
 }

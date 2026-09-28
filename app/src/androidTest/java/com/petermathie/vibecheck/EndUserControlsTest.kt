@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -72,6 +73,13 @@ class EndUserControlsTest {
         val frontMapBounds = compose.onNodeWithContentDescription("male front freshness map").fetchSemanticsNode().boundsInRoot
         val backMapBounds = compose.onNodeWithContentDescription("male back freshness map").fetchSemanticsNode().boundsInRoot
         val legendBounds = legend.fetchSemanticsNode().boundsInRoot
+        val texture = compose.onNodeWithContentDescription("Freshness panel texture")
+        val textureBounds = texture.fetchSemanticsNode().boundsInRoot
+        val titleBounds = compose.onNodeWithText("FRESHNESS").fetchSemanticsNode().boundsInRoot
+        val texturePixels = texture.captureToImage().toPixelMap()
+        assertTrue("texture=$textureBounds title=$titleBounds", textureBounds.top < titleBounds.top)
+        assertTrue("texture=$textureBounds map=$frontMapBounds", textureBounds.bottom > frontMapBounds.bottom)
+        assertTrue(texturePixels.width > 0 && texturePixels.height > 0)
         assertTrue(
             "front=$frontMapBounds legend=$legendBounds",
             kotlin.math.abs(frontMapBounds.top - legendBounds.top) < 2f,
@@ -247,7 +255,10 @@ class EndUserControlsTest {
             .config[SemanticsProperties.VerticalScrollAxisRange]
         assertEquals(0f, initialScrollRange.value(), 0.5f)
         assertEquals(0f, initialScrollRange.maxValue(), 0.5f)
-        assertTrue("tracker=$trackerBefore viewport=$viewport", trackerBefore.bottom <= viewport.bottom + 0.5f)
+        assertTrue(
+            "tracker=$trackerBefore viewport=$viewport",
+            viewport.bottom - trackerBefore.bottom in 0f..12f,
+        )
 
         repeat(10) { iteration ->
             compose.runOnIdle {
@@ -289,6 +300,146 @@ class EndUserControlsTest {
                 .fetchSemanticsNode().boundsInRoot
             assertTrue("iteration=$iteration tracker=$trackerAfter viewport=$viewport", trackerAfter.bottom <= viewport.bottom + 0.5f)
         }
+    }
+
+    @Test
+    fun noWorkoutTrackerConsumesRemainingReferenceViewportsWithoutChangingFreshness() {
+        var viewportWidth by mutableStateOf<Dp>(411.dp)
+        var viewportHeight by mutableStateOf<Dp>(761.dp)
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(viewportWidth).height(viewportHeight)) {
+                    HomeScreen(
+                        state = MainUiState(),
+                        onDayClick = {},
+                        onContinue = {},
+                        onRecencyDayChange = {},
+                        onModeChange = {},
+                    )
+                }
+            }
+        }
+
+        val referenceMapBounds = compose.onNodeWithContentDescription("male front freshness map")
+            .fetchSemanticsNode().boundsInRoot
+        listOf(
+            411.dp to 761.dp,
+            411.dp to 891.dp,
+        ).forEach { (width, height) ->
+            compose.runOnIdle {
+                viewportWidth = width
+                viewportHeight = height
+            }
+            compose.waitForIdle()
+            val home = compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+            val viewport = home.boundsInRoot
+            val range = home.config[SemanticsProperties.VerticalScrollAxisRange]
+            val tracker = compose.onNodeWithContentDescription("Work tracker card").fetchSemanticsNode().boundsInRoot
+            val map = compose.onNodeWithContentDescription("male front freshness map").fetchSemanticsNode().boundsInRoot
+            assertEquals("$width x $height scroll", 0f, range.maxValue(), 0.5f)
+            assertTrue("$width x $height tracker=$tracker viewport=$viewport", viewport.bottom - tracker.bottom in 0f..12f)
+            assertEquals(referenceMapBounds.width, map.width, 0.5f)
+            assertEquals(referenceMapBounds.height, map.height, 0.5f)
+        }
+    }
+
+    @Test
+    fun trackerDistributesAvailableHeightAcrossFourFiveAndSixWeekMonths() {
+        val fourWeeks = YearMonth.of(2026, 2)
+        val fiveWeeks = YearMonth.of(2026, 6)
+        val sixWeeks = YearMonth.of(2026, 8)
+        var viewportWidth by mutableStateOf<Dp>(411.dp)
+        var viewportHeight by mutableStateOf<Dp>(761.dp)
+        var activeWorkout by mutableStateOf<ActiveWorkout?>(null)
+        var selectedDate by mutableStateOf(fourWeeks.atDay(1))
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(viewportWidth).height(viewportHeight)) {
+                    HomeScreen(
+                        state = MainUiState(
+                            activeWorkout = activeWorkout,
+                            homeRecencyDay = selectedDate.toEpochDay(),
+                        ),
+                        onDayClick = {},
+                        onContinue = {},
+                        onRecencyDayChange = { selectedDate = LocalDate.ofEpochDay(it) },
+                        onModeChange = {},
+                    )
+                }
+            }
+        }
+
+        fun cellHeight(month: YearMonth): Float {
+            compose.runOnIdle { selectedDate = month.atDay(1) }
+            compose.waitForIdle()
+            val first = compose.onNodeWithContentDescription("${month.atDay(1)}: 0 activities", substring = true)
+                .fetchSemanticsNode().boundsInRoot
+            val last = compose.onNodeWithContentDescription("${month.atEndOfMonth()}: 0 activities", substring = true)
+                .fetchSemanticsNode().boundsInRoot
+            val grid = compose.onNodeWithContentDescription("Activity heatmap grid", substring = true)
+                .fetchSemanticsNode().boundsInRoot
+            assertEquals("$month first=$first last=$last", first.height, last.height, 1.5f)
+            assertTrue("$month first=$first grid=$grid", first.top >= grid.top && last.bottom <= grid.bottom)
+            return first.height
+        }
+
+        val fourRowHeight = cellHeight(fourWeeks)
+        val fiveRowHeight = cellHeight(fiveWeeks)
+        val sixRowHeight = cellHeight(sixWeeks)
+        assertTrue("4=$fourRowHeight 5=$fiveRowHeight", fourRowHeight > fiveRowHeight)
+        assertTrue("5=$fiveRowHeight 6=$sixRowHeight", fiveRowHeight > sixRowHeight)
+        val home = compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+        assertEquals(0f, home.config[SemanticsProperties.VerticalScrollAxisRange].maxValue(), 0.5f)
+
+        compose.runOnIdle {
+            viewportHeight = 891.dp
+            selectedDate = fiveWeeks.atDay(1)
+        }
+        compose.waitForIdle()
+        val tallFiveRowHeight = cellHeight(fiveWeeks)
+        assertTrue("761dp=$fiveRowHeight 891dp=$tallFiveRowHeight", tallFiveRowHeight > fiveRowHeight)
+        assertEquals(
+            0f,
+            compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange].maxValue(),
+            0.5f,
+        )
+
+        compose.runOnIdle {
+            viewportHeight = 761.dp
+            selectedDate = sixWeeks.atDay(1)
+            activeWorkout = ActiveWorkout(
+                id = "active",
+                name = "Strength session",
+                mode = TrainingMode.STRENGTH,
+                startedAt = 0L,
+                notes = "",
+                exercises = emptyList(),
+            )
+        }
+        compose.waitUntil(15_000) {
+            compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+        }
+        val activeSixRowHeight = compose
+            .onNodeWithContentDescription("${sixWeeks.atDay(1)}: 0 activities", substring = true)
+            .fetchSemanticsNode().boundsInRoot.height
+        assertTrue("fitted=$sixRowHeight active=$activeSixRowHeight", activeSixRowHeight < sixRowHeight)
+
+        compose.runOnIdle {
+            activeWorkout = null
+            viewportWidth = 320.dp
+        }
+        compose.waitUntil(15_000) {
+            compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+        }
+        compose.onNodeWithContentDescription("Home content").performScrollToNode(
+            hasContentDescription("${sixWeeks.atDay(1)}: 0 activities", substring = true),
+        )
+        val smallCell = compose.onNodeWithContentDescription("${sixWeeks.atDay(1)}: 0 activities", substring = true)
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("small cell=$smallCell", smallCell.width > 0f && smallCell.height > 0f)
     }
 
     @Test
