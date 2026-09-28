@@ -101,6 +101,8 @@ class NavigationUiTest {
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("Body").assertIsDisplayed()
         compose.onNodeWithText("Body").performClick()
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Add progress photo"))
         compose.onNodeWithContentDescription("Add progress photo").assertIsDisplayed()
         compose.onNodeWithText("More").assertIsDisplayed()
         compose.onNodeWithText("More").performClick()

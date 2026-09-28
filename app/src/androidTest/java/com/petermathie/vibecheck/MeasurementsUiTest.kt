@@ -22,22 +22,26 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.MeasurementsScreen
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
+import com.petermathie.vibecheck.ui.theme.VibePalettes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
 import java.io.File
 
 @android.annotation.SuppressLint("ViewModelConstructorInComposable")
 class MeasurementsUiTest {
     private lateinit var database: VibeDatabase
 
-    @get:Rule
-    val lifecycle = ComposeRoomLifecycleRule {
+    private val deviceConfiguration = DeviceConfigurationRule()
+    private val lifecycle = ComposeRoomLifecycleRule {
         if (::database.isInitialized) database else null
     }
+    @get:Rule
+    val rules: RuleChain = RuleChain.outerRule(deviceConfiguration).around(lifecycle)
     private val compose get() = lifecycle.compose
 
     private fun scrollUntilVisible(text: String) {
@@ -134,63 +138,156 @@ class MeasurementsUiTest {
         bitmap.recycle()
         context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
         val fontScale = mutableFloatStateOf(1f)
+        val viewportWidth = androidx.compose.runtime.mutableStateOf(320.dp)
+        val viewportHeight = androidx.compose.runtime.mutableStateOf(760.dp)
+        val palette = androidx.compose.runtime.mutableStateOf(VibePalettes.Ocean.light)
         val viewModel = lifecycle.own(EditorViewModel(database))
         try {
             compose.setContent {
                 val density = LocalDensity.current
                 CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale.floatValue)) {
-                    VibeCheckTheme {
-                        Box(Modifier.width(320.dp).height(760.dp)) {
+                    VibeCheckTheme(palette.value) {
+                        Box(Modifier.width(viewportWidth.value).height(viewportHeight.value)) {
                             MeasurementsScreen(viewModel)
                         }
                     }
                 }
             }
 
-            listOf(1f, 1.3f, 2f).forEach { scale ->
-                compose.runOnIdle { fontScale.floatValue = scale }
-                compose.onNode(hasScrollAction())
-                    .performScrollToNode(hasContentDescription("Bodyweight calendar heading"))
-                val calendarHeading = compose.onNodeWithContentDescription("Bodyweight calendar heading")
-                    .fetchSemanticsNode().boundsInRoot
-                val monthControls = compose.onNodeWithContentDescription("Bodyweight calendar month controls")
-                    .fetchSemanticsNode().boundsInRoot
-                assertTrue(
-                    "scale=$scale heading=$calendarHeading controls=$monthControls",
-                    calendarHeading.bottom <= monthControls.top + 0.5f,
-                )
-
-                compose.onNode(hasScrollAction())
-                    .performScrollToNode(hasContentDescription("Bodyweight calendar weekday labels"))
-                val weekdayLabels = compose.onNodeWithContentDescription("Bodyweight calendar weekday labels")
-                    .fetchSemanticsNode().boundsInRoot
-                val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
-                    .fetchSemanticsNode().boundsInRoot
-                assertTrue(
-                    "scale=$scale weekdays=$weekdayLabels firstWeek=$firstWeek",
-                    weekdayLabels.bottom <= firstWeek.top + 0.5f,
-                )
-
-                compose.onNode(hasScrollAction())
-                    .performScrollToNode(hasContentDescription("Progress photos heading"))
-                val photosHeading = compose.onNodeWithContentDescription("Progress photos heading")
-                    .fetchSemanticsNode().boundsInRoot
-                val photosDate = compose.onNodeWithContentDescription("Progress photos date")
-                    .fetchSemanticsNode().boundsInRoot
-                assertTrue(
-                    "scale=$scale heading=$photosHeading date=$photosDate",
-                    photosHeading.bottom <= photosDate.top + 0.5f,
-                )
-                compose.onNode(hasScrollAction())
-                    .performScrollToNode(hasContentDescription("Progress photo for selected day"))
-                val actions = compose.onNodeWithContentDescription("Progress photos actions")
-                    .fetchSemanticsNode().boundsInRoot
-                val image = compose.onNodeWithContentDescription("Progress photo for selected day")
-                    .fetchSemanticsNode().boundsInRoot
-                assertTrue("scale=$scale actions=$actions image=$image", actions.bottom <= image.top + 0.5f)
+            VibePalettes.presets.flatMap { listOf(it.light, it.dark) }.forEach { currentPalette ->
+                listOf(1f, 1.3f, 2f).forEach { scale ->
+                    compose.runOnIdle {
+                        palette.value = currentPalette
+                        fontScale.floatValue = scale
+                    }
+                    assertBodySectionsDoNotOverlap("${currentPalette.id}/${currentPalette.isDark}/$scale")
+                }
             }
+            compose.runOnIdle {
+                viewportWidth.value = 760.dp
+                viewportHeight.value = 320.dp
+                fontScale.floatValue = 1.3f
+            }
+            assertBodySectionsDoNotOverlap("landscape")
         } finally {
             photo.delete()
         }
+    }
+
+    @Test
+    fun addPhotoDialogAndDatePickerStayModalWithKeyboardAndLargeType() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                VibeCheckTheme {
+                    Box(Modifier.width(320.dp).height(760.dp)) {
+                        MeasurementsScreen(viewModel)
+                    }
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Bodyweight").performTextInput("80")
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Add progress photo"))
+        compose.onNodeWithContentDescription("Add progress photo").performClick()
+        compose.onNodeWithContentDescription("Add progress photo dialog").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Bodyweight calendar card").assertExists()
+
+        val dateControl = compose.onNodeWithContentDescription("Choose progress photo date")
+            .fetchSemanticsNode().boundsInRoot
+        val choosePhoto = compose.onNodeWithText("Choose photo")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "dateControl=$dateControl choosePhoto=$choosePhoto",
+            dateControl.bottom <= choosePhoto.top + 0.5f,
+        )
+
+        compose.onNodeWithContentDescription("Choose progress photo date").performClick()
+        compose.onNodeWithContentDescription("Add progress photo dialog").assertDoesNotExist()
+        compose.onNodeWithText("Select photo date").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithContentDescription("Add progress photo dialog").assertIsDisplayed()
+    }
+
+    @Test
+    fun emptyPhotosStateFollowsActionsWithoutOverlap() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        File(context.filesDir, "progress-photos").listFiles().orEmpty().forEach { it.delete() }
+        context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(320.dp).height(760.dp)) {
+                    MeasurementsScreen(viewModel)
+                }
+            }
+        }
+
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("No photo for this day"))
+        val actions = compose.onNodeWithContentDescription("Progress photos actions")
+            .fetchSemanticsNode().boundsInRoot
+        val emptyState = compose.onNodeWithText("No photo for this day")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("actions=$actions emptyState=$emptyState", actions.bottom <= emptyState.top + 0.5f)
+    }
+
+    private fun monthFirstDayDescription(): String =
+        LocalDate.now().withDayOfMonth(1).format(
+            java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"),
+        )
+
+    private fun assertBodySectionsDoNotOverlap(configuration: String) {
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Bodyweight calendar heading"))
+        val calendarHeading = compose.onNodeWithContentDescription("Bodyweight calendar heading")
+            .fetchSemanticsNode().boundsInRoot
+        val monthControls = compose.onNodeWithContentDescription("Bodyweight calendar month controls")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "$configuration heading=$calendarHeading controls=$monthControls",
+            calendarHeading.bottom <= monthControls.top + 0.5f,
+        )
+
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Bodyweight calendar weekday labels"))
+        val weekdayLabels = compose.onNodeWithContentDescription("Bodyweight calendar weekday labels")
+            .fetchSemanticsNode().boundsInRoot
+        val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "$configuration weekdays=$weekdayLabels firstWeek=$firstWeek",
+            weekdayLabels.bottom <= firstWeek.top + 0.5f,
+        )
+        val firstDay = compose.onNodeWithContentDescription(monthFirstDayDescription())
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "$configuration firstWeek=$firstWeek firstDay=$firstDay",
+            firstDay.top >= firstWeek.top - 0.5f &&
+                firstDay.bottom <= firstWeek.bottom + 0.5f,
+        )
+
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Progress photos heading"))
+        val photosHeading = compose.onNodeWithContentDescription("Progress photos heading")
+            .fetchSemanticsNode().boundsInRoot
+        val photosDate = compose.onNodeWithContentDescription("Progress photos date")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "$configuration heading=$photosHeading date=$photosDate",
+            photosHeading.bottom <= photosDate.top + 0.5f,
+        )
+        compose.onNode(hasScrollAction())
+            .performScrollToNode(hasContentDescription("Progress photo for selected day"))
+        val actions = compose.onNodeWithContentDescription("Progress photos actions")
+            .fetchSemanticsNode().boundsInRoot
+        val image = compose.onNodeWithContentDescription("Progress photo for selected day")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("$configuration actions=$actions image=$image", actions.bottom <= image.top + 0.5f)
     }
 }
