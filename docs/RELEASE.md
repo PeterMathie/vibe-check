@@ -6,9 +6,9 @@ defines the release gates; it does not authorise signing, publishing or merging.
 ## Current version
 
 - Application ID: `com.petermathie.vibecheck`
-- Release identity: **Vibe Check 0.4.0 Beta 2**
-- Version name: `0.4.0-beta.2`
-- Version code: `5`
+- Release identity: **Vibe Check 0.4.0 Beta 3**
+- Version name: `0.4.0-beta.3`
+- Version code: `6`
 - Room schema version: `15`
 - Minimum Android SDK: `23`
 - Target Android SDK: `36`
@@ -58,6 +58,21 @@ files from Vibe Trainer do not update or transfer automatically. Export
 structured JSON and photos from the old app before moving. Vibe Check continues
 to import version-1 backups whose envelope is `format: "vibe-trainer"`; that
 legacy value is intentionally stable compatibility data, not current branding.
+
+## Vibe Check 0.4.0 Beta 3
+
+Beta 3 streamlines programme editing and body tracking while expanding exercise
+catalogue coverage. It includes:
+
+- compact plus-only Add controls in programme editing;
+- a simplified Body viewport with fitted comparison imagery and one combined
+  bodyweight/measurement/photo entry modal;
+- catalogue v2 muscle mappings for more accurate movement coverage; and
+- the new heart-and-brain Vibe Check launcher icon.
+
+The Room schema remains version 15. Existing Beta 2 app data is retained during
+an in-place, same-signing-key upgrade. Private datasets remain separate from the
+APK and repository and can be imported through Settings after installation.
 
 ## Vibe Check 0.4.0 Beta 2
 

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Beta tag, for example v0.4.0-beta.2
+        description: Beta tag, for example v0.4.0-beta.3
         required: true
         type: string
 
@@ -48,7 +48,7 @@ jobs:
           VIBE_CHECK_BETA_KEY_PASSWORD: ${{ secrets.VIBE_CHECK_BETA_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          test "$EXPECTED_TAG" = "v0.4.0-beta.2"
+          test "$EXPECTED_TAG" = "v0.4.0-beta.3"
           export VIBE_CHECK_BETA_KEYSTORE_PATH="$RUNNER_TEMP/vibe-check-beta.jks"
           trap 'rm -f "$VIBE_CHECK_BETA_KEYSTORE_PATH"' EXIT
           printf '%s' "$VIBE_CHECK_BETA_KEYSTORE_BASE64" | base64 --decode > "$VIBE_CHECK_BETA_KEYSTORE_PATH"
