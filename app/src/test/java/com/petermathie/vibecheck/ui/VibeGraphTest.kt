@@ -5,8 +5,11 @@ import androidx.compose.ui.unit.IntSize
 import com.petermathie.vibecheck.ui.components.GraphDomain
 import com.petermathie.vibecheck.ui.components.graphDomain
 import com.petermathie.vibecheck.ui.components.graphPoint
+import com.petermathie.vibecheck.ui.components.graphBarPoint
+import com.petermathie.vibecheck.ui.components.graphGridLines
 import com.petermathie.vibecheck.ui.components.graphTooltipPlacement
 import com.petermathie.vibecheck.ui.components.nearestGraphIndex
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -31,6 +34,25 @@ class VibeGraphTest {
     @Test
     fun fixedDomainPreservesBarChartScale() {
         assertEquals(GraphDomain(0.0, 10.0), graphDomain(listOf(4.0), 0.0..10.0))
+        assertEquals(
+            Offset(50f, 50f),
+            graphBarPoint(0, 5.0, 1, 100f, 100f, GraphDomain(0.0, 10.0), 10f),
+        )
+    }
+
+    @Test
+    fun retroGridAddsMinorLinesWithoutChangingPlotBounds() {
+        val standard = graphGridLines(300f, 140f, 12f, VibeVisualStyle.STANDARD)
+        val retro = graphGridLines(300f, 140f, 12f, VibeVisualStyle.RETRO_FUTURE)
+        assertEquals(9, standard.size)
+        assertEquals(34, retro.size)
+        assertEquals(10, retro.count { it.major })
+        assertTrue(retro.all { line ->
+            line.start.x in 12f..288f &&
+                line.end.x in 12f..288f &&
+                line.start.y in 12f..128f &&
+                line.end.y in 12f..128f
+        })
     }
 
     @Test

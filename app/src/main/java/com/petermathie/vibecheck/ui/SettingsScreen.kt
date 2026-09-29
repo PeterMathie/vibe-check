@@ -82,7 +82,7 @@ fun SettingsScreen(
     ScreenList {
         item {
             Text("Settings and data",style=MaterialTheme.typography.headlineSmall)
-            VibeActionButton("Colour palette", onStyle, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+            VibeActionButton("Style and colour", onStyle, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
             SettingToggle("Pounds (lb)",lb){lb=it;prefs.edit().putBoolean("lb",it).apply()}
             SettingToggle("Female anatomy",female){female=it;prefs.edit().putBoolean("female",it).apply()}
             SettingToggle("Start rest automatically",auto){auto=it;prefs.edit().putBoolean("autoRest",it).apply()}
@@ -133,7 +133,7 @@ fun SettingsScreen(
     if (reducedMotionInfo) AlertDialog(
         onDismissRequest = { reducedMotionInfo = false },
         title = { Text("Reduced motion") },
-        text = { Text("Reduced motion disables touch ripples and app-owned animated transitions.") },
+        text = { Text("Reduced motion disables touch ripples, animated transitions and decorative scanner motion.") },
         confirmButton = { TextButton(onClick = { reducedMotionInfo = false }) { Text("Close") } },
     )
     if (preciseTimerInfo) AlertDialog(
@@ -161,7 +161,7 @@ fun SettingsScreen(
         },
         dismissButton = { TextButton(onClick = { confirmRemoveDemo = false }) { Text("Cancel") } },
     )
-    if(pendingImport!=null)AlertDialog(onDismissRequest={pendingImport=null},title={Text("Import records?")},text={Text("Matching record IDs will be updated. Other records are retained. Make a backup first if you want to keep the previous values.")},confirmButton={TextButton(onClick={val text=pendingImport!!;pendingImport=null;scope.launch{try{val restored=BackupPreferences.validate(text);vm.importJson(text);BackupPreferences.restore(restored,prefs);lb=prefs.getBoolean("lb",false);female=prefs.getBoolean("female",false);auto=prefs.getBoolean("autoRest",false);haptic=prefs.getBoolean("haptic",true);reduced=prefs.getBoolean("reducedMotion",false);message="Import complete. Restored colours are active."}catch(e:Exception){message="Import failed: ${e.message}"}}}){Text("Import")}},dismissButton={TextButton(onClick={pendingImport=null}){Text("Cancel")}})
+    if(pendingImport!=null)AlertDialog(onDismissRequest={pendingImport=null},title={Text("Import records?")},text={Text("Matching record IDs will be updated. Other records are retained. Make a backup first if you want to keep the previous values.")},confirmButton={TextButton(onClick={val text=pendingImport!!;pendingImport=null;scope.launch{try{val restored=BackupPreferences.validate(text);vm.importJson(text);BackupPreferences.restore(restored,prefs);lb=prefs.getBoolean("lb",false);female=prefs.getBoolean("female",false);auto=prefs.getBoolean("autoRest",false);haptic=prefs.getBoolean("haptic",true);    reduced=prefs.getBoolean("reducedMotion",false);message="Import complete. Restored style and colours are active."}catch(e:Exception){message="Import failed: ${e.message}"}}}){Text("Import")}},dismissButton={TextButton(onClick={pendingImport=null}){Text("Cancel")}})
 }
 
 private fun demoRemovalMessage(summary: DemoRemovalSummary): String =

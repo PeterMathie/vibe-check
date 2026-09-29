@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -29,10 +30,16 @@ import com.petermathie.vibecheck.ui.DashboardTokenPreview
 import com.petermathie.vibecheck.ui.DashboardVisualFixtures
 import com.petermathie.vibecheck.ui.components.VibeGraph
 import com.petermathie.vibecheck.ui.components.VibeSurface
+import com.petermathie.vibecheck.ui.Destination
+import com.petermathie.vibecheck.ui.PrimaryNavigationBar
+import com.petermathie.vibecheck.ui.anatomy.AnatomyView
+import com.petermathie.vibecheck.ui.anatomy.MuscleMap
+import com.petermathie.vibecheck.domain.model.AnatomySex
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import com.petermathie.vibecheck.ui.theme.VibePalettes
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -172,5 +179,101 @@ class DashboardVisualFixturesTest {
         assertTrue(last.top >= graphBounds.top && last.bottom <= graphBounds.bottom)
         assertTrue(first.center.x < graphBounds.center.x)
         assertTrue(last.center.x > graphBounds.center.x)
+    }
+
+    @Test
+    fun bothVisualStylesRenderAcrossEveryPaletteAndAppearance() {
+        val palettes = DashboardVisualFixtures.palettes
+        val activePalette = mutableStateOf(palettes.first())
+        val activeStyle = mutableStateOf(VibeVisualStyle.STANDARD)
+        compose.setContent {
+            VibeCheckTheme(activePalette.value, activeStyle.value) {
+                Column {
+                    VibeGraph(
+                        values = listOf(1.0, 3.0, 2.0),
+                        dates = listOf(1_700_000_000_000, 1_700_086_400_000, 1_700_172_800_000),
+                        unit = "kg",
+                    )
+                    MuscleMap(
+                        sex = AnatomySex.MALE,
+                        view = AnatomyView.FRONT,
+                        states = emptyMap(),
+                        onMuscleTap = {},
+                        modifier = Modifier.width(120.dp),
+                    )
+                }
+            }
+        }
+
+        palettes.forEach { palette ->
+            VibeVisualStyle.entries.forEach { style ->
+                compose.runOnIdle {
+                    activePalette.value = palette
+                    activeStyle.value = style
+                }
+                compose.waitForIdle()
+                compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
+                compose.onNodeWithContentDescription("male front freshness map").assertIsDisplayed()
+            }
+        }
+    }
+
+    @Test
+    fun retroTooltipUsesHudLabelWhileStandardDoesNot() {
+        val style = mutableStateOf(VibeVisualStyle.STANDARD)
+        compose.setContent {
+            VibeCheckTheme(VibePalettes.Mono.dark, style.value) {
+                VibeGraph(
+                    values = listOf(1.0, 2.0),
+                    dates = listOf(1_700_000_000_000, 1_700_086_400_000),
+                    unit = "kg",
+                )
+            }
+        }
+        val graph = compose.onNodeWithContentDescription("Progress chart", substring = true)
+        fun selectFirst() {
+            val action = graph.fetchSemanticsNode().config[SemanticsActions.CustomActions]
+                .first { it.label == "Next data point" }
+            compose.runOnIdle { action.action() }
+            compose.waitForIdle()
+        }
+        selectFirst()
+        compose.onNodeWithText("DATUM // LOCK").assertDoesNotExist()
+        compose.runOnIdle { style.value = VibeVisualStyle.RETRO_FUTURE }
+        compose.waitForIdle()
+        compose.onNodeWithText("DATUM // LOCK").assertIsDisplayed()
+    }
+
+    @Test
+    fun narrowTwoHundredPercentNavigationUsesAccessibleIconsWithoutClippedLabels() {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                Box(Modifier.width(320.dp)) {
+                    VibeCheckTheme(VibePalettes.Mono.dark, VibeVisualStyle.RETRO_FUTURE) {
+                        PrimaryNavigationBar(Destination.PROGRESS) {}
+                    }
+                }
+            }
+        }
+        listOf("Home", "Plans", "Progress", "Habits", "Body", "More").forEach { label ->
+            compose.onNodeWithContentDescription(label).assertIsDisplayed()
+            compose.onNodeWithText(label).assertDoesNotExist()
+        }
+    }
+
+    @Test
+    fun retroDefaultNavigationKeepsProgressLabelOnOneLine() {
+        var maximumLabelHeight = 0f
+        compose.setContent {
+            maximumLabelHeight = with(LocalDensity.current) { 24.dp.toPx() }
+            Box(Modifier.width(411.dp)) {
+                VibeCheckTheme(VibePalettes.Mono.dark, VibeVisualStyle.RETRO_FUTURE) {
+                    PrimaryNavigationBar(Destination.PROGRESS) {}
+                }
+            }
+        }
+        val progress = compose.onNodeWithText("Progress", useUnmergedTree = true).assertIsDisplayed()
+        assertTrue(progress.fetchSemanticsNode().boundsInRoot.height <= maximumLabelHeight)
     }
 }

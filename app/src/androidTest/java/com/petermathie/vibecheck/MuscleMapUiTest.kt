@@ -21,6 +21,7 @@ import com.petermathie.vibecheck.ui.anatomy.FreshnessLegend
 import com.petermathie.vibecheck.ui.anatomy.MuscleMap
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import com.petermathie.vibecheck.ui.theme.VibePalettes
+import com.petermathie.vibecheck.ui.theme.VibeVisualStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -161,5 +162,38 @@ class MuscleMapUiTest {
                     "No data is separate.",
             ).assertExists()
         }
+    }
+
+    @Test
+    fun retroScannerPreservesMapBoundsHitActionsAndSelectionSemantics() {
+        val style = mutableStateOf(VibeVisualStyle.STANDARD)
+        var selected = mutableStateOf<String?>(null)
+        compose.setContent {
+            selected = remember { mutableStateOf(null) }
+            VibeCheckTheme(VibePalettes.Mono.dark, style.value) {
+                MuscleMap(
+                    sex = AnatomySex.FEMALE,
+                    view = AnatomyView.BACK,
+                    states = mapOf("LATS" to MuscleRecencyBand.HOURS_24_TO_48),
+                    onMuscleTap = { selected.value = it },
+                    modifier = androidx.compose.ui.Modifier.width(240.dp),
+                    selectedMuscleId = selected.value,
+                )
+            }
+        }
+        val map = compose.onNodeWithContentDescription("female back freshness map")
+        val standardBounds = map.fetchSemanticsNode().boundsInRoot
+        val standardActions = map.fetchSemanticsNode().config[SemanticsActions.CustomActions].map { it.label }
+
+        compose.runOnIdle { style.value = VibeVisualStyle.RETRO_FUTURE }
+        compose.waitForIdle()
+        val retroBounds = map.fetchSemanticsNode().boundsInRoot
+        val retroActions = map.fetchSemanticsNode().config[SemanticsActions.CustomActions]
+        assertEquals(standardBounds, retroBounds)
+        assertEquals(standardActions, retroActions.map { it.label })
+
+        compose.runOnIdle { retroActions.first { it.label.startsWith("Inspect LATS") }.action() }
+        map.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Selected lats"))
+        assertEquals(retroBounds, map.fetchSemanticsNode().boundsInRoot)
     }
 }

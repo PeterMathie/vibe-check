@@ -73,7 +73,7 @@ class EndUserControlsTest {
         val frontMapBounds = compose.onNodeWithContentDescription("male front freshness map").fetchSemanticsNode().boundsInRoot
         val backMapBounds = compose.onNodeWithContentDescription("male back freshness map").fetchSemanticsNode().boundsInRoot
         val legendBounds = legend.fetchSemanticsNode().boundsInRoot
-        val texture = compose.onNodeWithContentDescription("Freshness panel texture")
+        val texture = compose.onNodeWithTag("freshness-panel-texture")
         val textureBounds = texture.fetchSemanticsNode().boundsInRoot
         val titleBounds = compose.onNodeWithText("FRESHNESS").fetchSemanticsNode().boundsInRoot
         val texturePixels = texture.captureToImage().toPixelMap()

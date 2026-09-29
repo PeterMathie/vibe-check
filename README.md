@@ -28,7 +28,7 @@ model, limitations and review checklist.
 
 The greenfield architecture uses Kotlin, Jetpack Compose, Room, Hilt and an explicit domain layer. Objective workout history drives recency maps, activity heatmaps and progress calculations.
 
-Visual styling is isolated behind semantic tokens and interchangeable palettes. Production builds seed application knowledge but no personal programmes or history; debug builds add removable representative data.
+Visual styling is isolated behind semantic tokens, interchangeable palettes, and an independent visual-style layer. **Standard** remains the unchanged default; the opt-in **Retro Futuristic** style adds original space-console geometry, instrument graphs, and a holographic anatomy scanner without changing data meaning or interaction. Production builds seed application knowledge but no personal programmes or history; debug builds add removable representative data.
 
 See [`docs/PRODUCT_REQUIREMENTS.md`](docs/PRODUCT_REQUIREMENTS.md) for the product contract.
 The current Android identity is `com.petermathie.vibecheck`, version `0.4.0-beta.2`
