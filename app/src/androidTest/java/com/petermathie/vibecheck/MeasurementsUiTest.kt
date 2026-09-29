@@ -77,12 +77,18 @@ class MeasurementsUiTest {
         val viewModel = lifecycle.own(EditorViewModel(database))
         setBodyContent(viewModel)
 
+        compose.onNodeWithContentDescription("Body page").assertExists()
+        compose.onNodeWithText("Body").assertDoesNotExist()
         compose.onNodeWithText("Calendar").assertIsDisplayed()
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Bodyweight trend"))
         compose.onNodeWithText("Bodyweight trend").assertIsDisplayed()
         compose.onNodeWithText("Photos").assertDoesNotExist()
         compose.onNodeWithText("Bodyweight (optional)").assertDoesNotExist()
 
+        val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
+            .assertHeightIsAtLeast(48.dp)
+            .fetchSemanticsNode().boundsInRoot
+        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
+        assertTrue("firstWeek=$firstWeek", firstWeek.height <= 54 * density + 1)
         val action = compose.onNodeWithContentDescription("Add body entry").fetchSemanticsNode().boundsInRoot
         val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
         assertTrue("action=$action root=$root", action.left > root.center.x)

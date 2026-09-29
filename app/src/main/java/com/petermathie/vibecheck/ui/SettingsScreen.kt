@@ -453,8 +453,9 @@ fun MeasurementsScreen(vm:EditorViewModel) {
         keyboardController?.hide()
         addPhotoDialog = true
     }
-    ScreenList {
-        item { Text("Body", style = MaterialTheme.typography.headlineSmall) }
+    ScreenList(
+        modifier = Modifier.semantics { contentDescription = "Body page" },
+    ) {
         listOf("calendar", "trend").forEach { cardKey ->
             when (cardKey) {
                 "trend" -> item {
@@ -488,11 +489,12 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                             }
                             BoxWithConstraints {
                                 val fontScale = LocalDensity.current.fontScale
-                                val cellHeight = if (fontScale >= 1.8f) 72.dp else 64.dp
+                                val cellHeight = if (fontScale >= 1.8f) 64.dp else 54.dp
+                                val rowSpacing = if (fontScale >= 1.8f) 6.dp else 5.dp
                                 val showMeasurementText = maxWidth / 7 >= 48.dp && fontScale < 1.8f
                                 val leading = month.atDay(1).dayOfWeek.value - 1
                                 val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
                                     Row(
                                         Modifier
                                             .fillMaxWidth()
