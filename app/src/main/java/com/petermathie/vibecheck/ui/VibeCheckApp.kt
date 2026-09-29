@@ -201,7 +201,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
         ) {
             Scaffold(
                 containerColor = palette.background,
-                floatingActionButtonPosition = FabPosition.Start,
+                floatingActionButtonPosition = FabPosition.End,
                 floatingActionButton = {
                     AnimatedVisibility(
                         visible = fabAction != null,

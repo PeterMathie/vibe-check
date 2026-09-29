@@ -36,7 +36,7 @@ class AppFabUiTest {
     val compose = createComposeRule()
 
     @Test
-    fun actionIsBottomStartAccessibleModalAwareAndDebounced() {
+    fun actionIsBottomEndSquareAccessibleModalAwareAndDebounced() {
         var invocations by mutableIntStateOf(0)
         var modalOpen by mutableStateOf(false)
         compose.setContent {
@@ -54,7 +54,7 @@ class AppFabUiTest {
                         }
 
                         host.action?.takeIf { it.visible }?.let { action ->
-                            Box(Modifier.align(Alignment.BottomStart).padding(16.dp)) {
+                            Box(Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
                                 AppFloatingAction(action, host)
                             }
                         }
@@ -67,7 +67,8 @@ class AppFabUiTest {
             .assertIsDisplayed()
         val bounds = action.fetchSemanticsNode().boundsInRoot
         val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
-        assertTrue("fab=$bounds root=$root", bounds.left < root.center.x)
+        assertTrue("fab=$bounds root=$root", bounds.left > root.center.x)
+        assertEquals(bounds.width, bounds.height, 0.5f)
         assertTrue("fab=$bounds root=$root", bounds.bottom <= root.bottom)
         action.performClick()
         compose.onNodeWithContentDescription("Add exercise or stretch").assertDoesNotExist()
@@ -106,7 +107,7 @@ class AppFabUiTest {
                 }
                 Box(Modifier.size(411.dp, 780.dp)) {
                     registeredAction.visibleUnlessBlocked(dragging, keyboardOpen)?.let {
-                        AppFloatingAction(it, host, Modifier.align(Alignment.BottomStart))
+                        AppFloatingAction(it, host, Modifier.align(Alignment.BottomEnd))
                     }
                 }
             }
@@ -143,7 +144,7 @@ class AppFabUiTest {
                             destination = AppFabDestination.NewHabit,
                         ) {},
                         host = host,
-                        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp),
                     )
                 }
             }
