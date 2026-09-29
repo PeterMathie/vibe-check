@@ -1,28 +1,29 @@
 package com.petermathie.vibecheck
 
 import android.content.Context
-import java.time.LocalDate
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.petermathie.vibecheck.data.local.VibeDatabase
+import com.petermathie.vibecheck.ui.AppFabHostState
+import com.petermathie.vibecheck.ui.AppFloatingAction
+import com.petermathie.vibecheck.ui.Destination
 import com.petermathie.vibecheck.ui.EditorViewModel
+import com.petermathie.vibecheck.ui.LocalAppFabClearance
+import com.petermathie.vibecheck.ui.LocalAppFabHost
 import com.petermathie.vibecheck.ui.MeasurementsScreen
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
-import com.petermathie.vibecheck.ui.theme.VibePalettes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -30,7 +31,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
-import java.io.File
 
 @android.annotation.SuppressLint("ViewModelConstructorInComposable")
 class MeasurementsUiTest {
@@ -40,37 +40,22 @@ class MeasurementsUiTest {
     private val lifecycle = ComposeRoomLifecycleRule {
         if (::database.isInitialized) database else null
     }
+
     @get:Rule
     val rules: RuleChain = RuleChain.outerRule(deviceConfiguration).around(lifecycle)
     private val compose get() = lifecycle.compose
 
-    private fun scrollUntilVisible(text: String) {
-        repeat(8) {
-            if (compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()) return
-            compose.onRoot().performTouchInput { swipeUp() }
-            compose.waitForIdle()
-        }
-        compose.onNodeWithText(text).assertExists()
-    }
-
     @Test
-    fun savesOnlyBodyweightAndDisplaysTwoDecimals() {
-        database = Room.inMemoryDatabaseBuilder(
-            ApplicationProvider.getApplicationContext<Context>(),
-            VibeDatabase::class.java,
-        ).build()
+    fun addEntrySavesBodyweightAndNotesThenUpdatesCalendarAndChart() {
+        database = inMemoryDatabase()
         val viewModel = lifecycle.own(EditorViewModel(database))
-        compose.setContent {
-            VibeCheckTheme {
-                MeasurementsScreen(viewModel)
-            }
-        }
+        setBodyContent(viewModel)
 
-        compose.onAllNodesWithText(
-            LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy")),
-        ).onFirst().assertIsDisplayed()
-        compose.onNodeWithContentDescription("Bodyweight").performTextInput("78.126")
-        compose.onNodeWithText("Save bodyweight").performClick()
+        compose.onNodeWithContentDescription("Add body entry").performClick()
+        compose.onNodeWithContentDescription("Add body entry dialog").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Bodyweight (optional)").performTextInput("78.126")
+        compose.onNodeWithContentDescription("Notes (optional)").performTextInput("Morning check-in")
+        compose.onNodeWithText("Save without photo").performClick()
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().measurements().first().isNotEmpty() }
         }
@@ -78,216 +63,150 @@ class MeasurementsUiTest {
         val saved = runBlocking { database.editorDao().measurements().first().single() }
         assertEquals("Bodyweight", saved.metric)
         assertEquals(78.126, saved.value, 0.0)
-        compose.onNodeWithContentDescription("Bodyweight").performTextClearance()
-        compose.onNodeWithContentDescription("Bodyweight").performTextInput("80")
-        compose.onNodeWithText("Update bodyweight").performClick()
-        compose.waitUntil(15_000) {
-            runBlocking { database.editorDao().measurements().first().single().value == 80.0 }
-        }
-        compose.onNode(hasScrollAction()).performScrollToNode(
-            hasContentDescription("Progress chart", substring = true),
-        )
+        assertEquals("Morning check-in", saved.notes)
+        compose.onNodeWithContentDescription("Add body entry dialog").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Bodyweight calendar card").assertExists()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Bodyweight trend"))
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
-        compose.onNodeWithContentDescription("80.0 to 80.0 kg", substring = true).assertExists()
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Bodyweight: 80.00 kg"))
-        compose.onAllNodesWithText("Bodyweight: 80.00 kg").onFirst().assertIsDisplayed()
-        scrollUntilVisible("Calendar")
-        scrollUntilVisible("Photos")
-        compose.onNodeWithContentDescription("Reorder Calendar").assertExists()
-        compose.onNodeWithContentDescription("Reorder Photos").assertExists()
-        compose.onNodeWithText("80.00").assertExists()
+        compose.onNodeWithText("Photos").assertDoesNotExist()
     }
 
     @Test
-    fun bodyCardOrderPersistsAcrossRecreation() {
-        database = Room.inMemoryDatabaseBuilder(
-            ApplicationProvider.getApplicationContext<Context>(),
-            VibeDatabase::class.java,
-        ).build()
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        context.getSharedPreferences("body-layout", android.content.Context.MODE_PRIVATE).edit().clear().commit()
-        val generation = androidx.compose.runtime.mutableIntStateOf(0)
+    fun bodyPageContainsOnlyCalendarTrendAndSquareBottomEndAction() {
+        database = inMemoryDatabase()
         val viewModel = lifecycle.own(EditorViewModel(database))
-        compose.setContent {
-            VibeCheckTheme {
-                androidx.compose.runtime.key(generation.intValue) {
-                    MeasurementsScreen(viewModel)
-                }
-            }
-        }
-        scrollUntilVisible("Photos")
-        val actions = compose.onNodeWithContentDescription("Reorder Photos").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
-        assertTrue(actions.any { it.label == "Move earlier" })
-        assertTrue(actions.first { it.label == "Move earlier" }.action())
-        compose.waitUntil(15_000) {
-            context.getSharedPreferences("body-layout", android.content.Context.MODE_PRIVATE).getString("card-order", "")?.startsWith("photos|") == true
-        }
-        compose.runOnIdle { generation.intValue++ }
-        compose.onNodeWithContentDescription("Reorder Photos").assertExists()
-        compose.onNodeWithText("Photos").assertExists()
+        setBodyContent(viewModel)
+
+        compose.onNodeWithContentDescription("Body page").assertExists()
+        compose.onNodeWithText("Body").assertDoesNotExist()
+        compose.onNodeWithText("Calendar").assertIsDisplayed()
+        compose.onNodeWithText("Bodyweight trend").assertIsDisplayed()
+        compose.onNodeWithText("Photos").assertDoesNotExist()
+        compose.onNodeWithText("Bodyweight (optional)").assertDoesNotExist()
+
+        val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
+            .assertHeightIsAtLeast(48.dp)
+            .fetchSemanticsNode().boundsInRoot
+        val density = ApplicationProvider.getApplicationContext<Context>().resources.displayMetrics.density
+        assertTrue("firstWeek=$firstWeek", firstWeek.height <= 54 * density + 1)
+        val action = compose.onNodeWithContentDescription("Add body entry").fetchSemanticsNode().boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("action=$action root=$root", action.left > root.center.x)
+        assertEquals(action.width, action.height, 0.5f)
     }
 
     @Test
-    fun calendarAndPhotosKeepDistinctBoundsAtNarrowWidthAndLargeType() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
-        val photoDirectory = File(context.filesDir, "progress-photos").apply { mkdirs() }
-        val photo = File(photoDirectory, "${System.currentTimeMillis()}.jpg")
-        val bitmap = android.graphics.Bitmap.createBitmap(4, 4, android.graphics.Bitmap.Config.ARGB_8888)
-        photo.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
-        bitmap.recycle()
-        context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
-        val fontScale = mutableFloatStateOf(1f)
-        val viewportWidth = androidx.compose.runtime.mutableStateOf(320.dp)
-        val viewportHeight = androidx.compose.runtime.mutableStateOf(760.dp)
-        val palette = androidx.compose.runtime.mutableStateOf(VibePalettes.Ocean.light)
-        val viewModel = lifecycle.own(EditorViewModel(database))
-        try {
-            compose.setContent {
-                val density = LocalDensity.current
-                CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale.floatValue)) {
-                    VibeCheckTheme(palette.value) {
-                        Box(Modifier.width(viewportWidth.value).height(viewportHeight.value)) {
-                            MeasurementsScreen(viewModel)
-                        }
-                    }
-                }
-            }
-
-            VibePalettes.presets.flatMap { listOf(it.light, it.dark) }.forEach { currentPalette ->
-                listOf(1f, 1.3f, 2f).forEach { scale ->
-                    compose.runOnIdle {
-                        palette.value = currentPalette
-                        fontScale.floatValue = scale
-                    }
-                    assertBodySectionsDoNotOverlap("${currentPalette.id}/${currentPalette.isDark}/$scale")
-                }
-            }
-            compose.runOnIdle {
-                viewportWidth.value = 760.dp
-                viewportHeight.value = 320.dp
-                fontScale.floatValue = 1.3f
-            }
-            assertBodySectionsDoNotOverlap("landscape")
-        } finally {
-            photo.delete()
-        }
-    }
-
-    @Test
-    fun addPhotoDialogAndDatePickerStayModalWithKeyboardAndLargeType() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
-        context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
+    fun calendarRemainsNonOverlappingAtNarrowWidthAndLargeType() {
+        database = inMemoryDatabase()
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
                 VibeCheckTheme {
-                    Box(Modifier.width(320.dp).height(760.dp)) {
-                        MeasurementsScreen(viewModel)
+                    Box(Modifier.size(320.dp, 760.dp)) {
+                        BodyWithFab(viewModel)
                     }
                 }
             }
         }
 
-        compose.onNodeWithContentDescription("Bodyweight").performTextInput("80")
+        val heading = compose.onNodeWithContentDescription("Bodyweight calendar heading")
+            .fetchSemanticsNode().boundsInRoot
+        val controls = compose.onNodeWithContentDescription("Bodyweight calendar month controls")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("heading=$heading controls=$controls", heading.bottom <= controls.top + 0.5f)
         compose.onNode(hasScrollAction())
-            .performScrollToNode(hasContentDescription("Add progress photo"))
-        compose.onNodeWithContentDescription("Add progress photo").performClick()
-        compose.onNodeWithContentDescription("Add progress photo dialog").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Bodyweight calendar card").assertExists()
-
-        val dateControl = compose.onNodeWithContentDescription("Choose progress photo date")
+            .performScrollToNode(hasContentDescription("Bodyweight calendar weekday labels"))
+        val labels = compose.onNodeWithContentDescription("Bodyweight calendar weekday labels")
             .fetchSemanticsNode().boundsInRoot
-        val choosePhoto = compose.onNodeWithText("Choose photo")
+        val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
             .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "dateControl=$dateControl choosePhoto=$choosePhoto",
-            dateControl.bottom <= choosePhoto.top + 0.5f,
-        )
-
-        compose.onNodeWithContentDescription("Choose progress photo date").performClick()
-        compose.onNodeWithContentDescription("Add progress photo dialog").assertDoesNotExist()
-        compose.onNodeWithText("Select photo date").assertIsDisplayed()
-        compose.onNodeWithText("Cancel").performClick()
-        compose.onNodeWithContentDescription("Add progress photo dialog").assertIsDisplayed()
+        assertTrue("labels=$labels firstWeek=$firstWeek", labels.bottom <= firstWeek.top + 0.5f)
     }
 
     @Test
-    fun emptyPhotosStateFollowsActionsWithoutOverlap() {
-        val context = ApplicationProvider.getApplicationContext<Context>()
-        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
-        File(context.filesDir, "progress-photos").listFiles().orEmpty().forEach { it.delete() }
-        context.getSharedPreferences("body-layout", Context.MODE_PRIVATE).edit().clear().commit()
+    fun entryDialogSupportsDateWeightNotesAndPhotoPathAtLargeType() {
+        database = inMemoryDatabase()
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent {
-            VibeCheckTheme {
-                Box(Modifier.width(320.dp).height(760.dp)) {
-                    MeasurementsScreen(viewModel)
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                VibeCheckTheme {
+                    Box(Modifier.size(320.dp, 760.dp)) {
+                        BodyWithFab(viewModel)
+                    }
                 }
             }
         }
 
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("No photo for this day"))
-        val actions = compose.onNodeWithContentDescription("Progress photos actions")
-            .fetchSemanticsNode().boundsInRoot
-        val emptyState = compose.onNodeWithText("No photo for this day")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue("actions=$actions emptyState=$emptyState", actions.bottom <= emptyState.top + 0.5f)
+        compose.onNodeWithContentDescription("Add body entry").performClick()
+        compose.onNodeWithContentDescription("Add body entry dialog").assertIsDisplayed()
+        compose.onNodeWithText("Save without photo").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Notes (optional)").performTextInput("Post-workout")
+        compose.onNodeWithText("Save without photo").assertIsEnabled()
+        compose.onNodeWithText("Add photo and save").assertIsEnabled()
+        compose.onNodeWithContentDescription("Choose body entry date").performClick()
+        compose.onNodeWithContentDescription("Add body entry dialog").assertDoesNotExist()
+        compose.onNodeWithText("Select body entry date").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithContentDescription("Add body entry dialog").assertIsDisplayed()
     }
 
-    private fun monthFirstDayDescription(): String =
-        LocalDate.now().withDayOfMonth(1).format(
-            java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"),
-        )
+    @Test
+    fun noteOnlyEntryIsPersistedWithoutInventingBodyweight() {
+        database = inMemoryDatabase()
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        setBodyContent(viewModel)
 
-    private fun assertBodySectionsDoNotOverlap(configuration: String) {
-        compose.onNode(hasScrollAction())
-            .performScrollToNode(hasContentDescription("Bodyweight calendar heading"))
-        val calendarHeading = compose.onNodeWithContentDescription("Bodyweight calendar heading")
-            .fetchSemanticsNode().boundsInRoot
-        val monthControls = compose.onNodeWithContentDescription("Bodyweight calendar month controls")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "$configuration heading=$calendarHeading controls=$monthControls",
-            calendarHeading.bottom <= monthControls.top + 0.5f,
-        )
+        compose.onNodeWithContentDescription("Add body entry").performClick()
+        compose.onNodeWithContentDescription("Notes (optional)").performTextInput("Recovery day")
+        compose.onNodeWithText("Save without photo").performClick()
+        compose.waitUntil(15_000) {
+            java.io.File(
+                ApplicationProvider.getApplicationContext<Context>().filesDir,
+                "body-notes/${java.time.LocalDate.now().toEpochDay()}.txt",
+            ).isFile
+        }
+        assertTrue(runBlocking { database.editorDao().measurements().first().isEmpty() })
+        compose.onNodeWithText("No bodyweight entries yet").assertIsDisplayed()
+    }
 
-        compose.onNode(hasScrollAction())
-            .performScrollToNode(hasContentDescription("Bodyweight calendar weekday labels"))
-        val weekdayLabels = compose.onNodeWithContentDescription("Bodyweight calendar weekday labels")
-            .fetchSemanticsNode().boundsInRoot
-        val firstWeek = compose.onNodeWithContentDescription("Bodyweight calendar week 1")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "$configuration weekdays=$weekdayLabels firstWeek=$firstWeek",
-            weekdayLabels.bottom <= firstWeek.top + 0.5f,
-        )
-        val firstDay = compose.onNodeWithContentDescription(monthFirstDayDescription())
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "$configuration firstWeek=$firstWeek firstDay=$firstDay",
-            firstDay.top >= firstWeek.top - 0.5f &&
-                firstDay.bottom <= firstWeek.bottom + 0.5f,
-        )
+    private fun inMemoryDatabase(): VibeDatabase {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        java.io.File(context.filesDir, "body-notes").listFiles().orEmpty().forEach { it.delete() }
+        return Room.inMemoryDatabaseBuilder(
+            context,
+            VibeDatabase::class.java,
+        ).build()
+    }
 
-        compose.onNode(hasScrollAction())
-            .performScrollToNode(hasContentDescription("Progress photos heading"))
-        val photosHeading = compose.onNodeWithContentDescription("Progress photos heading")
-            .fetchSemanticsNode().boundsInRoot
-        val photosDate = compose.onNodeWithContentDescription("Progress photos date")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "$configuration heading=$photosHeading date=$photosDate",
-            photosHeading.bottom <= photosDate.top + 0.5f,
-        )
-        compose.onNode(hasScrollAction())
-            .performScrollToNode(hasContentDescription("Progress photo for selected day"))
-        val actions = compose.onNodeWithContentDescription("Progress photos actions")
-            .fetchSemanticsNode().boundsInRoot
-        val image = compose.onNodeWithContentDescription("Progress photo for selected day")
-            .fetchSemanticsNode().boundsInRoot
-        assertTrue("$configuration actions=$actions image=$image", actions.bottom <= image.top + 0.5f)
+    private fun setBodyContent(viewModel: EditorViewModel) {
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.size(411.dp, 780.dp)) {
+                    BodyWithFab(viewModel)
+                }
+            }
+        }
+    }
+}
+
+@androidx.compose.runtime.Composable
+private fun BodyWithFab(viewModel: EditorViewModel) {
+    val host = remember { AppFabHostState(Destination.MEASUREMENTS) }
+    CompositionLocalProvider(
+        LocalAppFabHost provides host,
+        LocalAppFabClearance provides 88.dp,
+    ) {
+        MeasurementsScreen(viewModel)
+        host.action?.takeIf { it.visible }?.let {
+            Box(Modifier.fillMaxSize()) {
+                AppFloatingAction(
+                    it,
+                    host,
+                    Modifier.align(Alignment.BottomEnd).padding(16.dp),
+                )
+            }
+        }
     }
 }
