@@ -11,8 +11,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
@@ -24,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.tracker.HabitFieldForm
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun TrackerScreen(vm: EditorViewModel) {
@@ -31,7 +36,10 @@ fun TrackerScreen(vm: EditorViewModel) {
     val trackers by vm.trackers.collectAsStateWithLifecycle()
     val fields by vm.fields.collectAsStateWithLifecycle()
     val values by vm.values.collectAsStateWithLifecycle()
-    val epoch = LocalDate.now().toEpochDay()
+    val today = LocalDate.now()
+    var epoch by rememberSaveable { mutableLongStateOf(today.toEpochDay()) }
+    var datePickerOpen by rememberSaveable { mutableStateOf(false) }
+    val selectedDate = LocalDate.ofEpochDay(epoch)
     var newHabit by remember { mutableStateOf<TrackerEntity?>(null) }
     var settings by remember { mutableStateOf<TrackerEntity?>(null) }
     var field by remember { mutableStateOf<TrackerFieldEntity?>(null) }
@@ -55,6 +63,47 @@ fun TrackerScreen(vm: EditorViewModel) {
     ScreenList {
         item {
             Text("Habits", style = MaterialTheme.typography.headlineSmall)
+        }
+        item {
+            VibeCard {
+                Text("Logging date", style = MaterialTheme.typography.labelLarge)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    IconButton(
+                        onClick = { epoch = selectedDate.minusDays(1).toEpochDay() },
+                        modifier = Modifier.semantics { contentDescription = "Previous habit date" },
+                    ) {
+                        Icon(Icons.Outlined.ChevronLeft, contentDescription = null)
+                    }
+                    OutlinedButton(
+                        onClick = { datePickerOpen = true },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(Icons.Outlined.CalendarMonth, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (selectedDate == today) {
+                                "Today · ${selectedDate.format(DateTimeFormatter.ofPattern("d MMM yyyy"))}"
+                            } else {
+                                selectedDate.format(DateTimeFormatter.ofPattern("EEE, d MMM yyyy"))
+                            },
+                        )
+                    }
+                    IconButton(
+                        onClick = { epoch = historicalHabitDate(selectedDate.plusDays(1), today).toEpochDay() },
+                        enabled = selectedDate < today,
+                        modifier = Modifier.semantics { contentDescription = "Next habit date" },
+                    ) {
+                        Icon(Icons.Outlined.ChevronRight, contentDescription = null)
+                    }
+                }
+                if (selectedDate < today) {
+                    Text("Recording a historical habit entry", style = MaterialTheme.typography.bodySmall)
+                }
+            }
         }
         if (activeTrackers.isEmpty()) {
             item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a habit to record today's entry.") }
@@ -199,6 +248,40 @@ fun TrackerScreen(vm: EditorViewModel) {
             },
             dismissButton = { TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") } },
         )
+    }
+    if (datePickerOpen) {
+        val latestDateMillis = today.toEpochDay() * 86_400_000L
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = epoch * 86_400_000L,
+            selectableDates = remember(today) {
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                        utcTimeMillis <= latestDateMillis
+                }
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { datePickerOpen = false },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        datePickerState.selectedDateMillis?.let { selectedMillis ->
+                            val requested = LocalDate.ofEpochDay(Math.floorDiv(selectedMillis, 86_400_000L))
+                            epoch = historicalHabitDate(requested, today).toEpochDay()
+                        }
+                        datePickerOpen = false
+                    },
+                ) { Text("Use date") }
+            },
+            dismissButton = {
+                TextButton(onClick = { datePickerOpen = false }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(
+                state = datePickerState,
+                title = { Text("Select habit logging date", Modifier.padding(start = 24.dp, top = 16.dp)) },
+            )
+        }
     }
 }
 

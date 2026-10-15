@@ -7,6 +7,7 @@ import com.petermathie.vibecheck.data.local.TrackerFieldEntity
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.domain.editor.moveItem
 import java.util.UUID
+import java.time.LocalDate
 import kotlinx.coroutines.flow.first
 
 class TrackerEditorStore(
@@ -65,7 +66,13 @@ class TrackerEditorStore(
         }
     }
 
-    suspend fun saveValue(row: TrackerDailyValueEntity) = db.trackerDao().upsertValue(row)
+    suspend fun saveValue(row: TrackerDailyValueEntity) {
+        require(row.epochDay <= LocalDate.now().toEpochDay()) { "Habit entries cannot be logged in the future" }
+        db.trackerDao().upsertValue(row)
+    }
 
-    suspend fun clearValue(fieldId: String, day: Long) = db.trackerDao().clearValue(fieldId, day)
+    suspend fun clearValue(fieldId: String, day: Long) {
+        require(day <= LocalDate.now().toEpochDay()) { "Habit entries cannot be edited in the future" }
+        db.trackerDao().clearValue(fieldId, day)
+    }
 }

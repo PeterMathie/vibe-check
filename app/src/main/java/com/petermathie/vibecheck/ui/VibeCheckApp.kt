@@ -661,9 +661,6 @@ internal fun HomeScreen(
                         onRecencyDayChange(date.toEpochDay())
                         onDayClick(date.toEpochDay())
                     },
-                    onMonthChange = { month ->
-                        onRecencyDayChange(freshnessDateInMonth(selectedRecencyDate, month, today).toEpochDay())
-                    },
                 )
                 Text(
                     "0 none · 1 low · 2 medium · 3+ strong",
@@ -721,47 +718,31 @@ private fun MonthlyActivityHeatmap(
     expandRows: Boolean = false,
     modifier: Modifier = Modifier,
     onDayClick: (LocalDate) -> Unit,
-    onMonthChange: (YearMonth) -> Unit,
 ) {
     val palette = LocalVibePalette.current
     val heatmapColors = palette.habitHeatmapColors()
-    val range = freshnessMonthRange(YearMonth.from(selectedDate), today)
+    val dates = homeHeatmapDates(today)
     val counts = days.associate { it.epochDay to it.activityCount }
-    val leadingDays = range.firstDate.dayOfWeek.value % 7
-    val weekCount = (leadingDays + range.dayCount + 6) / 7
     Column(
         modifier.fillMaxWidth(),
     ) {
-        Row(
-            Modifier.fillMaxWidth().semantics { contentDescription = "Freshness month navigation" },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            VibeActionButton("Earlier", { onMonthChange(range.month.minusMonths(1)) }, importance = ActionImportance.COMPACT)
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (compact) {
-                    Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelSmall)
-                }
-                Text(
-                    range.month.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
-                    style = MaterialTheme.typography.labelSmall,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                )
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            if (compact) {
+                Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelSmall)
             }
-            VibeActionButton(
-                "Later",
-                { onMonthChange(range.month.plusMonths(1)) },
-                importance = ActionImportance.COMPACT,
-                enabled = range.month < YearMonth.from(today),
+            Text(
+                "${dates.first().format(DateTimeFormatter.ofPattern("d MMM"))} – ${dates.last().format(DateTimeFormatter.ofPattern("d MMM"))}",
+                style = MaterialTheme.typography.labelSmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
-        val outerCount = if (compact) 7 else weekCount
-        val innerCount = if (compact) weekCount else 7
+        val outerCount = if (compact) 7 else 5
+        val innerCount = if (compact) 5 else 7
         Row(
             Modifier
                 .fillMaxWidth()
                 .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier)
-                .semantics { contentDescription = "Activity heatmap grid, $weekCount weeks" },
+                .semantics { contentDescription = "Activity heatmap grid, 5 weeks, 35 days" },
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             repeat(outerCount) { outer ->
@@ -774,35 +755,31 @@ private fun MonthlyActivityHeatmap(
                     repeat(innerCount) { inner ->
                         val week = if (compact) inner else outer
                         val weekday = if (compact) outer else inner
-                        val dayOfMonth = week * 7 + weekday - leadingDays + 1
+                        val date = dates[week * 7 + weekday]
                         val cellModifier = Modifier
                             .fillMaxWidth()
                             .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier.height(14.dp))
-                        if (dayOfMonth in 1..range.dayCount) {
-                            val date = range.month.atDay(dayOfMonth)
-                            val count = counts[date.toEpochDay()] ?: 0
-                            val color = heatmapColors.forLevel(count.coerceAtMost(3))
-                            val outlineColor = when {
-                                date == selectedDate || date == today -> palette.heatmapOutlineColor(color)
-                                else -> Color.Transparent
-                            }
-                            Box(
-                                cellModifier
-                                    .semantics {
-                                        contentDescription = "$date: $count activities" +
-                                            if (date == selectedDate) ", selected freshness date" else ""
-                                    }
-                                    .background(color, RoundedCornerShape(VibeShapes.tooltip))
-                                    .border(
-                                        width = if (date == selectedDate) 2.dp else 1.dp,
-                                        color = outlineColor,
-                                        shape = RoundedCornerShape(VibeShapes.tooltip),
-                                    )
-                                    .clickable { onDayClick(date) },
-                            )
-                        } else {
-                            Spacer(cellModifier)
+                        val count = counts[date.toEpochDay()] ?: 0
+                        val color = heatmapColors.forLevel(count.coerceAtMost(3))
+                        val outlineColor = when {
+                            date == selectedDate || date == today -> palette.heatmapOutlineColor(color)
+                            else -> Color.Transparent
                         }
+                        Box(
+                            cellModifier
+                                .semantics {
+                                    contentDescription = "$date: $count activities" +
+                                        if (date == selectedDate) ", selected freshness date" else "" +
+                                        if (date == today) ", today" else ""
+                                }
+                                .background(color, RoundedCornerShape(VibeShapes.tooltip))
+                                .border(
+                                    width = if (date == selectedDate) 2.dp else 1.dp,
+                                    color = outlineColor,
+                                    shape = RoundedCornerShape(VibeShapes.tooltip),
+                                )
+                                .clickable { onDayClick(date) },
+                        )
                     }
                 }
             }

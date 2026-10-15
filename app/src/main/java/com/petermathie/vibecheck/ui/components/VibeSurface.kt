@@ -22,10 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
@@ -111,21 +108,10 @@ fun VibeSurface(
                 translationY = if (pressed && !reducedMotion) 1.dp.toPx() else 0f
             }
             .background(fill)
-            .drawWithCache {
-                val highlight = Brush.verticalGradient(
-                    0f to palette.textPrimary.copy(alpha = elevation.topEdgeAlpha),
-                    1f to Color.Transparent,
-                    endY = size.height * 0.18f,
-                )
-                onDrawWithContent {
-                    drawContent()
-                    if (elevation.topEdgeAlpha > 0f) {
-                        drawRect(highlight, topLeft = Offset.Zero, size = size.copy(height = size.height * 0.18f))
-                    }
-                }
-            }
-            .border(BorderStroke(1.dp, borderColor), resolvedShape)
-            .then(if (focused) Modifier.border(2.dp, palette.focusRing, resolvedShape) else Modifier)
+            .border(
+                BorderStroke(if (focused) 2.dp else 1.dp, if (focused) palette.focusRing else borderColor),
+                resolvedShape,
+            )
             .then(interactive)
             .semantics {
                 if (!enabled) disabled()

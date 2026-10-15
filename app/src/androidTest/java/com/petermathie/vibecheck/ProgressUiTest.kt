@@ -10,6 +10,7 @@ import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.WorkoutEntity
 import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
+import com.petermathie.vibecheck.data.local.BodyMeasurementEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.ProgressScreen
@@ -23,6 +24,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 
 @RunWith(AndroidJUnit4::class)
 class ProgressUiTest {
@@ -37,6 +40,11 @@ class ProgressUiTest {
 
     @After
     fun cleanUpPhotos() {
+        ApplicationProvider.getApplicationContext<Context>()
+            .getSharedPreferences("progress-date-range", Context.MODE_PRIVATE)
+            .edit()
+            .clear()
+            .commit()
         preservedPhotoNames?.let { preserved ->
             File(ApplicationProvider.getApplicationContext<Context>().filesDir, "progress-photos")
                 .listFiles()
@@ -55,6 +63,7 @@ class ProgressUiTest {
             .map(File::getName)
             .toSet()
         context.getSharedPreferences("progress-layout", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("progress-date-range", Context.MODE_PRIVATE).edit().clear().commit()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         runBlocking {
             DatabaseSeeder(context, database).seedIfNeeded()
@@ -136,7 +145,12 @@ class ProgressUiTest {
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("kg", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("kg", substring = true).performTouchInput { click(androidx.compose.ui.geometry.Offset(16f, center.y)) }
+        val bodyweightGraph = compose.onNodeWithContentDescription("kg", substring = true)
+        val graphActions: List<androidx.compose.ui.semantics.CustomAccessibilityAction> =
+            bodyweightGraph.fetchSemanticsNode()
+                .config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
+        assertTrue(graphActions.first { it.label == "Next data point" }.action())
+        compose.waitForIdle()
         compose.onNodeWithContentDescription("Progress photo for selected bodyweight day").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
         compose.onNodeWithText("Mood").performScrollTo()
@@ -239,5 +253,64 @@ class ProgressUiTest {
         compose.onNodeWithContentDescription("Eligible progress exercises")
             .performScrollToNode(hasText("Eligible 104"))
         compose.onNodeWithText("Eligible 104").assertIsDisplayed()
+    }
+
+    @Test
+    fun persistedInclusiveDateRangeFiltersGraphsAndResetRestoresAllTime() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val selectedDate = LocalDate.now().minusDays(5)
+        val earlierDate = selectedDate.minusDays(10)
+        context.getSharedPreferences("progress-date-range", Context.MODE_PRIVATE).edit()
+            .putLong("start", selectedDate.toEpochDay())
+            .putLong("end", selectedDate.toEpochDay())
+            .commit()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking {
+            database.editorDao().measurement(
+                BodyMeasurementEntity(
+                    "earlier",
+                    earlierDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                    "Bodyweight",
+                    80.0,
+                    "kg",
+                    "",
+                    false,
+                ),
+            )
+            database.editorDao().measurement(
+                BodyMeasurementEntity(
+                    "selected",
+                    selectedDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
+                    "Bodyweight",
+                    79.0,
+                    "kg",
+                    "",
+                    false,
+                ),
+            )
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { ProgressScreen(viewModel) } }
+
+        val formatted = selectedDate.format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))
+        compose.onNodeWithText("$formatted – $formatted").assertIsDisplayed()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription(
+                "Progress chart from $selectedDate to $selectedDate",
+                substring = true,
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription(
+            "Progress chart from $selectedDate to $selectedDate",
+            substring = true,
+        ).assertExists()
+
+        compose.onNodeWithText("Reset").performClick()
+        compose.onNodeWithText("Date range: All time").assertIsDisplayed()
+        compose.onNodeWithContentDescription(
+            "Progress chart from $earlierDate to $selectedDate",
+            substring = true,
+        ).assertExists()
+        assertTrue(!context.getSharedPreferences("progress-date-range", Context.MODE_PRIVATE).contains("start"))
     }
 }

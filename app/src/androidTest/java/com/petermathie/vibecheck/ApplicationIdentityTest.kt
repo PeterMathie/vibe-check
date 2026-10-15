@@ -49,6 +49,21 @@ class ApplicationIdentityTest {
         assertTrue(foregroundPixels.any { Color.alpha(it) > 0 && Color.red(it) > Color.green(it) * 1.4 })
         assertTrue(foregroundPixels.any { Color.alpha(it) > 0 && Color.green(it) > Color.red(it) * 1.4 })
         assertTrue(foregroundPixels.any { Color.alpha(it) > 0 && Color.blue(it) > Color.red(it) * 1.4 })
+        val dominantOpaqueColours = foregroundPixels
+            .filter { Color.alpha(it) == 255 }
+            .map { it and 0x00FFFFFF }
+            .groupingBy { it }
+            .eachCount()
+            .filterValues { it >= foreground.width }
+        assertTrue("Flat artwork must not contain gradient or lighting ramps", dominantOpaqueColours.size <= 4)
+
+        val visibleCoordinates = foregroundPixels.indices.filter { Color.alpha(foregroundPixels[it]) > 0 }
+        val left = visibleCoordinates.minOf { it % foreground.width }
+        val right = visibleCoordinates.maxOf { it % foreground.width }
+        val top = visibleCoordinates.minOf { it / foreground.width }
+        val bottom = visibleCoordinates.maxOf { it / foreground.width }
+        assertTrue("Adaptive artwork must remain inside the launcher safe zone", left >= 64 && top >= 64)
+        assertTrue("Adaptive artwork must remain inside the launcher safe zone", right <= 367 && bottom <= 367)
 
         val monochromePixels = IntArray(monochrome.width * monochrome.height).also {
             monochrome.getPixels(it, 0, monochrome.width, 0, 0, monochrome.width, monochrome.height)
@@ -57,5 +72,8 @@ class ApplicationIdentityTest {
         assertTrue(monochromePixels.filter { Color.alpha(it) > 0 }.all {
             Color.red(it) == Color.green(it) && Color.green(it) == Color.blue(it)
         })
+
+        assertNotNull(context.getDrawable(R.mipmap.ic_launcher))
+        assertNotNull(context.getDrawable(R.mipmap.ic_launcher_round))
     }
 }
