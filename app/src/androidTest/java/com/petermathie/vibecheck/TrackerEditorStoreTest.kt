@@ -17,6 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.time.LocalDate
 
 @RunWith(AndroidJUnit4::class)
 class TrackerEditorStoreTest {
@@ -78,6 +79,40 @@ class TrackerEditorStoreTest {
         assertEquals(3.0, database.editorDao().values().first().single().numericValue ?: 0.0, 0.0)
         store.clearValue("field", 10)
         assertTrue(database.editorDao().values().first().isEmpty())
+    }
+
+    @Test
+    fun historicalChoiceSnapshotSurvivesFieldEditAndFutureEntriesAreRejected() = runBlocking {
+        val trackerDao = database.trackerDao()
+        trackerDao.insertTrackers(listOf(TrackerEntity("tracker", "Wellbeing", false)))
+        trackerDao.insertFields(listOf(field("field", 0).copy(valueType = "CHOICE", choiceOptions = "Calm\nGreat")))
+        val historicalDay = LocalDate.now().minusDays(10).toEpochDay()
+        store.saveValue(
+            TrackerDailyValueEntity(
+                fieldId = "field",
+                epochDay = historicalDay,
+                numericValue = null,
+                booleanValue = null,
+                textValue = "Great",
+                notes = "",
+                updatedAt = 1,
+                choiceOptionId = "choice-great",
+                choiceIntensity = "DARK",
+            ),
+        )
+
+        store.saveField(field("field", 0).copy(valueType = "CHOICE", choiceOptions = "Calm"))
+
+        val historical = database.editorDao().values().first().single()
+        assertEquals("choice-great", historical.choiceOptionId)
+        assertEquals("Great", historical.textValue)
+        assertEquals("DARK", historical.choiceIntensity)
+
+        val failure = runCatching {
+            store.saveValue(historical.copy(epochDay = LocalDate.now().plusDays(1).toEpochDay()))
+        }.exceptionOrNull()
+        assertTrue(failure is IllegalArgumentException)
+        assertTrue(failure?.message.orEmpty().contains("future"))
     }
 
     private fun field(id: String, position: Int) = TrackerFieldEntity(

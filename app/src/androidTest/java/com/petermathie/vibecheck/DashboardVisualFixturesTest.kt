@@ -74,7 +74,7 @@ class DashboardVisualFixturesTest {
     }
 
     @Test
-    fun sharedSurfaceClipsTopHighlightToItsRoundedShape() {
+    fun sharedSurfaceBorderStaysInsideItsRoundedShape() {
         val palette = VibePalettes.Mono.dark
         var insetPx = 0
         compose.setContent {
@@ -98,6 +98,33 @@ class DashboardVisualFixturesTest {
         val pixels = compose.onNodeWithContentDescription("Clipped surface fixture").captureToImage().toPixelMap()
         assertEquals(palette.background.toArgb(), pixels[insetPx, insetPx].toArgb())
         assertEquals(palette.background.toArgb(), pixels[pixels.width - insetPx - 1, insetPx].toArgb())
+    }
+
+    @Test
+    fun selectedSurfaceUsesTheSameBorderThicknessOnTopAndSides() {
+        compose.setContent {
+            VibeCheckTheme(VibePalettes.Mono.light) {
+                VibeSurface(
+                    level = VibeSurfaceLevel.SELECTED,
+                    state = VibeSurfaceState.SELECTED,
+                    modifier = Modifier
+                        .size(160.dp, 100.dp)
+                        .semantics { contentDescription = "Uniform border fixture" },
+                ) {}
+            }
+        }
+
+        val pixels = compose.onNodeWithContentDescription("Uniform border fixture").captureToImage().toPixelMap()
+        val interior = pixels[pixels.width / 2, pixels.height / 2].toArgb()
+        val topThickness = (0 until 12).takeWhile {
+            pixels[pixels.width / 2, it].toArgb() != interior
+        }.size
+        val sideThickness = (0 until 12).takeWhile {
+            pixels[it, pixels.height / 2].toArgb() != interior
+        }.size
+
+        assertTrue("top=$topThickness side=$sideThickness", topThickness > 0 && sideThickness > 0)
+        assertEquals("Border thickness must be uniform", topThickness, sideThickness)
     }
 
     @Test

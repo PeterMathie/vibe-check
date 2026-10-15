@@ -104,7 +104,7 @@ Settings use switches for binary preferences and direct actions for operations. 
 - Separate strength and stretching freshness maps with male/female anatomy profiles.
 - Primary and secondary muscle dose expressed as explainable set-equivalents.
 - Historical map reconstruction for any recorded day.
-- Calendar-month activity heatmap combining completed training and qualifying habit activity.
+- Five-week, 35-day activity heatmap combining completed training and qualifying habit activity.
 - Exercise-specific performance scoring, rolling trends and personal records.
 - Variation-aware assisted and skill comparisons so unlike performances are not ranked together.
 

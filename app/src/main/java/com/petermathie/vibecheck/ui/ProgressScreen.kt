@@ -46,6 +46,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.io.File
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 @Composable
 fun ProgressScreen(vm:EditorViewModel) {
@@ -53,34 +54,58 @@ fun ProgressScreen(vm:EditorViewModel) {
     val sets by vm.sets.collectAsStateWithLifecycle();val links by vm.setBands.collectAsStateWithLifecycle();val bands by vm.bands.collectAsStateWithLifecycle();val variations by vm.variations.collectAsStateWithLifecycle()
     val trackers by vm.trackers.collectAsStateWithLifecycle();val fields by vm.fields.collectAsStateWithLifecycle();val values by vm.values.collectAsStateWithLifecycle();val measurements by vm.measurements.collectAsStateWithLifecycle()
     val context=LocalContext.current
+    val rangePreferences = remember(context) {
+        context.getSharedPreferences("progress-date-range", android.content.Context.MODE_PRIVATE)
+    }
+    var dateRange by remember {
+        mutableStateOf(
+            if (rangePreferences.contains("start") && rangePreferences.contains("end")) {
+                validProgressDateRange(
+                    LocalDate.ofEpochDay(rangePreferences.getLong("start", 0)),
+                    LocalDate.ofEpochDay(rangePreferences.getLong("end", 0)),
+                )
+            } else {
+                null
+            },
+        )
+    }
+    var rangeDialogOpen by rememberSaveable { mutableStateOf(false) }
     var exerciseId by remember { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by remember { mutableStateOf<String?>(null) };var selected by remember { mutableStateOf<Int?>(null) }
     var variationMenu by remember { mutableStateOf(false) };var methodology by remember { mutableStateOf(false) }
     var selectedWeight by remember { mutableStateOf<Int?>(null) };var selectedPhoto by remember { mutableStateOf<File?>(null) }
     var collapsedCards by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val points=exerciseId?.let { SessionProgress.points(it,workouts,rows,sets,links,bands,filter,variations) }.orEmpty()
+    val allPoints=exerciseId?.let { SessionProgress.points(it,workouts,rows,sets,links,bands,filter,variations) }.orEmpty()
+    val points=allPoints.filter { point -> dateRange?.containsTimestamp(point.date) != false }
     val finishedIds=workouts.filter { it.status=="FINISHED" }.map { it.id }.toSet()
     val trackableSetRowIds = sets.filter { SessionProgress.valid(it) || it.romValue != null }.map { it.workoutExerciseId }.toSet()
     val eligibleExerciseIds = rows.filter { it.workoutId in finishedIds && it.id in trackableSetRowIds }.map { it.actualExerciseId }.toSet()
-    val aggregate = remember(eligibleExerciseIds, workouts, rows, sets, links, bands, variations) {
+    val allAggregate = remember(eligibleExerciseIds, workouts, rows, sets, links, bands, variations) {
         SessionProgress.aggregate(
             eligibleExerciseIds.associateWith { id ->
                 SessionProgress.points(id, workouts, rows, sets, links, bands, null, variations)
             },
         )
     }
-    val bodyweights = measurements.filter { it.metric.equals("Bodyweight", true) }.sortedBy { it.recordedAt }
+    val aggregate = allAggregate.filter { point -> dateRange?.containsTimestamp(point.date) != false }
+    val allBodyweights = measurements.filter { it.metric.equals("Bodyweight", true) }.sortedBy { it.recordedAt }
+    val bodyweights = allBodyweights.filter { point -> dateRange?.containsTimestamp(point.recordedAt) != false }
     val progressPhotos = remember(context) {
         File(context.filesDir, "progress-photos").listFiles().orEmpty()
             .mapNotNull { file -> file.name.substringBefore('.').toLongOrNull()?.let { it to file } }
     }
     val exerciseRows=rows.filter { it.actualExerciseId==exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
-    val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
+    val valid=sets.filter {
+        it.workoutExerciseId in exerciseRows &&
+            SessionProgress.valid(it) &&
+            (filter==null || it.variationId==filter) &&
+            dateRange?.containsTimestamp(it.loggedAt) != false
+    }
     val records=SessionProgress.records(valid,points)
     val recordVisibility=SessionProgress.recordVisibility(exercises.find { it.id==exerciseId }?.trackingType)
     val activeTrackers = trackers.filterNot { it.isArchived }.sortedBy { it.position }
     val availableCardKeys = buildList {
-        if (aggregate.isNotEmpty()) add("overall")
-        if (bodyweights.isNotEmpty()) add("bodyweight")
+        if (allAggregate.isNotEmpty()) add("overall")
+        if (allBodyweights.isNotEmpty()) add("bodyweight")
         activeTrackers.forEach { add("habit:${it.id}") }
         add("training")
     }
@@ -128,6 +153,16 @@ fun ProgressScreen(vm:EditorViewModel) {
                     Text("Progress",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.weight(1f))
                     IconButton(onClick={methodology=true}) { Icon(Icons.Outlined.Info,contentDescription="How progress works") }
                 }
+                ProgressDateRangeControls(
+                    range = dateRange,
+                    onEdit = { rangeDialogOpen = true },
+                    onReset = {
+                        dateRange = null
+                        selected = null
+                        selectedWeight = null
+                        rangePreferences.edit().clear().apply()
+                    },
+                )
                 progressOrder.ordered(progressCardKeys) { it }.forEachIndexed { cardIndex, cardKey ->
                     key(cardKey) {
                         val title = when {
@@ -143,14 +178,23 @@ fun ProgressScreen(vm:EditorViewModel) {
                         }
                         when {
                             cardKey == "overall" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
-                                Text("Average normalized score across ${aggregate.last().exerciseCount} exercises")
-                                MiniChart(values = aggregate.map { it.averageIndex }, dates = aggregate.map { it.date }, unit = "index") {}
+                                Text(
+                                    aggregate.lastOrNull()?.let { "Average normalized score across ${it.exerciseCount} exercises" }
+                                        ?: "No training progress in the selected date range.",
+                                )
+                                MiniChart(
+                                    values = aggregate.map { it.averageIndex },
+                                    dates = aggregate.map { it.date },
+                                    unit = "index",
+                                    emptyMessage = "No training progress in the selected date range.",
+                                ) {}
                             }
                             cardKey == "bodyweight" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
                                 MiniChart(
                                     values = bodyweights.map { if (it.unit.equals("lb", true)) it.value / 2.2046226218 else it.value },
                                     dates = bodyweights.map { it.recordedAt },
                                     unit = "kg",
+                                    emptyMessage = "No bodyweight entries in the selected date range.",
                                 ) { index ->
                                     selectedWeight = index
                                     val day = Instant.ofEpochMilli(bodyweights[index].recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -180,7 +224,9 @@ fun ProgressScreen(vm:EditorViewModel) {
                                             if (expanded) {
                                                 val trackerFields = fields.filter { it.trackerId == tracker.id && !it.isArchived }
                                                 val fieldIds = trackerFields.map { it.id }.toSet()
-                                                val habitDays = values.filter { it.fieldId in fieldIds }
+                                                val habitDays = values.filter {
+                                                    it.fieldId in fieldIds && dateRange?.containsEpochDay(it.epochDay) != false
+                                                }
                                                     .groupBy { it.epochDay }
                                                     .map { (epochDay, dailyValues) -> ActivityDay(epochDay, habitHeatmapLevel(tracker, trackerFields, dailyValues)) }
                                                 val numericField = trackerFields.firstOrNull { it.valueType in setOf("NUMBER", "COUNT", "DURATION", "RATING") }
@@ -196,8 +242,10 @@ fun ProgressScreen(vm:EditorViewModel) {
                                 ExerciseProgressSelectors(exercises = exercises, exerciseId = exerciseId, variations = variations, filter = filter, eligible = eligibleExerciseIds.isNotEmpty(), variationMenu = variationMenu, onChooseExercise = { picker = true }, onVariationMenu = { variationMenu = it }, onFilter = { filter = it; selected = null })
                                 if (eligibleExerciseIds.isEmpty()) {
                                     Text("Complete a working set before an exercise appears here.")
-                                } else if (points.isEmpty()) {
+                                } else if (exerciseId == null) {
                                     Text("Choose an exercise to see its progress.")
+                                } else if (points.isEmpty()) {
+                                    Text("No training progress in the selected date range.")
                                 } else {
                                     MiniChart(points.map { it.index ?: it.score }, points.map { it.trend }, points.map { it.date }, if(points.any { it.index!=null }) "index" else "score") { selected = it }
                                     PersonalRecordsContent(records, recordVisibility)
@@ -219,7 +267,9 @@ fun ProgressScreen(vm:EditorViewModel) {
             }
         }
         val ids=rows.filter { it.actualExerciseId==exerciseId && workouts.any { w -> w.id==it.workoutId && w.status=="FINISHED" } }.map { it.id }.toSet()
-        val romSeries=SessionProgress.romSeries(sets.filter { it.workoutExerciseId in ids })
+        val romSeries=SessionProgress.romSeries(
+            sets.filter { it.workoutExerciseId in ids && dateRange?.containsTimestamp(it.loggedAt) != false },
+        )
         if(romSeries.isNotEmpty()) item {
             Text("Flexibility / ROM (separate from frequency)")
             romSeries.forEach { (unit,series) ->
@@ -229,6 +279,32 @@ fun ProgressScreen(vm:EditorViewModel) {
             }
         }
         items(points.reversed()) { p -> TextButton(onClick={selected=points.indexOf(p)}){Text("${Instant.ofEpochMilli(p.date).atZone(ZoneId.systemDefault()).toLocalDate()} · ${setDescription(p.performance)}")} }
+    }
+    if (rangeDialogOpen) {
+        val availableDates = buildList {
+            addAll(allAggregate.map { Instant.ofEpochMilli(it.date).atZone(ZoneId.systemDefault()).toLocalDate() })
+            addAll(allBodyweights.map { Instant.ofEpochMilli(it.recordedAt).atZone(ZoneId.systemDefault()).toLocalDate() })
+            addAll(values.map { LocalDate.ofEpochDay(it.epochDay) })
+            addAll(sets.map { Instant.ofEpochMilli(it.loggedAt).atZone(ZoneId.systemDefault()).toLocalDate() })
+        }
+        val today = LocalDate.now()
+        val bounds = (availableDates.minOrNull() ?: today.minusDays(34)) to
+            minOf(availableDates.maxOrNull() ?: today, today)
+        ProgressDateRangeDialog(
+            initial = dateRange,
+            bounds = bounds,
+            onDismiss = { rangeDialogOpen = false },
+            onApply = { updated ->
+                dateRange = updated
+                selected = null
+                selectedWeight = null
+                rangePreferences.edit()
+                    .putLong("start", updated.start.toEpochDay())
+                    .putLong("end", updated.endInclusive.toEpochDay())
+                    .apply()
+                rangeDialogOpen = false
+            },
+        )
     }
     if(picker)ProgressExercisePicker(vm,eligibleExerciseIds,{picker=false}){exerciseId=it.id;filter=null;selected=null;picker=false}
     if(methodology)AlertDialog(
@@ -258,6 +334,132 @@ fun ProgressScreen(vm:EditorViewModel) {
             },
             confirmButton = { TextButton(onClick = { selectedPhoto = null }) { Text("Close") } },
         )
+    }
+}
+
+@Composable
+private fun ProgressDateRangeControls(
+    range: ProgressDateRange?,
+    onEdit: () -> Unit,
+    onReset: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        OutlinedButton(
+            onClick = onEdit,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(
+                range?.let {
+                    "${it.start.format(DateTimeFormatter.ofPattern("d MMM yyyy"))} – " +
+                        it.endInclusive.format(DateTimeFormatter.ofPattern("d MMM yyyy"))
+                } ?: "Date range: All time",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        TextButton(onClick = onReset, enabled = range != null) {
+            Text("Reset")
+        }
+    }
+}
+
+@Composable
+private fun ProgressDateRangeDialog(
+    initial: ProgressDateRange?,
+    bounds: Pair<LocalDate, LocalDate>,
+    onDismiss: () -> Unit,
+    onApply: (ProgressDateRange) -> Unit,
+) {
+    var startDay by rememberSaveable(initial, bounds) {
+        mutableLongStateOf((initial?.start ?: bounds.first).toEpochDay())
+    }
+    var endDay by rememberSaveable(initial, bounds) {
+        mutableLongStateOf((initial?.endInclusive ?: bounds.second).toEpochDay())
+    }
+    var pickerTarget by rememberSaveable { mutableStateOf<String?>(null) }
+    val start = LocalDate.ofEpochDay(startDay)
+    val end = LocalDate.ofEpochDay(endDay)
+    val validated = validProgressDateRange(start, end)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Custom progress range") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = { pickerTarget = "start" },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Start: ${start.format(DateTimeFormatter.ofPattern("d MMM yyyy"))}")
+                }
+                OutlinedButton(
+                    onClick = { pickerTarget = "end" },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("End: ${end.format(DateTimeFormatter.ofPattern("d MMM yyyy"))}")
+                }
+                if (validated == null) {
+                    Text(
+                        "Start date must be on or before end date.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    Text("Both dates are included.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { validated?.let(onApply) },
+                enabled = validated != null,
+            ) { Text("Apply") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+
+    pickerTarget?.let { target ->
+        val minimumMillis = bounds.first.toEpochDay() * 86_400_000L
+        val maximumMillis = bounds.second.toEpochDay() * 86_400_000L
+        val pickerState = rememberDatePickerState(
+            initialSelectedDateMillis = (if (target == "start") startDay else endDay) * 86_400_000L,
+            selectableDates = remember(bounds) {
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long): Boolean =
+                        utcTimeMillis in minimumMillis..maximumMillis
+                }
+            },
+        )
+        DatePickerDialog(
+            onDismissRequest = { pickerTarget = null },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pickerState.selectedDateMillis?.let { selectedMillis ->
+                            val selectedDay = Math.floorDiv(selectedMillis, 86_400_000L)
+                            if (target == "start") startDay = selectedDay else endDay = selectedDay
+                        }
+                        pickerTarget = null
+                    },
+                ) { Text("Use date") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pickerTarget = null }) { Text("Cancel") }
+            },
+        ) {
+            DatePicker(
+                state = pickerState,
+                title = {
+                    Text(
+                        if (target == "start") "Select start date" else "Select end date",
+                        Modifier.padding(start = 24.dp, top = 16.dp),
+                    )
+                },
+            )
+        }
     }
 }
 
@@ -510,12 +712,24 @@ private fun ProgressExercisePicker(
 }
 
 @Composable
-fun MiniChart(values:List<Double>,smooth:List<Double?> = emptyList(),dates:List<Long> = emptyList(),unit:String = "",onSelect:(Int)->Unit) {
+fun MiniChart(
+    values: List<Double>,
+    smooth: List<Double?> = emptyList(),
+    dates: List<Long> = emptyList(),
+    unit: String = "",
+    emptyMessage: String = "Complete a valid entry to see this chart.",
+    onSelect: (Int) -> Unit,
+) {
     VibeGraph(
         values = values,
         secondaryValues = smooth,
         dates = dates,
         unit = unit,
+        graphState = if (values.any(Double::isFinite)) {
+            com.petermathie.vibecheck.ui.components.VibeGraphState.Data
+        } else {
+            com.petermathie.vibecheck.ui.components.VibeGraphState.Empty(emptyMessage)
+        },
         onSelect = onSelect,
     )
 }

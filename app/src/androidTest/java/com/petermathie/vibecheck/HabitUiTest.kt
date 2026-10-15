@@ -22,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.time.LocalDate
 
 @RunWith(AndroidJUnit4::class)
 class HabitUiTest {
@@ -59,6 +60,7 @@ class HabitUiTest {
                 ),
             )
         }
+
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { TrackerScreen(viewModel) } }
 
@@ -140,6 +142,66 @@ class HabitUiTest {
         compose.waitUntil(15_000) { compose.onAllNodesWithText("Archived habits").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Restore").performClick()
         compose.onNodeWithText("Wellbeing").assertIsDisplayed()
+    }
+
+    @Test(timeout = 120_000)
+    fun recordsAndEditsHistoricalChoiceWithoutLosingDeletedChoiceSnapshot() {
+        database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(),
+            VibeDatabase::class.java,
+        ).build()
+        val options = listOf(
+            HabitChoiceOption("calm", "Calm", HabitChoiceIntensity.LIGHT, 0),
+            HabitChoiceOption("great", "Great", HabitChoiceIntensity.DARK, 0),
+        )
+        val field = com.petermathie.vibecheck.data.local.TrackerFieldEntity(
+            id = "mood",
+            trackerId = "tracker",
+            name = "Feeling",
+            valueType = "CHOICE",
+            unit = null,
+            targetComparison = null,
+            targetValue = null,
+            position = 0,
+            choiceOptions = options.joinToString("\n", transform = HabitChoiceOption::label),
+            choiceOptionsJson = encodeHabitChoices(options),
+        )
+        runBlocking {
+            database.trackerDao().insertTrackers(listOf(TrackerEntity("tracker", "Wellbeing", false)))
+            database.trackerDao().insertFields(listOf(field))
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { TrackerScreen(viewModel) } }
+
+        compose.onNodeWithContentDescription("Previous habit date").performClick()
+        compose.onNodeWithText("Recording a historical habit entry").assertIsDisplayed()
+        compose.onNodeWithText("Choose…").performClick()
+        compose.onNodeWithText("Great").performClick()
+
+        val historicalDay = LocalDate.now().minusDays(1).toEpochDay()
+        compose.waitUntil(15_000) {
+            runBlocking {
+                database.editorDao().values().first().singleOrNull()?.let {
+                    it.epochDay == historicalDay &&
+                        it.choiceOptionId == "great" &&
+                        it.choiceIntensity == "DARK"
+                } == true
+            }
+        }
+
+        runBlocking {
+            database.editorDao().field(
+                field.copy(
+                    choiceOptions = "Calm",
+                    choiceOptionsJson = encodeHabitChoices(options.take(1)),
+                ),
+            )
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Great").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Next habit date").assertIsEnabled().performClick()
+        compose.onNodeWithText("Recording a historical habit entry").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Next habit date").assertIsNotEnabled()
     }
 
     @Test(timeout = 120_000)

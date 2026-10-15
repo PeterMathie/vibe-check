@@ -78,12 +78,13 @@ Finishing a valid strength or stretching session persists it before returning Ho
 - Raw performance only before three sessions; first three valid sessions establish index 100.
 - Rolling three-session line plus Rising/Flat/Falling label.
 - Graph points expose raw performance, RPE and the exercise note recorded for that session.
+- Progress graphs support a persisted custom inclusive start/end date range, with an all-time reset.
 - PRs for weight, reps, estimated 1RM, holds and calculated performance.
 - ROM measurements live inside relevant stretches and remain separate from stretch freshness.
 
 ## Homepage and history
 
-The homepage contains the freshness SVG and a calendar-month activity heatmap. The selected freshness date is authoritative: the slider exposes one step per selectable day in that displayed month, past months include every day, and the current month stops at today. The front/back figures use the same anatomy coordinates and hit regions with a 10% vertical presentation stretch; width is preserved and the full head, hands and feet remain visible.
+The homepage contains the freshness SVG and an activity heatmap showing exactly today plus the previous 34 calendar days in five ordered weeks, with no future cells. The selected freshness date is authoritative: the slider exposes one step per selectable day in its month and the current month stops at today. The front/back figures use the same anatomy coordinates and hit regions with a 10% vertical presentation stretch; width is preserved and the full head, hands and feet remain visible.
 
 A compact vertical key beside the maps uses the exact active preset's continuous Freshness scale from most recent at the top to least recent at the bottom. Its five ordered bands are under 24 hours, 24–48 hours, 48–72 hours, 3–7 days and over 7 days. Adjacent dated states blend in OKLab while scrubbing; no-data is a separate neutral and is never interpolated as an age stop.
 
@@ -96,7 +97,7 @@ Every completed workout or stretching session counts separately. A measured trac
 
 ## Open-ended trackers
 
-Trackers contain any combination of Boolean, number, duration, count, rating, text, choice and date/time fields. Numerical fields use custom units and optional at-least/at-most/exact/range targets. Each field has one editable daily value. Trackers have no schedules or missed-day penalties. Metric charting is deferred, but the schema remains extensible.
+Trackers contain any combination of Boolean, number, duration, count, rating, text, choice and date/time fields. Numerical fields use custom units and optional at-least/at-most/exact/range targets. Each field has one editable daily value, and users can select any previous date to record or edit it; future dates are rejected. Choice entries retain their stable option ID, label and intensity snapshot when the configured choices later move or are deleted. Trackers have no schedules or missed-day penalties. Metric charting is deferred, but the schema remains extensible.
 
 ## Data and platform
 
