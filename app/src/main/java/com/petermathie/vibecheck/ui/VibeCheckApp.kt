@@ -251,6 +251,10 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                                 destination = Destination.ACTIVE_WORKOUT
                             }
                         },
+                        onContinue = {
+                            haptics.perform(VibeHapticEvent.PLAY)
+                            destination = Destination.ACTIVE_WORKOUT
+                        },
                         onSaveCurrentAndStart = { currentWorkoutId, dayId ->
                             viewModel.saveCurrentAndStartWorkout(
                                 currentWorkoutId,
@@ -631,16 +635,10 @@ internal fun HomeScreen(
         }
         state.activeWorkout?.let { workout ->
             VibeCard {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("ACTIVE WORKOUT", color = palette.accent, style = MaterialTheme.typography.labelLarge)
-                        Text(workout.name, style = MaterialTheme.typography.titleLarge)
-                        Text("${workout.exercises.sumOf { it.sets.size }} sets autosaved", color = palette.textSecondary)
-                    }
-                    Button(onClick = {
-                        haptics.perform(VibeHapticEvent.PLAY)
-                        onContinue()
-                    }, shape = MaterialTheme.shapes.medium) { Text("Continue") }
+                Column(Modifier.fillMaxWidth()) {
+                    Text("ACTIVE WORKOUT", color = palette.accent, style = MaterialTheme.typography.labelLarge)
+                    Text(workout.name, style = MaterialTheme.typography.titleLarge)
+                    Text("${workout.exercises.sumOf { it.sets.size }} sets autosaved", color = palette.textSecondary)
                 }
             }
         }

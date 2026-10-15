@@ -8,10 +8,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -186,6 +189,7 @@ fun WorkoutEditor(
     var bodyweight by remember { mutableStateOf(false) }
     var editDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var pendingDeleteExerciseId by rememberSaveable { mutableStateOf<String?>(null) }
     if (workout != null) {
         RegisterAppFabAction(
             owner = Destination.ACTIVE_WORKOUT,
@@ -209,13 +213,22 @@ fun WorkoutEditor(
         }
     }
     val rows = snapshots.filter { it.workoutId == workout.id }.sortedBy { it.position }
+    val exerciseOrder = rememberReorderState(rows.map { it.id }) { key, from, to ->
+        vm.moveWorkoutExercise(key as String, to - from)
+    }
     val logged = sets.filter { s -> rows.any { it.id == s.workoutExerciseId } }
     val validEntryRows = remember(workout.id) { mutableStateMapOf<String, Boolean>() }
     var collapsedExerciseIds by rememberSaveable(workout.id) { mutableStateOf(emptyList<String>()) }
+    val listState = rememberLazyListState()
+    val reorderContext = rememberReorderScrollContext(listState)
+    ReorderOverlayHost(Modifier.fillMaxSize()) {
+        CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
     LazyColumn(
-        Modifier
+        state = listState,
+        modifier = Modifier
             .fillMaxSize()
             .imePadding()
+            .reorderScrollViewport(reorderContext)
             .semantics { contentDescription = "Workout exercise list" },
         contentPadding = PaddingValues(
             start = 12.dp,
@@ -236,18 +249,24 @@ fun WorkoutEditor(
             )
             if(workout.status=="FINISHED") VibeActionButton("Change workout date", { editDate=true }, importance = ActionImportance.COMPACT)
         }
-        rows.forEach { row ->
+        itemsIndexed(
+            exerciseOrder.ordered(rows) { it.id },
+            key = { _, row -> row.id },
+        ) { index, row ->
             val exercise = definitions.find { it.id == row.actualExerciseId }?.let { if(row.exerciseName.isNotBlank())it.copy(canonicalName=row.exerciseName,trackingType=row.trackingType) else it }
             val previousIds = snapshots.filter { it.actualExerciseId == row.actualExerciseId && it.workoutId != workout.id && workouts.any { w -> w.id == it.workoutId && w.status == "FINISHED" && (w.finishedAt ?: 0) < workout.startedAt } }.map { it.id }.toSet()
             val previousRow = sets.filter { it.workoutExerciseId in previousIds }.maxByOrNull { it.loggedAt }?.workoutExerciseId
             val previous = sets.filter { it.workoutExerciseId==previousRow }.sortedBy { it.ordinal }
             val restSeconds=if(row.supersetGroup==null)row.restSeconds else rows.filter { it.supersetGroup==row.supersetGroup }.maxOf { it.restSeconds }
             val expanded = row.id !in collapsedExerciseIds
-            stickyHeader(key = "exercise-heading-${row.id}") {
+            ReorderItem(exerciseOrder, row.id, index, Modifier.fillMaxWidth()) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 WorkoutExerciseHeading(
                     exerciseName = exercise?.canonicalName.orEmpty(),
                     expanded = expanded,
                     restSeconds = restSeconds,
+                    reorderState = exerciseOrder,
+                    exerciseId = row.id,
                     onToggle = {
                         collapsedExerciseIds = if (expanded) {
                             collapsedExerciseIds + row.id
@@ -256,10 +275,9 @@ fun WorkoutEditor(
                         }
                     },
                     onRestRequested = { requestRestTimer(restSeconds) },
+                    onDelete = { pendingDeleteExerciseId = row.id },
                 )
-            }
-            if (expanded) {
-                item(key = row.id) {
+                if (expanded) {
                     WorkoutExerciseCard(
                         vm,
                         row,
@@ -271,6 +289,7 @@ fun WorkoutEditor(
                         autoFocusNextEmptySet = workout.status != "FINISHED" && row.id == rows.firstOrNull()?.id,
                         onInputValidityChanged = { validEntryRows[row.id] = it },
                     )
+                }
                 }
             }
         }
@@ -305,6 +324,8 @@ fun WorkoutEditor(
                 Icon(Icons.Outlined.Delete, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Delete workout")
+            }
+        }
             }
         }
     }
@@ -344,6 +365,39 @@ fun WorkoutEditor(
             },
         )
     }
+    pendingDeleteExerciseId?.let { exerciseId ->
+        val pendingRow = rows.find { it.id == exerciseId }
+        val pendingName = pendingRow?.let { row ->
+            definitions.find { it.id == row.actualExerciseId }?.canonicalName
+                ?: row.exerciseName
+        }.orEmpty()
+        val loggedSetCount = sets.count { it.workoutExerciseId == exerciseId }
+        AlertDialog(
+            onDismissRequest = { pendingDeleteExerciseId = null },
+            title = { Text("Delete $pendingName?") },
+            text = {
+                Text(
+                    if (loggedSetCount > 0) {
+                        "This removes the exercise and its $loggedSetCount logged ${if (loggedSetCount == 1) "set" else "sets"} from this workout. This cannot be undone."
+                    } else {
+                        "This removes the exercise from this workout. This cannot be undone."
+                    },
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteExerciseId = null }) { Text("Cancel") }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.removeWorkoutExercise(exerciseId)
+                        pendingDeleteExerciseId = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete exercise") }
+            },
+        )
+    }
     restTimerMessage?.let { message ->
         AlertDialog(
             onDismissRequest = ::acknowledgeRestTimerMessage,
@@ -364,8 +418,11 @@ private fun WorkoutExerciseHeading(
     exerciseName: String,
     expanded: Boolean,
     restSeconds: Int,
+    reorderState: ReorderState,
+    exerciseId: String,
     onToggle: () -> Unit,
     onRestRequested: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     VibeSurface(
         level = VibeSurfaceLevel.RAISED,
@@ -381,6 +438,7 @@ private fun WorkoutExerciseHeading(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
+            ReorderHandle(reorderState, exerciseId, exerciseName)
             Icon(
                 if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                 contentDescription = null,
@@ -395,6 +453,12 @@ private fun WorkoutExerciseHeading(
                 Icon(
                     Icons.Outlined.Timer,
                     contentDescription = "Start $restSeconds second rest for $exerciseName",
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "Delete $exerciseName from workout",
                 )
             }
         }
@@ -420,7 +484,7 @@ private fun WorkoutExerciseCard(
     var notes by rememberSaveable(row.id) { mutableStateOf(row.notes) }
     var substitute by remember { mutableStateOf(false) }
     var draftLoaded by remember(row.id, row.actualExerciseId) { mutableStateOf(false) }
-    var expanded by rememberSaveable(row.id) { mutableStateOf(false) }
+    var pendingDeleteOrdinal by rememberSaveable(row.id) { mutableStateOf<Int?>(null) }
     var visibleRows by rememberSaveable(row.id) { mutableIntStateOf(0) }
     var initialFocusApplied by rememberSaveable(row.id) { mutableStateOf(false) }
     val entryFocusRequester = remember(row.id) { FocusRequester() }
@@ -601,6 +665,14 @@ private fun WorkoutExerciseCard(
             ),
         )
     }
+    fun deleteSetRow(ordinal: Int) {
+        vm.removeSetRow(row.id, ordinal)
+        val shifted = drafts.values.filter { it.ordinal > ordinal }.sortedBy { it.ordinal }
+        drafts.remove(ordinal)
+        shifted.forEach { drafts.remove(it.ordinal) }
+        shifted.forEach { drafts[it.ordinal - 1] = it.copy(ordinal = it.ordinal - 1) }
+        visibleRows = (visibleRows - 1).coerceAtLeast(1)
+    }
     SideEffect {
         onInputValidityChanged(drafts.values.none { inputError(it) != null })
     }
@@ -667,22 +739,19 @@ private fun WorkoutExerciseCard(
                     .padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (sets.any { it.ordinal == ordinal }) {
+                if (visibleRows > 1) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         IconButton(onClick = {
-                            sets.find { it.ordinal == ordinal }?.let { vm.removeSet(it.id) }
-                            vm.discardEntryDraft(row.id, ordinal)
-                            drafts[ordinal] = newSetEntryDraft(
-                                row.id,
-                                ordinal,
-                                drafts[ordinal - 1],
-                                defaultVariation?.id,
-                                validVariationIds,
-                            )
+                            val hasPersistedSet = sets.any { it.ordinal == ordinal }
+                            if (hasPersistedSet || !entryDraftIsEmpty(draft, inputConfig)) {
+                                pendingDeleteOrdinal = ordinal
+                            } else {
+                                deleteSetRow(ordinal)
+                            }
                         }) {
                             Icon(
-                                Icons.Outlined.Delete,
-                                contentDescription = "Remove set $ordinal for ${exercise?.canonicalName.orEmpty()}",
+                                Icons.Outlined.Close,
+                                contentDescription = "Delete set $ordinal for ${exercise?.canonicalName.orEmpty()}",
                             )
                         }
                     }
@@ -1030,18 +1099,43 @@ private fun WorkoutExerciseCard(
             shape = MaterialTheme.shapes.medium,
         ) { Icon(Icons.Outlined.Add,contentDescription=null) }
         OutlinedTextField(notes, { notes = it; vm.save(row.copy(notes = it)) }, label = { Text("Exercise notes") }, modifier = Modifier.fillMaxWidth())
-        Row {
-            VibeActionButton(
-                label = "More",
-                onClick = { expanded = !expanded },
-                modifier = Modifier.semantics { contentDescription = "More actions for ${exercise?.canonicalName.orEmpty()}" },
-                importance = ActionImportance.COMPACT,
-            )
-        }
-        if (expanded) {
-            VibeActionButton("Substitute exercise", { substitute = true }, importance = ActionImportance.SECONDARY)
-        }
+        VibeActionButton(
+            "Substitute exercise",
+            { substitute = true },
+            modifier = Modifier.semantics {
+                contentDescription = "Substitute ${exercise?.canonicalName.orEmpty()}"
+            },
+            importance = ActionImportance.SECONDARY,
+        )
     } }
+    pendingDeleteOrdinal?.let { ordinal ->
+        val hasPersistedSet = sets.any { it.ordinal == ordinal }
+        AlertDialog(
+            onDismissRequest = { pendingDeleteOrdinal = null },
+            title = { Text("Delete set $ordinal?") },
+            text = {
+                Text(
+                    if (hasPersistedSet) {
+                        "This removes the logged set and its saved details. This cannot be undone."
+                    } else {
+                        "This removes the values entered for this set. This cannot be undone."
+                    },
+                )
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteOrdinal = null }) { Text("Cancel") }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteSetRow(ordinal)
+                        pendingDeleteOrdinal = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                ) { Text("Delete set") }
+            },
+        )
+    }
     if (substitute) ExercisePicker(vm, { substitute = false }) { e ->
         // Keep previously recorded results attached to their actual exercise.
         if (sets.isEmpty()) vm.save(row.copy(actualExerciseId = e.id,exerciseName="",trackingType=""))

@@ -274,6 +274,8 @@ class EndUserControlsTest {
             compose.waitUntil(15_000) {
                 home.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
             }
+            compose.onNodeWithText("Continue").assertDoesNotExist()
+            compose.onNodeWithText("Continue Program").assertDoesNotExist()
 
             val during = map.fetchSemanticsNode().boundsInRoot
             assertEquals(before.left, during.left, 0.5f)

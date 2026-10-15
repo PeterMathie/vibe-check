@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -118,6 +119,7 @@ class ProgrammeUiTest {
                 database.editorDao().programmes().first().single().copy(name = longName),
             )
         }
+
         val fontScale = mutableStateOf(1f)
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent {
@@ -145,6 +147,59 @@ class ProgrammeUiTest {
                 exercise.top > maxOf(title.bottom, edit.bottom, start.bottom),
             )
         }
+    }
+
+    @Test
+    fun activeProgrammeIsHighlightedAndContinuesAtLargeFontScale() {
+        seedProgramme()
+        runBlocking {
+            database.editorDao().workout(
+                WorkoutEntity(
+                    id = "active-workout",
+                    programmeDayId = "day-a",
+                    name = "Alpha",
+                    mode = TrainingMode.STRENGTH.name,
+                    status = "DRAFT",
+                    startedAt = 1L,
+                    finishedAt = null,
+                    notes = "",
+                    bodyweightKg = null,
+                    isDemo = false,
+                ),
+            )
+        }
+        var continued = false
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                VibeCheckTheme {
+                    Box(Modifier.width(320.dp)) {
+                        ProgrammeEditor(
+                            vm = viewModel,
+                            mode = TrainingMode.STRENGTH,
+                            onModeChange = {},
+                            onStart = { _, _ -> },
+                            onContinue = { continued = true },
+                        )
+                    }
+                }
+            }
+        }
+
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Alpha programme").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Alpha programme")
+            .assertIsSelected()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
+                    "Active programme",
+                ),
+            )
+        compose.onNodeWithText("Continue Program").performScrollTo().performClick()
+        assertTrue(continued)
     }
 
     @Test
@@ -443,6 +498,7 @@ class ProgrammeUiTest {
         onModeChange: (TrainingMode) -> Unit = {},
         onSaveCurrentAndStart: (String, String) -> Unit = { _, _ -> },
         onCancelStart: () -> Unit = {},
+        onContinue: () -> Unit = {},
         onStart: (String, Boolean) -> Unit,
     ) {
         val viewModel = lifecycle.own(EditorViewModel(database))
@@ -461,6 +517,7 @@ class ProgrammeUiTest {
                             onStart,
                             onSaveCurrentAndStart,
                             onCancelStart,
+                            onContinue,
                         )
                         host.action?.takeIf { it.visible }?.let {
                             AppFloatingAction(

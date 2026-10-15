@@ -41,6 +41,7 @@ interface EditorDao {
     @Query("SELECT * FROM bands WHERE id=:id") suspend fun bandById(id: String): BandEntity?
     @Upsert suspend fun workout(row: WorkoutEntity)
     @Upsert suspend fun workoutExercise(row: WorkoutExerciseEntity)
+    @Query("DELETE FROM workout_exercises WHERE id = :id") suspend fun deleteWorkoutExercise(id: String)
     @Upsert suspend fun set(row: WorkoutSetEntity)
     @Upsert suspend fun setBands(rows: List<WorkoutSetBandEntity>)
     @Query("DELETE FROM workout_sets WHERE id = :id") suspend fun deleteSet(id: String)

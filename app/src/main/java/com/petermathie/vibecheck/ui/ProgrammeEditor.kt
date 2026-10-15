@@ -25,6 +25,7 @@ import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.components.VibeDivider
 import com.petermathie.vibecheck.ui.components.VibeSurface
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
+import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -48,6 +49,7 @@ fun ProgrammeEditor(
     onStart: (String, Boolean) -> Unit,
     onSaveCurrentAndStart: (String, String) -> Unit = { _, _ -> },
     onCancelStart: () -> Unit = {},
+    onContinue: () -> Unit = {},
 ) {
     val programmes by vm.programmes.collectAsStateWithLifecycle()
     val days by vm.days.collectAsStateWithLifecycle()
@@ -78,6 +80,9 @@ fun ProgrammeEditor(
     val reducedMotion = LocalVibeReducedMotion.current
     val haptics = rememberVibeHaptics()
     val activeWorkout = vm.workouts.collectAsStateWithLifecycle().value.find { it.status == "DRAFT" }
+    val activeProgrammeId = activeWorkout?.programmeDayId?.let { activeDayId ->
+        days.find { it.id == activeDayId }?.programmeId
+    }
     fun requestStart(dayId: String) {
         if (activeWorkout != null && activeWorkout.programmeDayId != dayId) pendingStartDayId = dayId
         else onStart(dayId, false)
@@ -162,6 +167,7 @@ fun ProgrammeEditor(
             }
             itemsIndexed(programmeOrder.ordered(programmeRows) { it.id }, key = { _, row -> row.id }) { index, p ->
                 val expanded = expandedProgrammeId == p.id
+                val active = p.id == activeProgrammeId
                 val previewDays = days.filter { it.programmeId == p.id }.sortedBy { it.position }
                 ReorderItem(
                     state = programmeOrder,
@@ -169,7 +175,16 @@ fun ProgrammeEditor(
                     index = index,
                     modifier = Modifier.fillMaxWidth().animateContentSize(),
                 ) {
-                    VibeSurface(VibeSurfaceLevel.CARD, Modifier.fillMaxWidth()) {
+                    VibeSurface(
+                        level = if (active) VibeSurfaceLevel.SELECTED else VibeSurfaceLevel.CARD,
+                        state = if (active) VibeSurfaceState.SELECTED else VibeSurfaceState.RESTING,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics {
+                                contentDescription = "${p.name} programme"
+                                stateDescription = if (active) "Active programme" else "Inactive programme"
+                            },
+                    ) {
                     Column(Modifier.fillMaxWidth()) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                             if (programmeRows.size > 1) ReorderHandle(programmeOrder, p.id, p.name)
@@ -196,6 +211,19 @@ fun ProgrammeEditor(
                                 enabled = previewDays.isNotEmpty(),
                             ) {
                                 Icon(Icons.Outlined.PlayArrow, contentDescription = "Start ${p.name}")
+                            }
+                        }
+                        if (active) {
+                            FilledTonalButton(
+                                onClick = onContinue,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                Icon(Icons.Outlined.PlayArrow, contentDescription = null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Continue Program")
                             }
                         }
                         AnimatedVisibility(

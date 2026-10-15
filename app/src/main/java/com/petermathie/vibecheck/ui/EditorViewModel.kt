@@ -119,6 +119,26 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             }
         }
     }
+    fun moveWorkoutExercise(id: String, delta: Int) = write {
+        val all = dao.workoutExercises().first()
+        val selected = all.find { it.id == id } ?: return@write
+        val siblings = all.filter { it.workoutId == selected.workoutId }.sortedBy { it.position }
+        moveItem(siblings, id, delta) { it.id }?.let { rows ->
+            db.withTransaction {
+                rows.forEachIndexed { index, row -> dao.workoutExercise(row.copy(position = index)) }
+            }
+        }
+    }
+    fun removeWorkoutExercise(id: String) = write {
+        val all = dao.workoutExercises().first()
+        val selected = all.find { it.id == id } ?: return@write
+        db.withTransaction {
+            dao.deleteWorkoutExercise(id)
+            all.filter { it.workoutId == selected.workoutId && it.id != id }
+                .sortedBy { it.position }
+                .forEachIndexed { index, row -> dao.workoutExercise(row.copy(position = index)) }
+        }
+    }
     fun save(row: TrackerEntity) = write { trackerStore.saveTracker(row) }
     fun deleteTrackerIfEmpty(id: String) = write { trackerStore.deleteTrackerIfEmpty(id) }
     fun createTracker(row: TrackerEntity) = write { trackerStore.createTracker(row) }
@@ -188,7 +208,23 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun removeProgramme(id: String) = write { dao.deleteProgramme(id) }
     fun removeDay(id: String) = write { dao.deleteDay(id) }
     fun removeEntry(id: String) = write { dao.deleteEntry(id) }
-    fun removeSet(id: String) = write { dao.deleteSet(id) }
+    fun removeSetRow(workoutExerciseId: String, ordinal: Int) = write {
+        val laterSets = dao.sets().first()
+            .filter { it.workoutExerciseId == workoutExerciseId && it.ordinal > ordinal }
+            .sortedBy { it.ordinal }
+        val laterDrafts = dao.entryDrafts(workoutExerciseId)
+            .filter { it.ordinal > ordinal }
+            .sortedBy { it.ordinal }
+        db.withTransaction {
+            dao.sets().first()
+                .filter { it.workoutExerciseId == workoutExerciseId && it.ordinal == ordinal }
+                .forEach { dao.deleteSet(it.id) }
+            dao.deleteEntryDraft(workoutExerciseId, ordinal)
+            laterDrafts.forEach { dao.deleteEntryDraft(workoutExerciseId, it.ordinal) }
+            laterSets.forEach { dao.set(it.copy(ordinal = it.ordinal - 1)) }
+            laterDrafts.forEach { dao.entryDraft(it.copy(ordinal = it.ordinal - 1)) }
+        }
+    }
     fun removeWorkout(id: String, onRemoved: () -> Unit = {}) = write(onRemoved) { dao.deleteWorkout(id) }
     fun clearValue(id: String, day: Long) = write { trackerStore.clearValue(id, day) }
     fun removeMeasurement(id: String) = write { dao.deleteMeasurement(id) }

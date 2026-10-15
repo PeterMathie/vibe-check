@@ -7,12 +7,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -494,9 +496,9 @@ class WorkoutLoggingUiTest {
                 compose.onAllNodesWithContentDescription("Workout exercise list").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithContentDescription("Workout exercise list")
-            .performScrollToNode(hasContentDescription("More actions for Bench press"))
-        compose.onNodeWithContentDescription("More actions for Bench press").performClick()
-        compose.onNodeWithText("Substitute exercise").performScrollTo().performClick()
+            .performScrollToNode(hasContentDescription("Substitute Bench press"))
+        compose.onNodeWithText("More").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Substitute Bench press").performClick()
         compose.waitUntil(5_000) { compose.onAllNodesWithText("Choose exercise").fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasText("Name, alias or muscle") and hasSetTextAction()).performTextInput("Dip")
         compose.onNode(hasTextExactly("Dip") and hasClickAction()).performClick()
@@ -676,6 +678,113 @@ class WorkoutLoggingUiTest {
                 database.editorDao().sets().first().any {
                     it.workoutExerciseId == benchId && it.weightKg == 60.0 && it.reps == 5.0 && it.rpe == 8.0
                 }
+            }
+        }
+    }
+
+    @Test
+    fun emptyPlannedSetHasRightSideXAndDeletesWithoutConfirmation() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.onAllNodes(hasScrollAction())[0]
+            .performScrollToNode(hasContentDescription("Delete set 3 for Bench press"))
+        val setBounds = compose.onNodeWithContentDescription("Set 3 for Bench press").fetchSemanticsNode().boundsInRoot
+        val deleteBounds = compose.onNodeWithContentDescription("Delete set 3 for Bench press")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("delete=$deleteBounds set=$setBounds", deleteBounds.center.x > setBounds.center.x)
+
+        compose.onNodeWithContentDescription("Delete set 3 for Bench press").performClick()
+        compose.onNodeWithText("Delete set 3?").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Set 3 for Bench press").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Set 2 for Bench press").assertExists()
+    }
+
+    @Test
+    fun loggedSetDeletionConfirmsAndCompactsPersistedOrdinals() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val benchId = runBlocking {
+            database.editorDao().workoutExercises().first()
+                .first { it.workoutId == workoutId && it.actualExerciseId == "core:bench-press" }.id
+        }
+        runBlocking {
+            database.editorDao().set(emptySet(benchId, 2).copy(id = "logged-two", weightKg = 50.0, reps = 5.0))
+            database.editorDao().set(emptySet(benchId, 3).copy(id = "logged-three", weightKg = 55.0, reps = 4.0))
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.onAllNodes(hasScrollAction())[0]
+            .performScrollToNode(hasContentDescription("Delete set 2 for Bench press"))
+        compose.onNodeWithContentDescription("Delete set 2 for Bench press").performClick()
+        compose.onNodeWithText("Delete set 2?").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").performClick()
+        assertTrue(runBlocking { database.editorDao().sets().first().any { it.id == "logged-two" } })
+
+        compose.onNodeWithContentDescription("Delete set 2 for Bench press").performClick()
+        compose.onNodeWithText("Delete set").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking {
+                database.editorDao().sets().first()
+                    .filter { it.workoutExerciseId == benchId }
+                    .sortedBy { it.ordinal }
+                    .map { it.id to it.ordinal } == listOf("logged-three" to 2)
+            }
+        }
+    }
+
+    @Test
+    fun activeStretchExercisesReorderPersistentlyAndDeleteWithCascadeConfirmation() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = runBlocking {
+            DatabaseSeeder(context, database).seedIfNeeded()
+            TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context)
+                .startWorkout("demo-day-front-splits")
+        }
+        val original = runBlocking {
+            database.editorDao().workoutExercises().first()
+                .filter { it.workoutId == workoutId }
+                .sortedBy { it.position }
+        }
+        assertTrue(original.size >= 2)
+        val first = original.first()
+        val firstName = first.exerciseName
+        val currentViewModel = mutableStateOf(lifecycle.own(EditorViewModel(database)))
+        compose.setContent {
+            VibeCheckTheme { WorkoutEditor(currentViewModel.value, workoutId, {}, {}) }
+        }
+
+        val reorderHandle = compose.onNodeWithContentDescription("Reorder $firstName").performScrollTo()
+        val moveLater = reorderHandle.fetchSemanticsNode()
+            .config[SemanticsActions.CustomActions]
+            .first { it.label == "Move later" }
+        assertTrue(moveLater.action())
+        compose.waitUntil(15_000) {
+            runBlocking {
+                database.editorDao().workoutExercises().first()
+                    .filter { it.workoutId == workoutId }
+                    .sortedBy { it.position }
+                    .first().id != first.id
+            }
+        }
+
+        compose.runOnIdle {
+            currentViewModel.value = lifecycle.own(EditorViewModel(database))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Delete $firstName from workout").performScrollTo().performClick()
+        compose.onNodeWithText("Delete $firstName?").assertIsDisplayed()
+        compose.onNodeWithText("Delete exercise").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking {
+                database.editorDao().workoutExercises().first().none { it.id == first.id } &&
+                    database.editorDao().sets().first().none { it.workoutExerciseId == first.id }
             }
         }
     }
