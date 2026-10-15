@@ -6,7 +6,14 @@ import org.json.JSONObject
 
 /** Only durable profile and presentation choices belong in a backup, never running timers. */
 object BackupPreferences {
-    private val booleans = setOf("lb", "female", "autoRest", "haptic", "reducedMotion")
+    private val booleans = setOf(
+        "lb",
+        "female",
+        "autoRest",
+        "haptic",
+        "reducedMotion",
+        "showExerciseVariations",
+    )
     private val colours = setOf("accent", "background", "surface")
 
     fun attach(json: String, preferences: SharedPreferences): String {

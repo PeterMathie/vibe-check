@@ -9,6 +9,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.petermathie.vibecheck.data.local.ExerciseEntity
+import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
+import com.petermathie.vibecheck.data.local.WorkoutSetEntity
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.workout.formatQuantitative
 import java.time.Instant
 import java.time.ZoneId
 import java.time.LocalDate
@@ -18,6 +23,7 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
     val workouts by vm.workouts.collectAsStateWithLifecycle()
     val exerciseRows by vm.workoutExercises.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
+    val sets by vm.sets.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") };var selected by remember { mutableStateOf<String?>(null) };var date by remember { mutableStateOf(LocalDate.now().toString()) }
     val filteredWorkouts = workouts.filter { workout -> workout.status=="FINISHED"&&(workout.name.contains(query,true)||exerciseRows.any { row -> row.workoutId==workout.id && (row.notes.contains(query,true)||row.exerciseName.contains(query,true)||exercises.any { it.id==row.actualExerciseId && it.canonicalName.contains(query,true) }) }) }
     BackHandler(selected!=null){selected=null}
@@ -38,6 +44,9 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
             VibeCard {
                 Text(w.name, style = MaterialTheme.typography.titleMedium)
                 Text(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(), style = MaterialTheme.typography.bodySmall)
+                workoutTimingSummaries(w.id, exerciseRows, exercises, sets).forEach { summary ->
+                    Text(summary, style = MaterialTheme.typography.bodySmall)
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     VibeActionButton("Edit", { selected=w.id }, modifier = Modifier.weight(1f), importance = ActionImportance.SECONDARY)
                     VibeActionButton("Body map", { onMap(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()) }, modifier = Modifier.weight(1f), importance = ActionImportance.SECONDARY)
@@ -47,3 +56,42 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
         }
     }
 }
+
+internal fun workoutTimingSummaries(
+    workoutId: String,
+    exerciseRows: List<WorkoutExerciseEntity>,
+    exercises: List<ExerciseEntity>,
+    sets: List<WorkoutSetEntity>,
+): List<String> = exerciseRows
+    .filter { it.workoutId == workoutId }
+    .sortedBy { it.position }
+    .mapNotNull { row ->
+        val exercise = exercises.find { it.id == row.actualExerciseId }
+        val name = row.exerciseName.ifBlank { exercise?.canonicalName.orEmpty() }
+        val values = linkedMapOf<String, MutableList<String>>()
+        sets.filter { it.workoutExerciseId == row.id }.sortedBy { it.ordinal }.forEach { set ->
+            val config = ExerciseInputConfig.decode(
+                set.variationInputConfigSnapshot.ifBlank { row.inputConfig },
+                set.variationTrackingTypeSnapshot.ifBlank {
+                    row.trackingType.ifBlank { exercise?.trackingType.orEmpty() }
+                },
+            )
+            fun add(label: String, millis: Long?) {
+                if (millis != null && millis > 0L) {
+                    values.getOrPut(label) { mutableListOf() } +=
+                        "${formatQuantitative(millis / 1000.0)}s"
+                }
+            }
+            add(if (config.timeHeld) "TUT" else "Hold", set.holdMillis)
+            add("Total", set.timeUnderTensionMillis)
+            add("Left hold", set.leftHoldMillis)
+            add("Right hold", set.rightHoldMillis)
+        }
+        if (values.isEmpty()) {
+            null
+        } else {
+            "$name · " + values.entries.joinToString(" · ") { (label, durations) ->
+                "$label ${durations.joinToString(" / ")}"
+            }
+        }
+    }
