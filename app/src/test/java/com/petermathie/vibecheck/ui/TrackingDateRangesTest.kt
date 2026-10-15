@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck.ui
 
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,6 +19,21 @@ class TrackingDateRangesTest {
         assertEquals(LocalDate.of(2025, 12, 9), dates.first())
         assertEquals(today, dates.last())
         assertEquals(dates.sorted(), dates)
+    }
+
+    @Test
+    fun historicalHeatmapUsesExactCalendarMonthsAndReturnsToCurrentRange() {
+        val today = LocalDate.of(2026, 10, 15)
+        val september = earlierHeatmapMonth(today, null)
+        val dates = homeHeatmapDates(today, september)
+
+        assertEquals(YearMonth.of(2026, 9), september)
+        assertEquals(30, dates.size)
+        assertEquals(LocalDate.of(2026, 9, 1), dates.first())
+        assertEquals(LocalDate.of(2026, 9, 30), dates.last())
+        assertEquals(YearMonth.of(2026, 8), earlierHeatmapMonth(today, september))
+        assertNull(laterHeatmapMonth(today, september))
+        assertEquals(35, homeHeatmapDates(today, null).size)
     }
 
     @Test

@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -18,6 +19,7 @@ import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.components.VibeSurface
@@ -26,16 +28,22 @@ import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
@@ -51,6 +59,7 @@ import org.json.JSONArray
 import java.time.Instant
 import java.time.ZoneId
 import android.os.SystemClock
+import kotlin.math.roundToInt
 
 fun emptySet(id: String, ordinal: Int) = WorkoutSetEntity(newId(), id, ordinal, "WORKING", "COMPLETED", null, null, null, null, null, null, null, null, null, null, null, null, null, "", System.currentTimeMillis(), System.currentTimeMillis())
 fun emptyEntryDraft(id: String, ordinal: Int) = WorkoutEntryDraftEntity(id, newId(), ordinal, "", "", false, false, false, "[]", null, "", "", "", "", "", "cm", System.currentTimeMillis())
@@ -93,6 +102,32 @@ internal fun newSetEntryDraft(
     return emptyEntryDraft(workoutExerciseId, ordinal).copy(variationId = variationId)
 }
 
+internal fun setHasMeasurements(set: WorkoutSetEntity): Boolean =
+    listOf(
+        set.weightKg,
+        set.reps,
+        set.holdMillis?.toDouble(),
+        set.leftReps,
+        set.rightReps,
+        set.leftHoldMillis?.toDouble(),
+        set.rightHoldMillis?.toDouble(),
+        set.addedWeightKg,
+        set.assistanceKg,
+        set.rpe,
+        set.romValue,
+        set.timeUnderTensionMillis?.toDouble(),
+    ).any { it != null } || decodeTimeMeasurementsMillis(set.timeMeasurementsMillis).isNotEmpty()
+
+internal fun canChangeExerciseVariation(
+    current: ExerciseInputConfig,
+    replacement: ExerciseInputConfig,
+    drafts: Collection<WorkoutEntryDraftEntity>,
+    sets: Collection<WorkoutSetEntity>,
+): Boolean =
+    current == replacement ||
+        sets.none(::setHasMeasurements) &&
+        drafts.all { entryDraftIsEmpty(it, current) }
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WorkoutEditor(
@@ -111,21 +146,10 @@ fun WorkoutEditor(
     val measurements by vm.measurements.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences("settings", 0) }
-    var showExerciseVariations by remember {
-        mutableStateOf(preferences.getBoolean("showExerciseVariations", false))
-    }
-    DisposableEffect(preferences) {
-        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { shared, key ->
-            if (key == "showExerciseVariations") {
-                showExerciseVariations = shared.getBoolean(key, false)
-            }
-        }
-        preferences.registerOnSharedPreferenceChangeListener(listener)
-        onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
-    }
     val haptics = rememberVibeHaptics()
     var restRemaining by remember { mutableStateOf(0L) }
     var restTimerMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var restTimerDetails by rememberSaveable { mutableStateOf(false) }
     var pendingRestSeconds by rememberSaveable { mutableStateOf<Int?>(null) }
     fun startRestTimer(seconds: Int) {
         when (val result = RestTimer.start(context, seconds)) {
@@ -186,7 +210,6 @@ fun WorkoutEditor(
     }
     val workout = workouts.find { it.id == workoutId }
     var add by remember { mutableStateOf(false) }
-    var bodyweight by remember { mutableStateOf(false) }
     var editDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var pendingDeleteExerciseId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -194,7 +217,7 @@ fun WorkoutEditor(
         RegisterAppFabAction(
             owner = Destination.ACTIVE_WORKOUT,
             destination = AppFabDestination.AddWorkoutExercise,
-            visible = !add && !bodyweight && !editDate && !confirmDelete,
+            visible = !add && !editDate && !confirmDelete,
         ) {
             add = true
         }
@@ -221,6 +244,7 @@ fun WorkoutEditor(
     var collapsedExerciseIds by rememberSaveable(workout.id) { mutableStateOf(emptyList<String>()) }
     val listState = rememberLazyListState()
     val reorderContext = rememberReorderScrollContext(listState)
+    Box(Modifier.fillMaxSize()) {
     ReorderOverlayHost(Modifier.fillMaxSize()) {
         CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
     LazyColumn(
@@ -240,13 +264,7 @@ fun WorkoutEditor(
     ) {
         item {
             Text(workout.name, style = MaterialTheme.typography.headlineSmall)
-            if(restRemaining>0) VibeActionButton("Rest: ${restRemaining/60}:${(restRemaining%60).toString().padStart(2,'0')} · cancel", { RestTimer.cancel(context) }, importance = ActionImportance.COMPACT)
             if (logged.isNotEmpty()) Text("Logged duration: ${((logged.maxOf { it.loggedAt } - logged.minOf { it.loggedAt }) / 60000)} min")
-            VibeActionButton(
-                "Bodyweight: ${workout.bodyweightKg?.let(::formatBodyweight) ?: "—"} kg",
-                { bodyweight = true },
-                importance = ActionImportance.COMPACT,
-            )
             if(workout.status=="FINISHED") VibeActionButton("Change workout date", { editDate=true }, importance = ActionImportance.COMPACT)
         }
         itemsIndexed(
@@ -284,8 +302,6 @@ fun WorkoutEditor(
                         exercise,
                         sets.filter { it.workoutExerciseId == row.id },
                         previous,
-                        workout.bodyweightKg,
-                        showExerciseVariations,
                         autoFocusNextEmptySet = workout.status != "FINISHED" && row.id == rows.firstOrNull()?.id,
                         onInputValidityChanged = { validEntryRows[row.id] = it },
                     )
@@ -329,15 +345,46 @@ fun WorkoutEditor(
             }
         }
     }
-    if (bodyweight) {
-        QuantitativeValueDialog(
-            title = "Bodyweight in kg",
-            initial = workout.bodyweightKg?.let(::formatQuantitative).orEmpty(),
-            onDismiss = { bodyweight = false },
-        ) { value ->
-            vm.save(workout.copy(bodyweightKg = value))
-            bodyweight = false
+        if (restRemaining > 0) {
+            FloatingActionButton(
+                onClick = { restTimerDetails = true },
+                modifier = Modifier
+                    .align(androidx.compose.ui.Alignment.BottomStart)
+                    .padding(16.dp)
+                    .imePadding()
+                    .size(56.dp)
+                    .semantics {
+                        contentDescription =
+                            "Rest timer ${restRemaining / 60}:${(restRemaining % 60).toString().padStart(2, '0')}"
+                    },
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(
+                    "${restRemaining / 60}:${(restRemaining % 60).toString().padStart(2, '0')}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
         }
+    }
+    if (restTimerDetails && restRemaining > 0) {
+        AlertDialog(
+            onDismissRequest = { restTimerDetails = false },
+            title = { Text("Rest timer") },
+            text = {
+                Text("${restRemaining / 60}:${(restRemaining % 60).toString().padStart(2, '0')} remaining")
+            },
+            dismissButton = {
+                TextButton(onClick = { restTimerDetails = false }) { Text("Close") }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        RestTimer.cancel(context)
+                        restTimerDetails = false
+                    },
+                ) { Text("Cancel timer") }
+            },
+        )
     }
     if(editDate)NameDialog("Workout date (YYYY-MM-DD)",Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),{editDate=false}) { value ->
         runCatching { java.time.LocalDate.parse(value) }.getOrNull()?.let { date ->
@@ -473,8 +520,6 @@ private fun WorkoutExerciseCard(
     exercise: ExerciseEntity?,
     sets: List<WorkoutSetEntity>,
     previous: List<WorkoutSetEntity>,
-    bodyweightKg: Double?,
-    showExerciseVariations: Boolean,
     autoFocusNextEmptySet: Boolean,
     onInputValidityChanged: (Boolean) -> Unit,
 ) {
@@ -482,7 +527,6 @@ private fun WorkoutExerciseCard(
     val variations by vm.variations.collectAsStateWithLifecycle()
     val availableBands by vm.bands.collectAsStateWithLifecycle()
     var notes by rememberSaveable(row.id) { mutableStateOf(row.notes) }
-    var substitute by remember { mutableStateOf(false) }
     var draftLoaded by remember(row.id, row.actualExerciseId) { mutableStateOf(false) }
     var pendingDeleteOrdinal by rememberSaveable(row.id) { mutableStateOf<Int?>(null) }
     var visibleRows by rememberSaveable(row.id) { mutableIntStateOf(0) }
@@ -496,6 +540,11 @@ private fun WorkoutExerciseCard(
     val defaultVariation = exerciseVariations.firstOrNull()
     val variationIds = exerciseVariations.map { it.id }
     val validVariationIds = variationIds.toSet()
+    var selectedVariationId by rememberSaveable(row.id, row.actualExerciseId) {
+        mutableStateOf<String?>(null)
+    }
+    var variationMenu by remember { mutableStateOf(false) }
+    var rejectedVariationName by rememberSaveable(row.id) { mutableStateOf<String?>(null) }
     fun variationFor(id: String?) = exerciseVariations.find { it.id == id }
     fun configFor(id: String?, ordinal: Int? = null): ExerciseInputConfig {
         val snapshot = ordinal?.let { value -> sets.find { it.ordinal == value && it.variationId == id } }
@@ -515,6 +564,9 @@ private fun WorkoutExerciseCard(
         ?: 3
     LaunchedEffect(row.id, row.actualExerciseId, variationIds) {
         val recovered = vm.entryDrafts(row.id)
+        selectedVariationId = recovered.firstNotNullOfOrNull { it.variationId?.takeIf(validVariationIds::contains) }
+            ?: sets.firstNotNullOfOrNull { it.variationId?.takeIf(validVariationIds::contains) }
+            ?: defaultVariation?.id
         sets.forEach { set ->
             val config = configFor(set.variationId, set.ordinal)
             drafts[set.ordinal] = draftFromSet(
@@ -527,14 +579,14 @@ private fun WorkoutExerciseCard(
         recovered.sortedBy { it.ordinal }.forEach { draft ->
             val variationId = draft.variationId?.takeIf { it in validVariationIds }
                 ?: drafts[draft.ordinal - 1]?.variationId
-                ?: defaultVariation?.id
+                ?: selectedVariationId
             drafts[draft.ordinal] = draft.copy(detailsOpen = false, variationId = variationId)
         }
         drafts.keys.sorted().forEach { ordinal ->
             val draft = drafts[ordinal] ?: return@forEach
             val variationId = draft.variationId?.takeIf { it in validVariationIds }
                 ?: drafts[ordinal - 1]?.variationId?.takeIf { it in validVariationIds }
-                ?: defaultVariation?.id
+                ?: selectedVariationId
             if (variationId != draft.variationId) {
                 drafts[ordinal] = draft.copy(variationId = variationId)
             }
@@ -546,7 +598,7 @@ private fun WorkoutExerciseCard(
         workoutExerciseId = row.id,
         ordinal = ordinal,
         previous = drafts[ordinal - 1],
-        defaultVariationId = defaultVariation?.id,
+        defaultVariationId = selectedVariationId,
         validVariationIds = validVariationIds,
     )
         .also { drafts[ordinal] = it }
@@ -665,6 +717,56 @@ private fun WorkoutExerciseCard(
             ),
         )
     }
+    fun deleteRepeatedTime(ordinal: Int, measurementIndex: Int) {
+        val draft = draftAt(ordinal)
+        val updated = repeatedTimeInputs(draft).toMutableList().also {
+            it.removeAt(measurementIndex)
+        }
+        updateDraft(
+            draft.copy(
+                timeMeasurements = encodeTimeMeasurementInputs(updated),
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+    fun applyVariation(variationId: String) {
+        val replacementConfig = configFor(variationId)
+        val everyRowAlreadyUsesVariation =
+            drafts.values.all { it.variationId == variationId } &&
+                sets.all { it.variationId == variationId }
+        if (everyRowAlreadyUsesVariation) {
+            selectedVariationId = variationId
+            return
+        }
+        val incompatibleDraft = drafts.values.any { draft ->
+            val currentConfig = configFor(draft.variationId, draft.ordinal)
+            currentConfig != replacementConfig && !entryDraftIsEmpty(draft, currentConfig)
+        }
+        val incompatibleSet = sets.any { set ->
+            configFor(set.variationId, set.ordinal) != replacementConfig && setHasMeasurements(set)
+        }
+        if (incompatibleDraft || incompatibleSet) {
+            rejectedVariationName = variationFor(variationId)?.name.orEmpty()
+            return
+        }
+        selectedVariationId = variationId
+        drafts.keys.toList().forEach { ordinal ->
+            val updated = draftAt(ordinal).copy(
+                variationId = variationId,
+                updatedAt = System.currentTimeMillis(),
+            )
+            drafts[ordinal] = updated
+            val persisted = sets.find { it.ordinal == ordinal }
+            if (persisted == null) {
+                vm.saveEntryDraft(updated)
+            } else {
+                vm.saveSet(
+                    persisted.copy(variationId = variationId, updatedAt = System.currentTimeMillis()),
+                    assignments.filter { it.setId == persisted.id }.sortedBy { it.ordinal }.map { it.bandId },
+                )
+            }
+        }
+    }
     fun deleteSetRow(ordinal: Int) {
         vm.removeSetRow(row.id, ordinal)
         val shifted = drafts.values.filter { it.ordinal > ordinal }.sortedBy { it.ordinal }
@@ -692,6 +794,36 @@ private fun WorkoutExerciseCard(
         }
     }
     VibeSurface(VibeSurfaceLevel.CARD, Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (exerciseVariations.isNotEmpty()) {
+            Box {
+                TextButton(
+                    onClick = { variationMenu = true },
+                    modifier = Modifier.semantics {
+                        contentDescription =
+                            "Change variation for ${exercise?.canonicalName.orEmpty()}: " +
+                                (variationFor(selectedVariationId)?.name ?: exercise?.canonicalName.orEmpty())
+                    },
+                ) {
+                    Icon(Icons.Outlined.Settings, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text(variationFor(selectedVariationId)?.name ?: exercise?.canonicalName.orEmpty())
+                }
+                DropdownMenu(
+                    expanded = variationMenu,
+                    onDismissRequest = { variationMenu = false },
+                ) {
+                    exerciseVariations.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option.name) },
+                            onClick = {
+                                applyVariation(option.id)
+                                variationMenu = false
+                            },
+                        )
+                    }
+                }
+            }
+        }
         if(row.targets.isNotBlank())Text(row.targets,style=MaterialTheme.typography.bodySmall)
         if(previous.isNotEmpty()) Text("Previous: ${previous.joinToString(" · ") { setDescription(it) }}", style = MaterialTheme.typography.bodySmall)
         row.supersetGroup?.let { Text("Circuit: $it · rest after round", style = MaterialTheme.typography.labelSmall) }
@@ -756,59 +888,6 @@ private fun WorkoutExerciseCard(
                         }
                     }
                 }
-                val selectedNonDefaultVariation = draft.variationId != null &&
-                    draft.variationId != defaultVariation?.id
-                if (exerciseVariations.isNotEmpty() && (showExerciseVariations || selectedNonDefaultVariation)) {
-                    var variationMenu by remember(ordinal) { mutableStateOf(false) }
-                    val variationName = sets.find { it.ordinal == ordinal }?.variationNameSnapshot?.takeIf { it.isNotBlank() }
-                        ?: variationFor(draft.variationId)?.name
-                        ?: exercise?.canonicalName.orEmpty()
-                    ExposedDropdownMenuBox(
-                        expanded = variationMenu,
-                        onExpandedChange = { variationMenu = it },
-                    ) {
-                        OutlinedTextField(
-                            value = variationName,
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(variationMenu) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                                .semantics {
-                                    contentDescription =
-                                        "Variation for ${exercise?.canonicalName.orEmpty()} set $ordinal: $variationName"
-                                },
-                        )
-                        ExposedDropdownMenu(expanded = variationMenu, onDismissRequest = { variationMenu = false }) {
-                            exerciseVariations.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text(option.name) },
-                                    onClick = {
-                                        updateDraft(
-                                            draft.copy(
-                                                variationId = option.id,
-                                                performance = "",
-                                                timeHeld = "",
-                                                timeUnderTension = "",
-                                                addedWeight = "",
-                                                bandIds = "[]",
-                                                updatedAt = System.currentTimeMillis(),
-                                            ),
-                                        )
-                                        variationMenu = false
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-                if (inputConfig.bodyweight) {
-                    Text(
-                        "Bodyweight: ${bodyweightKg?.let { "${formatWorkoutWeight(if (preferredWeightUnit == "lb") it * 2.2046226218 else it)} $preferredWeightUnit" } ?: "not recorded for workout"}",
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -816,6 +895,24 @@ private fun WorkoutExerciseCard(
                     itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     maxItemsInEachRow = 3,
                 ) {
+                    if (inputConfig.addedWeight) QuantitativeTextField(
+                        value = draft.addedWeight,
+                        onValueChange = {
+                            updateDraft(draft.copy(addedWeight = it, updatedAt = System.currentTimeMillis()))
+                        },
+                        label = "Weight",
+                        description = "Weight for ${exercise?.canonicalName.orEmpty()} set $ordinal, added $preferredWeightUnit",
+                        modifier = Modifier
+                            .width(96.dp)
+                            .weight(1f)
+                            .then(
+                                if (ordinal == nextEmptyOrdinal && focusAdded) {
+                                    Modifier.focusRequester(entryFocusRequester)
+                                } else {
+                                    Modifier
+                                },
+                            ),
+                    )
                     if (weighted) QuantitativeTextField(
                         value = resistance,
                         onValueChange = { updatePerformance(ordinal, it, result) },
@@ -932,10 +1029,10 @@ private fun WorkoutExerciseCard(
                 if (inputConfig.repeatedTimeMeasurements) {
                     val measurements = repeatedTimeInputs(draft)
                     measurements.forEachIndexed { measurementIndex, value ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                        ) {
+                        val deleteMeasurement = {
+                            deleteRepeatedTime(ordinal, measurementIndex)
+                        }
+                        val rowContent: @Composable () -> Unit = {
                             QuantitativeTextField(
                                 value = value,
                                 onValueChange = { updateRepeatedTime(ordinal, measurementIndex, it) },
@@ -955,26 +1052,24 @@ private fun WorkoutExerciseCard(
                                         },
                                     ),
                             )
-                            if (measurements.size > 1) {
-                                IconButton(
-                                    onClick = {
-                                        val updated = measurements.toMutableList().also {
-                                            it.removeAt(measurementIndex)
-                                        }
-                                        updateDraft(
-                                            draft.copy(
-                                                timeMeasurements = encodeTimeMeasurementInputs(updated),
-                                                updatedAt = System.currentTimeMillis(),
-                                            ),
-                                        )
-                                    },
-                                ) {
-                                    Icon(
-                                        Icons.Outlined.Delete,
-                                        contentDescription = "Remove handstand time ${measurementIndex + 1} from set $ordinal",
+                        }
+                        if (measurements.size > 1) {
+                            SwipeRightToDeleteMeasurement(
+                                onDelete = deleteMeasurement,
+                                modifier = Modifier.semantics {
+                                    contentDescription =
+                                        "Freestanding handstand time ${measurementIndex + 1} for set $ordinal, swipe right to delete"
+                                    customActions = listOf(
+                                        CustomAccessibilityAction("Delete time measurement") {
+                                            deleteMeasurement()
+                                            true
+                                        },
                                     )
-                                }
-                            }
+                                },
+                                content = rowContent,
+                            )
+                        } else {
+                            rowContent()
                         }
                     }
                     val total = measurements.mapNotNull { quantitativeInput(it).value }.sum()
@@ -996,32 +1091,6 @@ private fun WorkoutExerciseCard(
                     ) {
                         Icon(Icons.Outlined.Add, contentDescription = null)
                         Text("Add time measurement")
-                    }
-                }
-                if (inputConfig.addedWeight) QuantitativeTextField(
-                    value = draft.addedWeight,
-                    onValueChange = { updateDraft(draft.copy(addedWeight = it, updatedAt = System.currentTimeMillis())) },
-                    label = "Added weight ($preferredWeightUnit)",
-                    description = "Added weight for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(
-                            if (ordinal == nextEmptyOrdinal && focusAdded) {
-                                Modifier.focusRequester(entryFocusRequester)
-                            } else {
-                                Modifier
-                            },
-                        ),
-                )
-                if (inputConfig.bodyweight && inputConfig.addedWeight) {
-                    val added = quantitativeInput(draft.addedWeight).value
-                    if (bodyweightKg != null && added != null) {
-                        val addedKg = if (preferredWeightUnit == "lb") added / 2.2046226218 else added
-                        val totalKg = bodyweightKg + addedKg
-                        Text(
-                            "Total load: ${formatWorkoutWeight(if (preferredWeightUnit == "lb") totalKg * 2.2046226218 else totalKg)} $preferredWeightUnit",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
                     }
                 }
                 inputError(draft)?.let {
@@ -1087,7 +1156,7 @@ private fun WorkoutExerciseCard(
                         row.id,
                         ordinal,
                         drafts[ordinal - 1],
-                        defaultVariation?.id,
+                        selectedVariationId,
                         validVariationIds,
                     ),
                 )
@@ -1099,14 +1168,6 @@ private fun WorkoutExerciseCard(
             shape = MaterialTheme.shapes.medium,
         ) { Icon(Icons.Outlined.Add,contentDescription=null) }
         OutlinedTextField(notes, { notes = it; vm.save(row.copy(notes = it)) }, label = { Text("Exercise notes") }, modifier = Modifier.fillMaxWidth())
-        VibeActionButton(
-            "Substitute exercise",
-            { substitute = true },
-            modifier = Modifier.semantics {
-                contentDescription = "Substitute ${exercise?.canonicalName.orEmpty()}"
-            },
-            importance = ActionImportance.SECONDARY,
-        )
     } }
     pendingDeleteOrdinal?.let { ordinal ->
         val hasPersistedSet = sets.any { it.ordinal == ordinal }
@@ -1136,11 +1197,19 @@ private fun WorkoutExerciseCard(
             },
         )
     }
-    if (substitute) ExercisePicker(vm, { substitute = false }) { e ->
-        // Keep previously recorded results attached to their actual exercise.
-        if (sets.isEmpty()) vm.save(row.copy(actualExerciseId = e.id,exerciseName="",trackingType=""))
-        else vm.save(row.copy(id = newId(), actualExerciseId = e.id, position = row.position + 1, notes = "",exerciseName="",trackingType=""))
-        substitute = false
+    rejectedVariationName?.let { name ->
+        AlertDialog(
+            onDismissRequest = { rejectedVariationName = null },
+            title = { Text("Keep the current variation") },
+            text = {
+                Text(
+                    "$name uses different measurements. Remove the entered set values before changing variation; nothing has been cleared.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { rejectedVariationName = null }) { Text("OK") }
+            },
+        )
     }
     stopwatchOrdinal?.let { ordinal ->
         StopwatchDialog(
@@ -1157,6 +1226,55 @@ private fun WorkoutExerciseCard(
                 stopwatchOrdinal = null
             },
         )
+    }
+}
+
+@Composable
+private fun SwipeRightToDeleteMeasurement(
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var rowWidth by remember { mutableIntStateOf(0) }
+    Box(
+        modifier
+            .fillMaxWidth()
+            .clipToBounds()
+            .onSizeChanged { rowWidth = it.width },
+    ) {
+        if (dragOffset > 0f) {
+            Text(
+                "Delete",
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.align(androidx.compose.ui.Alignment.CenterStart).padding(horizontal = 16.dp),
+            )
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(dragOffset.roundToInt(), 0) }
+                .pointerInput(onDelete, rowWidth) {
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, amount ->
+                            if (amount > 0f || dragOffset > 0f) {
+                                change.consume()
+                                dragOffset = (dragOffset + amount).coerceIn(0f, rowWidth.toFloat())
+                            }
+                        },
+                        onDragCancel = { dragOffset = 0f },
+                        onDragEnd = {
+                            if (rowWidth > 0 && dragOffset >= rowWidth * 0.6f) {
+                                onDelete()
+                            } else {
+                                dragOffset = 0f
+                            }
+                        },
+                    )
+                },
+        ) {
+            content()
+        }
     }
 }
 

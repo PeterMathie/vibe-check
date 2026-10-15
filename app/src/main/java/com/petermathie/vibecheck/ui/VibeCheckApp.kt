@@ -48,6 +48,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FabPosition
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -633,15 +634,6 @@ internal fun HomeScreen(
                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Freshness date" },
             )
         }
-        state.activeWorkout?.let { workout ->
-            VibeCard {
-                Column(Modifier.fillMaxWidth()) {
-                    Text("ACTIVE WORKOUT", color = palette.accent, style = MaterialTheme.typography.labelLarge)
-                    Text(workout.name, style = MaterialTheme.typography.titleLarge)
-                    Text("${workout.exercises.sumOf { it.sets.size }} sets autosaved", color = palette.textSecondary)
-                }
-            }
-        }
             val trackerContent: @Composable ColumnScope.() -> Unit = {
                 if (!compactHomeChrome) {
                     Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelLarge)
@@ -651,8 +643,8 @@ internal fun HomeScreen(
                     selectedDate = selectedRecencyDate,
                     today = today,
                     compact = compactHomeChrome,
-                    expandRows = compactHomeChrome && state.activeWorkout == null,
-                    modifier = if (compactHomeChrome && state.activeWorkout == null) {
+                    expandRows = compactHomeChrome,
+                    modifier = if (compactHomeChrome) {
                         Modifier.weight(1f, fill = true)
                     } else {
                         Modifier
@@ -673,13 +665,13 @@ internal fun HomeScreen(
                     level = VibeSurfaceLevel.CARD,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (state.activeWorkout == null) Modifier.weight(1f, fill = true) else Modifier)
+                        .weight(1f, fill = true)
                         .semantics { contentDescription = "Work tracker card" },
                 ) {
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .then(if (state.activeWorkout == null) Modifier.fillMaxHeight() else Modifier)
+                            .fillMaxHeight()
                             .padding(horizontal = VibeSpacing.small, vertical = VibeSpacing.xSmall),
                         verticalArrangement = Arrangement.spacedBy(VibeSpacing.xSmall),
                         content = trackerContent,
@@ -687,6 +679,19 @@ internal fun HomeScreen(
                 }
             } else {
                 VibeCard(content = trackerContent)
+            }
+        }
+        if (state.activeWorkout != null) {
+            FloatingActionButton(
+                onClick = onContinue,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+                    .size(56.dp)
+                    .semantics { contentDescription = "Continue active workout" },
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Icon(Icons.Outlined.PlayArrow, contentDescription = null)
             }
         }
     }
@@ -721,7 +726,9 @@ private fun MonthlyActivityHeatmap(
 ) {
     val palette = LocalVibePalette.current
     val heatmapColors = palette.habitHeatmapColors()
-    val dates = homeHeatmapDates(today)
+    var historicalMonth by rememberSaveable { mutableStateOf<String?>(null) }
+    val displayedMonth = historicalMonth?.let(YearMonth::parse)
+    val dates = homeHeatmapDates(today, displayedMonth)
     val counts = days.associate { it.epochDay to it.activityCount }
     Column(
         modifier.fillMaxWidth(),
@@ -730,35 +737,67 @@ private fun MonthlyActivityHeatmap(
             if (compact) {
                 Text("WORK TRACKER", color = palette.accent, style = MaterialTheme.typography.labelSmall)
             }
-            Text(
-                "${dates.first().format(DateTimeFormatter.ofPattern("d MMM"))} – ${dates.last().format(DateTimeFormatter.ofPattern("d MMM"))}",
-                style = MaterialTheme.typography.labelSmall,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
+            Row(
+                Modifier.fillMaxWidth().semantics {
+                    contentDescription = if (displayedMonth == null) {
+                        "Current activity range, today and previous 34 days"
+                    } else {
+                        "Activity range, ${displayedMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy"))}"
+                    }
+                },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                VibeActionButton(
+                    "Earlier",
+                    { historicalMonth = earlierHeatmapMonth(today, displayedMonth).toString() },
+                    importance = ActionImportance.COMPACT,
+                )
+                Text(
+                    if (displayedMonth == null) {
+                        "${dates.first().format(DateTimeFormatter.ofPattern("d MMM"))} – ${dates.last().format(DateTimeFormatter.ofPattern("d MMM"))}"
+                    } else {
+                        displayedMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+                    },
+                    Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                VibeActionButton(
+                    "Later",
+                    {
+                        historicalMonth = displayedMonth?.let { laterHeatmapMonth(today, it)?.toString() }
+                    },
+                    importance = ActionImportance.COMPACT,
+                    enabled = displayedMonth != null,
+                )
+            }
         }
-        val outerCount = if (compact) 7 else 5
-        val innerCount = if (compact) 5 else 7
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier)
-                .semantics { contentDescription = "Activity heatmap grid, 5 weeks, 35 days" },
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .semantics {
+                    contentDescription = if (displayedMonth == null) {
+                        "Activity heatmap grid, 5 weeks, 35 days"
+                    } else {
+                        "Activity heatmap grid, ${dates.size} days, no future dates"
+                    }
+                },
+            verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            repeat(outerCount) { outer ->
-                Column(
+            dates.chunked(7).forEach { week ->
+                BoxWithConstraints(
                     Modifier
-                        .weight(1f)
-                        .then(if (expandRows) Modifier.fillMaxHeight() else Modifier),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                        .fillMaxWidth()
+                        .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier),
                 ) {
-                    repeat(innerCount) { inner ->
-                        val week = if (compact) inner else outer
-                        val weekday = if (compact) outer else inner
-                        val date = dates[week * 7 + weekday]
+                    val cellWidth = (maxWidth - 24.dp) / 7
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        week.forEach { date ->
                         val cellModifier = Modifier
-                            .fillMaxWidth()
-                            .then(if (expandRows) Modifier.weight(1f, fill = true) else Modifier.height(14.dp))
+                            .width(cellWidth)
+                            .then(if (expandRows) Modifier.fillMaxHeight() else Modifier.height(14.dp))
                         val count = counts[date.toEpochDay()] ?: 0
                         val color = heatmapColors.forLevel(count.coerceAtMost(3))
                         val outlineColor = when {
@@ -780,6 +819,7 @@ private fun MonthlyActivityHeatmap(
                                 )
                                 .clickable { onDayClick(date) },
                         )
+                        }
                     }
                 }
             }
@@ -798,9 +838,10 @@ fun ActivityHeatmap(
     val palette = LocalVibePalette.current
     val heatmapColors = palette.habitHeatmapColors(activityColor)
     val counts = days.associate { it.epochDay to it.activityCount }
-    var offset by rememberSaveable { mutableStateOf(0L) }
-    val today = LocalDate.now().toEpochDay() + offset
-    val start = today - 34
+    val currentDate = LocalDate.now()
+    var historicalMonth by rememberSaveable { mutableStateOf<String?>(null) }
+    val displayedMonth = historicalMonth?.let(YearMonth::parse)
+    val dates = homeHeatmapDates(currentDate, displayedMonth)
     val cellSpacing = if (compact) 4.dp else 6.dp
     val cellHeight = if (compact) 14.dp else 22.dp
     Row(
@@ -808,25 +849,40 @@ fun ActivityHeatmap(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        VibeActionButton("Earlier", { offset -= 35 }, importance = ActionImportance.COMPACT)
+        VibeActionButton(
+            "Earlier",
+            { historicalMonth = earlierHeatmapMonth(currentDate, displayedMonth).toString() },
+            importance = ActionImportance.COMPACT,
+        )
         Text(
-            "${LocalDate.ofEpochDay(start).format(DateTimeFormatter.ofPattern("d MMM"))} – ${LocalDate.ofEpochDay(today).format(DateTimeFormatter.ofPattern("d MMM"))}",
+            if (displayedMonth == null) {
+                "${dates.first().format(DateTimeFormatter.ofPattern("d MMM"))} – ${dates.last().format(DateTimeFormatter.ofPattern("d MMM"))}"
+            } else {
+                displayedMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+            },
             Modifier.weight(1f),
             style = MaterialTheme.typography.labelSmall,
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
-        VibeActionButton("Later", { offset = (offset + 35).coerceAtMost(0) }, importance = ActionImportance.COMPACT, enabled = offset < 0)
+        VibeActionButton(
+            "Later",
+            { historicalMonth = displayedMonth?.let { laterHeatmapMonth(currentDate, it)?.toString() } },
+            importance = ActionImportance.COMPACT,
+            enabled = displayedMonth != null,
+        )
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(cellSpacing)) {
-        repeat(5) { week ->
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(cellSpacing)) {
-                repeat(7) { day ->
-                    val epochDay = start + week * 7 + day
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(cellSpacing)) {
+        dates.chunked(7).forEach { week ->
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val cellWidth = (maxWidth - cellSpacing * 6) / 7
+                Row(horizontalArrangement = Arrangement.spacedBy(cellSpacing)) {
+                    week.forEach { date ->
+                    val epochDay = date.toEpochDay()
                     val count = counts[epochDay] ?: 0
                     val color = heatmapColors.forLevel(count.coerceAtMost(3))
-                    val isToday = epochDay == LocalDate.now().toEpochDay()
+                    val isToday = date == currentDate
                     Box(
-                        Modifier.fillMaxWidth().height(cellHeight)
+                        Modifier.width(cellWidth).height(cellHeight)
                             .semantics { contentDescription = "${LocalDate.ofEpochDay(epochDay)}: $count $itemLabel" }
                             .background(color, RoundedCornerShape(VibeShapes.tooltip))
                             .border(
@@ -836,6 +892,7 @@ fun ActivityHeatmap(
                             )
                             .clickable { onDayClick(epochDay) },
                     )
+                    }
                 }
             }
         }

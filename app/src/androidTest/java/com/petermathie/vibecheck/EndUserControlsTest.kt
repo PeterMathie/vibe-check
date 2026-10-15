@@ -225,19 +225,21 @@ class EndUserControlsTest {
     }
 
     @Test
-    fun activeWorkoutAppearsAfterInvariantFreshnessAndBeforeWorkTracker() {
+    fun activeWorkoutUsesOverlayPlayWithoutReflowingHomeCards() {
         var activeWorkout by mutableStateOf<ActiveWorkout?>(null)
+        var continued = false
         compose.setContent {
             VibeCheckTheme {
                 Box(Modifier.width(411.dp).height(780.dp)) {
                     HomeScreen(
                         state = MainUiState(activeWorkout = activeWorkout),
                         onDayClick = {},
-                        onContinue = {},
+                        onContinue = { continued = true },
                         onRecencyDayChange = {},
                         onModeChange = {},
                     )
                 }
+
             }
         }
         val map = compose.onNodeWithContentDescription("male front freshness map")
@@ -255,48 +257,76 @@ class EndUserControlsTest {
             viewport.bottom - trackerBefore.bottom in 0f..12f,
         )
 
-        repeat(10) { iteration ->
-            compose.runOnIdle {
-                activeWorkout = ActiveWorkout(
-                    id = "active-$iteration",
-                    name = "Strength session",
-                    mode = TrainingMode.STRENGTH,
-                    startedAt = iteration.toLong(),
-                    notes = "",
-                    exercises = emptyList(),
-                )
-            }
-            compose.waitUntil(15_000) {
-                home.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
-            }
-            compose.onNodeWithText("Continue").assertDoesNotExist()
-            compose.onNodeWithText("Continue Program").assertDoesNotExist()
-
-            val during = map.fetchSemanticsNode().boundsInRoot
-            assertEquals(before.left, during.left, 0.5f)
-            assertEquals(before.top, during.top, 0.5f)
-            assertEquals(before.right, during.right, 0.5f)
-            assertEquals(before.bottom, during.bottom, 0.5f)
-            val active = compose.onNodeWithText("ACTIVE WORKOUT").fetchSemanticsNode().boundsInRoot
-            val tracker = compose.onNodeWithText("WORK TRACKER").fetchSemanticsNode().boundsInRoot
-            assertTrue(active.top > during.bottom)
-            assertTrue(active.bottom < tracker.top)
-
-            home.performTouchInput { swipeUp() }
-            compose.runOnIdle { activeWorkout = null }
-            compose.waitUntil(15_000) {
-                val range = home.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
-                range.value() == 0f && range.maxValue() <= 64f
-            }
-            val after = map.fetchSemanticsNode().boundsInRoot
-            assertEquals(before.left, after.left, 0.5f)
-            assertEquals(before.top, after.top, 0.5f)
-            assertEquals(before.right, after.right, 0.5f)
-            assertEquals(before.bottom, after.bottom, 0.5f)
-            val trackerAfter = compose.onNodeWithContentDescription("Work tracker card")
-                .fetchSemanticsNode().boundsInRoot
-            assertTrue("iteration=$iteration tracker=$trackerAfter viewport=$viewport", trackerAfter.bottom <= viewport.bottom + 0.5f)
+        compose.runOnIdle {
+            activeWorkout = ActiveWorkout(
+                id = "active",
+                name = "Strength session",
+                mode = TrainingMode.STRENGTH,
+                startedAt = 1L,
+                notes = "",
+                exercises = emptyList(),
+            )
         }
+        val play = compose.onNodeWithContentDescription("Continue active workout").assertIsDisplayed()
+        compose.onNodeWithText("ACTIVE WORKOUT").assertDoesNotExist()
+        compose.onNodeWithText("Strength session").assertDoesNotExist()
+        val during = map.fetchSemanticsNode().boundsInRoot
+        assertEquals(before.left, during.left, 0.5f)
+        assertEquals(before.top, during.top, 0.5f)
+        assertEquals(before.right, during.right, 0.5f)
+        assertEquals(before.bottom, during.bottom, 0.5f)
+        val trackerDuring = compose.onNodeWithContentDescription("Work tracker card")
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals(trackerBefore.top, trackerDuring.top, 0.5f)
+        assertEquals(trackerBefore.bottom, trackerDuring.bottom, 0.5f)
+        assertTrue(play.fetchSemanticsNode().boundsInRoot.right <= viewport.right)
+        play.performClick()
+        compose.runOnIdle { assertTrue(continued) }
+        compose.runOnIdle { activeWorkout = null }
+        compose.onNodeWithContentDescription("Continue active workout").assertDoesNotExist()
+    }
+
+    @Test
+    fun homeHeatmapNavigatesFromRollingCurrentRangeToFullPriorMonths() {
+        val today = LocalDate.now()
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(411.dp).height(780.dp)) {
+                    HomeScreen(
+                        state = MainUiState(homeRecencyDay = today.toEpochDay()),
+                        onDayClick = {},
+                        onContinue = {},
+                        onRecencyDayChange = {},
+                        onModeChange = {},
+                    )
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Current activity range, today and previous 34 days")
+            .assertIsDisplayed()
+        compose.onNodeWithContentDescription("${today.minusDays(34)}: 0 activities", substring = true).assertExists()
+        compose.onNodeWithContentDescription("$today: 0 activities", substring = true).assertExists()
+
+        compose.onNodeWithText("Earlier").performClick()
+        val prior = YearMonth.from(today).minusMonths(1)
+        compose.onNodeWithText(prior.format(DateTimeFormatter.ofPattern("MMMM yyyy"))).assertIsDisplayed()
+        compose.onNodeWithContentDescription("${prior.atDay(1)}: 0 activities", substring = true).assertExists()
+        compose.onNodeWithContentDescription(
+            "${prior.atEndOfMonth()}: 0 activities",
+            substring = true,
+        ).assertExists()
+        compose.onNodeWithContentDescription("$today: 0 activities", substring = true).assertDoesNotExist()
+
+        compose.onNodeWithText("Earlier").performClick()
+        val twoMonthsBack = prior.minusMonths(1)
+        compose.onNodeWithText(twoMonthsBack.format(DateTimeFormatter.ofPattern("MMMM yyyy")))
+            .assertIsDisplayed()
+        compose.onNodeWithText("Later").performClick()
+        compose.onNodeWithText(prior.format(DateTimeFormatter.ofPattern("MMMM yyyy"))).assertIsDisplayed()
+        compose.onNodeWithText("Later").performClick()
+        compose.onNodeWithContentDescription("Current activity range, today and previous 34 days")
+            .assertIsDisplayed()
     }
 
     @Test
@@ -403,14 +433,15 @@ class EndUserControlsTest {
                 exercises = emptyList(),
             )
         }
-        compose.waitUntil(15_000) {
-            compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
-                .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
-        }
-        val activeSixRowHeight = compose
+        compose.onNodeWithContentDescription("Continue active workout").assertIsDisplayed()
+        val activeFiveRowHeight = compose
             .onNodeWithContentDescription("${LocalDate.now().minusDays(34)}: 0 activities", substring = true)
             .fetchSemanticsNode().boundsInRoot.height
-        assertTrue("fitted=$standardRowHeight active=$activeSixRowHeight", activeSixRowHeight < standardRowHeight)
+        assertEquals("fitted=$standardRowHeight active=$activeFiveRowHeight", standardRowHeight, activeFiveRowHeight, 1.5f)
+        assertTrue(
+            compose.onNodeWithContentDescription("Home content").fetchSemanticsNode()
+                .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() <= 64f,
+        )
 
         compose.runOnIdle {
             activeWorkout = null

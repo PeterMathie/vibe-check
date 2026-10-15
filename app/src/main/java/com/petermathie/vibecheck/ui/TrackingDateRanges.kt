@@ -2,6 +2,7 @@ package com.petermathie.vibecheck.ui
 
 import java.time.Instant
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 
 internal data class ProgressDateRange(
@@ -21,6 +22,17 @@ internal data class ProgressDateRange(
 
 internal fun homeHeatmapDates(today: LocalDate): List<LocalDate> =
     (34L downTo 0L).map(today::minusDays)
+
+internal fun homeHeatmapDates(today: LocalDate, historicalMonth: YearMonth?): List<LocalDate> =
+    historicalMonth?.let { month ->
+        (1..month.lengthOfMonth()).map(month::atDay)
+    } ?: homeHeatmapDates(today)
+
+internal fun earlierHeatmapMonth(today: LocalDate, historicalMonth: YearMonth?): YearMonth =
+    (historicalMonth ?: YearMonth.from(today)).minusMonths(1)
+
+internal fun laterHeatmapMonth(today: LocalDate, historicalMonth: YearMonth): YearMonth? =
+    historicalMonth.plusMonths(1).takeIf { it < YearMonth.from(today) }
 
 internal fun validProgressDateRange(start: LocalDate, endInclusive: LocalDate): ProgressDateRange? =
     if (start.isAfter(endInclusive)) null else ProgressDateRange(start, endInclusive)
