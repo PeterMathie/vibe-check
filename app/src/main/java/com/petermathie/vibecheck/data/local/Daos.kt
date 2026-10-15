@@ -149,6 +149,19 @@ interface ProgrammeDao {
     @Query("SELECT p.mode FROM programmes p JOIN programme_days d ON d.programmeId = p.id WHERE d.id = :dayId")
     suspend fun modeForDay(dayId: String): String?
 
+    @Query(
+        """
+        SELECT CASE
+            WHEN d.name IN ('Workout', 'Stretching') THEN p.name
+            ELSE d.name
+        END
+        FROM programme_days d
+        JOIN programmes p ON p.id = d.programmeId
+        WHERE d.id = :dayId
+        """,
+    )
+    suspend fun workoutNameForDay(dayId: String): String?
+
     @Query("DELETE FROM programmes WHERE isDemo = 1")
     suspend fun deleteDemoProgrammes(): Int
 }

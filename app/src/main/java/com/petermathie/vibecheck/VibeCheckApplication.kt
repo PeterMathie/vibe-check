@@ -2,6 +2,7 @@ package com.petermathie.vibecheck
 
 import android.app.Application
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
+import com.petermathie.vibecheck.ui.RestTimer
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,7 @@ class VibeCheckApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        RestTimer.ensureNotificationChannel(this)
         applicationScope.launch { databaseSeeder.seedIfNeeded() }
     }
 }

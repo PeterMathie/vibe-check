@@ -57,6 +57,35 @@ object DataTransfer {
                 val seen=mutableSetOf<List<Any>>()
                 repeat(rows.length()) { i ->
                     val row=rows.getJSONObject(i)
+                    if (
+                        table == "exercises" &&
+                        row.optString("id") == "core:front-split" &&
+                        row.optString("source") == "vibe-trainer" &&
+                        row.optInt("isCustom") == 0 &&
+                        row.optString("trackingType") == "ROM_MEASUREMENT" &&
+                        row.optString("inputConfig").isBlank()
+                    ) {
+                        row.put("trackingType", "HOLD")
+                        row.put("inputConfig", FRONT_SPLIT_HOLD_INPUT_CONFIG)
+                    }
+                    if (
+                        table == "workout_exercises" &&
+                        row.optString("actualExerciseId") == "core:front-split" &&
+                        row.optString("trackingType") == "ROM_MEASUREMENT" &&
+                        row.optString("inputConfig").isBlank()
+                    ) {
+                        val draft = sql.query(
+                            "SELECT status FROM workouts WHERE id=?",
+                            arrayOf(row.getString("workoutId")),
+                        ).use { it.moveToFirst() && it.getString(0) == "DRAFT" }
+                        if (draft) {
+                            row.put("trackingType", "HOLD")
+                            row.put("inputConfig", FRONT_SPLIT_HOLD_INPUT_CONFIG)
+                        }
+                    }
+                    if (table in setOf("programme_exercises", "workout_exercises") && row.has("notes")) {
+                        row.put("notes", sanitizeExerciseNotes(row.optString("notes")))
+                    }
                     if (table == "tracker_fields" && !row.has("choiceOptionsJson")) {
                         val options = if (row.optString("valueType") == "CHOICE") {
                             legacyHabitChoices(

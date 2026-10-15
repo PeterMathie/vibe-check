@@ -1,5 +1,10 @@
 package com.petermathie.vibecheck.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -63,8 +68,68 @@ fun WorkoutEditor(
     val definitions by vm.exercises.collectAsStateWithLifecycle()
     val measurements by vm.measurements.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val preferences = remember(context) { context.getSharedPreferences("settings", 0) }
+    val haptics = rememberVibeHaptics()
     var restRemaining by remember { mutableStateOf(0L) }
-    LaunchedEffect(Unit) { while(true) { restRemaining=(context.getSharedPreferences("settings",0).getLong("restEnd",0)-System.currentTimeMillis()).coerceAtLeast(0)/1000;kotlinx.coroutines.delay(500) } }
+    var restTimerMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingRestSeconds by rememberSaveable { mutableStateOf<Int?>(null) }
+    fun startRestTimer(seconds: Int) {
+        when (val result = RestTimer.start(context, seconds)) {
+            RestTimerStartResult.Started -> restTimerMessage = null
+            is RestTimerStartResult.StartedWithWarning -> restTimerMessage = result.message
+        }
+    }
+    fun acknowledgeRestTimerMessage() {
+        restTimerMessage = null
+        preferences.edit()
+            .remove(RestTimer.REST_COMPLETED_AT)
+            .remove(RestTimer.REST_NOTIFICATION_ERROR)
+            .apply()
+    }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        pendingRestSeconds?.let(::startRestTimer)
+        pendingRestSeconds = null
+    }
+    fun requestRestTimer(seconds: Int) {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingRestSeconds = seconds
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            startRestTimer(seconds)
+        }
+    }
+    LaunchedEffect(Unit) {
+        var observedEnd = preferences.getLong("restEnd", 0L)
+        while (true) {
+            preferences.getString(RestTimer.REST_NOTIFICATION_ERROR, null)?.let {
+                if (restTimerMessage == null) restTimerMessage = it
+            }
+            val now = System.currentTimeMillis()
+            val end = preferences.getLong("restEnd", 0L)
+            if (end > 0L) {
+                observedEnd = end
+                restRemaining = ((end - now).coerceAtLeast(0L) + 999L) / 1000L
+                if (now >= end && RestTimer.complete(context, end)) {
+                    restTimerMessage = preferences.getString(RestTimer.REST_NOTIFICATION_ERROR, null)
+                        ?: "Rest complete"
+                    haptics.perform(VibeHapticEvent.SUCCESS)
+                }
+            } else {
+                restRemaining = 0L
+                val completedAt = preferences.getLong(RestTimer.REST_COMPLETED_AT, 0L)
+                if (observedEnd > 0L && completedAt >= observedEnd) {
+                    restTimerMessage = preferences.getString(RestTimer.REST_NOTIFICATION_ERROR, null)
+                        ?: "Rest complete"
+                    haptics.perform(VibeHapticEvent.SUCCESS)
+                    observedEnd = 0L
+                }
+            }
+            kotlinx.coroutines.delay(250)
+        }
+    }
     val workout = workouts.find { it.id == workoutId }
     var add by remember { mutableStateOf(false) }
     var bodyweight by remember { mutableStateOf(false) }
@@ -132,6 +197,7 @@ fun WorkoutEditor(
                 sets.filter { it.workoutExerciseId == row.id },
                 previous,
                 restSeconds,
+                onRestRequested = ::requestRestTimer,
                 onInputValidityChanged = { validEntryRows[row.id] = it },
             )
         }
@@ -204,6 +270,18 @@ fun WorkoutEditor(
             },
         )
     }
+    restTimerMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = ::acknowledgeRestTimerMessage,
+            title = {
+                Text(if (message.startsWith("Rest complete")) "Rest complete" else "Rest timer")
+            },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = ::acknowledgeRestTimerMessage) { Text("OK") }
+            },
+        )
+    }
     if (add) ExercisePicker(vm, { add = false }) { e -> vm.save(WorkoutExerciseEntity(newId(), workout.id, e.id, e.id, rows.size, "", 120, null)); add = false }
 }
 
@@ -216,6 +294,7 @@ private fun WorkoutExerciseCard(
     sets: List<WorkoutSetEntity>,
     previous: List<WorkoutSetEntity>,
     restSeconds: Int,
+    onRestRequested: (Int) -> Unit,
     onInputValidityChanged: (Boolean) -> Unit,
 ) {
     val assignments by vm.setBands.collectAsStateWithLifecycle()
@@ -367,7 +446,7 @@ private fun WorkoutExerciseCard(
     VibeSurface(VibeSurfaceLevel.CARD, Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(exercise?.canonicalName.orEmpty(), modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-            IconButton(onClick = { RestTimer.start(context, restSeconds) }) {
+            IconButton(onClick = { onRestRequested(restSeconds) }) {
                 Icon(Icons.Outlined.Timer, contentDescription = "Start ${restSeconds} second rest for ${exercise?.canonicalName.orEmpty()}")
             }
         }

@@ -46,6 +46,8 @@ fun ProgrammeEditor(
     mode: TrainingMode,
     onModeChange: (TrainingMode) -> Unit,
     onStart: (String, Boolean) -> Unit,
+    onSaveCurrentAndStart: (String, String) -> Unit = { _, _ -> },
+    onCancelStart: () -> Unit = {},
 ) {
     val programmes by vm.programmes.collectAsStateWithLifecycle()
     val days by vm.days.collectAsStateWithLifecycle()
@@ -284,18 +286,25 @@ fun ProgrammeEditor(
                             AlertDialog(
                                 onDismissRequest = { pendingStartDayId = null },
                                 title = { Text("Workout in progress") },
-                                text = { Text("${activeWorkout?.name.orEmpty()} is still in progress. Resume it, or discard it and start ${target?.name.orEmpty()}.") },
+                                text = { Text("${activeWorkout?.name.orEmpty()} is still in progress. Choose what to do before starting ${target?.name.orEmpty()}.") },
                                 confirmButton = {
-                                    TextButton(onClick = {
-                                        pendingStartDayId = null
-                                        onStart(dayId, true)
-                                    }) { Text("Discard and start") }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        TextButton(onClick = {
+                                            val currentId = activeWorkout?.id ?: return@TextButton
+                                            pendingStartDayId = null
+                                            onSaveCurrentAndStart(currentId, dayId)
+                                        }) { Text("Save current workout") }
+                                        TextButton(onClick = {
+                                            pendingStartDayId = null
+                                            onStart(dayId, true)
+                                        }) { Text("Discard current workout") }
+                                    }
                                 },
                                 dismissButton = {
                                     TextButton(onClick = {
                                         pendingStartDayId = null
-                                        activeWorkout?.programmeDayId?.let { onStart(it, false) }
-                                    }) { Text("Resume workout") }
+                                        onCancelStart()
+                                    }) { Text("Cancel") }
                                 },
                             )
                         }

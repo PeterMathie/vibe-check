@@ -6,6 +6,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.petermathie.vibecheck.data.TrainingRepository
 import com.petermathie.vibecheck.data.local.ProgrammeExerciseEntity
+import com.petermathie.vibecheck.data.local.ExerciseEntity
+import com.petermathie.vibecheck.data.local.ProgrammeDayEntity
+import com.petermathie.vibecheck.data.local.ProgrammeEntity
+import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.SetDraft
@@ -149,6 +153,91 @@ class WorkoutWorkflowTest {
         assertEquals("Legs + Mobility", active.name)
         assertTrue(active.exercises.any { it.exerciseName == "Back squat" })
         assertTrue(active.exercises.none { it.exerciseName == "Planche" })
+    }
+
+    @Test(timeout = 120_000)
+    fun genericDayNameUsesProgrammeNameAndSanitizesSnapshotNotes() = runBlocking {
+        val dao = database.editorDao()
+        dao.exercise(ExerciseEntity("custom", "Custom", "STRENGTH", "REPS", null, null, "user", true))
+        dao.programme(ProgrammeEntity("custom-programme", "Actual workout name", "STRENGTH", false))
+        dao.day(ProgrammeDayEntity("custom-day", "custom-programme", "Workout", 0))
+        val leaked =
+            "Private programme source 2f55a8f5-5878-4295-aa5d-22db384a9338-2. LEGS + MOBILITY.md, line 20. " +
+                "Explicit rest: 2 minutes; achieved added load/reps were not promoted."
+        dao.entry(
+            ProgrammeExerciseEntity(
+                "custom-entry", "custom-day", "custom", 0, 1, 5, 5, null, 120, null,
+                "$leaked\nKeep hips square", null,
+            ),
+        )
+
+        val workoutId = repository.startWorkout("custom-day")
+        val active = requireNotNull(repository.observeDraft().first { it?.id == workoutId })
+        assertEquals("Actual workout name", active.name)
+        assertEquals("Keep hips square", active.exercises.single().notes)
+    }
+
+    @Test(timeout = 120_000)
+    fun frontSplitUsesTimeBasedMeasurementInFreshAndStartedWorkouts() = runBlocking {
+        val exercise = database.editorDao().exercises().first().single { it.id == "core:front-split" }
+        assertEquals("HOLD", exercise.trackingType)
+
+        val workoutId = repository.startWorkout("demo-day-front-splits")
+        val active = requireNotNull(repository.observeDraft().first { it?.id == workoutId })
+        val frontSplit = active.exercises.single { it.actualExerciseId == "core:front-split" }
+        assertEquals(com.petermathie.vibecheck.domain.model.TrackingType.HOLD, frontSplit.trackingType)
+    }
+
+    @Test(timeout = 120_000)
+    fun saveCurrentAndStartFinishesOnlyAQualifyingWorkout() = runBlocking {
+        val currentId = repository.startWorkout("demo-day-push")
+        val viewModel = MainViewModel(repository, database.catalogueDao())
+        val rejected = CompletableDeferred<String>()
+        viewModel.saveCurrentAndStartWorkout(
+            currentId,
+            "demo-day-legs",
+            onRejected = { rejected.complete(it) },
+        )
+        assertTrue(rejected.await().contains("completed working set"))
+        assertEquals(currentId, requireNotNull(repository.observeDraft().first()).id)
+
+        val active = requireNotNull(repository.observeDraft().first())
+        repository.addSet(active.exercises.first().id, SetDraft(reps = 5.0))
+        database.editorDao().entryDraft(
+            WorkoutEntryDraftEntity(
+                workoutExerciseId = active.exercises.last().id,
+                setId = "partial-set",
+                ordinal = 1,
+                performance = "12.",
+                rpe = "",
+                detailsOpen = false,
+                warmUp = false,
+                failed = false,
+                bandIds = "[]",
+                variationId = null,
+                leftValue = "",
+                rightValue = "",
+                addedWeight = "",
+                assistance = "",
+                romValue = "",
+                romUnit = "cm",
+                updatedAt = 1,
+            ),
+        )
+        val started = CompletableDeferred<Unit>()
+        viewModel.saveCurrentAndStartWorkout(
+            currentId,
+            "demo-day-legs",
+            onStarted = { started.complete(Unit) },
+            onRejected = { error(it) },
+        )
+        started.await()
+        assertEquals("FINISHED", database.editorDao().workouts().first().single { it.id == currentId }.status)
+        assertEquals(
+            "12.",
+            database.editorDao().entryDrafts(active.exercises.last().id).single().performance,
+        )
+        assertEquals("Legs + Mobility", requireNotNull(repository.observeDraft().first()).name)
     }
 
     @Test(timeout = 120_000)
