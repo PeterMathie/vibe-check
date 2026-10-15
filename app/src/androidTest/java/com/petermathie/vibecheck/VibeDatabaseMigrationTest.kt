@@ -16,6 +16,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_11_12
 import com.petermathie.vibecheck.data.local.MIGRATION_12_13
 import com.petermathie.vibecheck.data.local.MIGRATION_13_14
 import com.petermathie.vibecheck.data.local.MIGRATION_14_15
+import com.petermathie.vibecheck.data.local.MIGRATION_15_16
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -32,6 +33,76 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate15To16RepairsNamesNotesAndFrontSplitWithoutReplacingRows() {
+        helper.createDatabase(databaseName, 15).apply {
+            execSQL(
+                """
+                INSERT INTO exercises
+                    (id,canonicalName,tag,trackingType,equipment,instructions,source,isCustom,isArchived,inputConfig,
+                     targetSets,targetRepsMin,targetRepsMax,targetRpe,restSeconds)
+                VALUES ('core:front-split','Front split','STRETCHING','ROM_MEASUREMENT',NULL,NULL,'vibe-trainer',0,0,'',
+                        3,NULL,NULL,NULL,60)
+                """.trimIndent(),
+            )
+            execSQL("INSERT INTO programmes (id,name,mode,isDemo,isArchived,position) VALUES ('p','My mobility','STRETCHING',0,0,0)")
+            execSQL("INSERT INTO programme_days (id,programmeId,name,position) VALUES ('d','p','Stretching',0)")
+            val leaked =
+                "Private programme source abc-2. LEGS + MOBILITY.md, line 20. Explicit rest: 2 minutes; achieved added load/reps were not promoted."
+            execSQL(
+                """
+                INSERT INTO programme_exercises
+                    (id,programmeDayId,exerciseId,position,targetSets,targetRepsMin,targetRepsMax,targetHoldSeconds,
+                     restSeconds,targetRpe,notes,supersetGroup,inputConfig)
+                VALUES ('pe','d','core:front-split',0,3,NULL,NULL,NULL,60,NULL,?,NULL,'')
+                """.trimIndent(),
+                arrayOf("$leaked\nKeep hips square"),
+            )
+            execSQL(
+                """
+                INSERT INTO workouts
+                    (id,programmeDayId,name,mode,status,startedAt,finishedAt,notes,bodyweightKg,isDemo)
+                VALUES ('w','d','Workout','STRETCHING','DRAFT',1,NULL,'',NULL,0)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO workout_exercises
+                    (id,workoutId,plannedExerciseId,actualExerciseId,position,notes,restSeconds,supersetGroup,
+                     exerciseName,trackingType,targets,inputConfig,targetSets,targetRepsMin,targetRepsMax,
+                     targetHoldSeconds,targetRpe)
+                VALUES ('we','w','core:front-split','core:front-split',0,?,60,NULL,'Front split',
+                        'ROM_MEASUREMENT','','',3,NULL,NULL,NULL,NULL)
+                """.trimIndent(),
+                arrayOf(leaked),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(databaseName, 16, true, MIGRATION_15_16).use { migrated ->
+            migrated.query("SELECT name FROM workouts WHERE id='w'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("My mobility", it.getString(0))
+            }
+            migrated.query("SELECT notes FROM programme_exercises WHERE id='pe'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Keep hips square", it.getString(0))
+            }
+            migrated.query("SELECT notes,trackingType,inputConfig FROM workout_exercises WHERE id='we'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("", it.getString(0))
+                assertEquals("HOLD", it.getString(1))
+                assertTrue(it.getString(2).contains("timeHeld=true"))
+            }
+            migrated.query("SELECT canonicalName,trackingType,inputConfig FROM exercises WHERE id='core:front-split'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Front split", it.getString(0))
+                assertEquals("HOLD", it.getString(1))
+                assertTrue(it.getString(2).contains("reps=false"))
+            }
+        }
+    }
 
     @Test
     fun migrate14To15UsesRealColumnsForFractionalRepetitions() {

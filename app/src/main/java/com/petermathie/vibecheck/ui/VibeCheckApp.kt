@@ -241,12 +241,29 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         completionEvent,
                         viewModel::consumeCompletionEvent,
                     )
-                    Destination.PROGRAMMES -> ProgrammeEditor(editor, state.mode, viewModel::setMode) { dayId, replace ->
-                        viewModel.startWorkout(dayId, replace) {
-                            haptics.perform(VibeHapticEvent.PLAY)
-                            destination = Destination.ACTIVE_WORKOUT
-                        }
-                    }
+                    Destination.PROGRAMMES -> ProgrammeEditor(
+                        vm = editor,
+                        mode = state.mode,
+                        onModeChange = viewModel::setMode,
+                        onStart = { dayId, replace ->
+                            viewModel.startWorkout(dayId, replace) {
+                                haptics.perform(VibeHapticEvent.PLAY)
+                                destination = Destination.ACTIVE_WORKOUT
+                            }
+                        },
+                        onSaveCurrentAndStart = { currentWorkoutId, dayId ->
+                            viewModel.saveCurrentAndStartWorkout(
+                                currentWorkoutId,
+                                dayId,
+                                onStarted = {
+                                    haptics.perform(VibeHapticEvent.PLAY)
+                                    destination = Destination.ACTIVE_WORKOUT
+                                },
+                                onRejected = { editor.error.value = it },
+                            )
+                        },
+                        onCancelStart = { destination = Destination.ACTIVE_WORKOUT },
+                    )
                     Destination.ACTIVE_WORKOUT -> WorkoutEditor(
                         vm = editor,
                         workoutId = state.activeWorkout?.id,

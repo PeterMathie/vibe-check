@@ -155,6 +155,26 @@ class MainViewModel @Inject constructor(
         onStarted()
     }
 
+    fun saveCurrentAndStartWorkout(
+        currentWorkoutId: String,
+        dayId: String,
+        onStarted: () -> Unit = {},
+        onRejected: (String) -> Unit = {},
+    ) = viewModelScope.launch {
+        runCatching { repository.finishWorkout(currentWorkoutId, preserveEntryDrafts = true) }
+            .onSuccess { completion ->
+                if (completion == null) {
+                    onRejected("Log at least one completed working set before saving this workout.")
+                } else {
+                    repository.startWorkout(dayId)
+                    mode.value = completion.mode
+                    clock.value = System.currentTimeMillis()
+                    onStarted()
+                }
+            }
+            .onFailure { onRejected("Workout could not be saved: ${it.message.orEmpty()}") }
+    }
+
     fun addSet(workoutExerciseId: String, draft: SetDraft) = viewModelScope.launch {
         repository.addSet(workoutExerciseId, draft)
     }

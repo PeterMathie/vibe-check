@@ -5,6 +5,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.petermathie.vibecheck.domain.tracker.encodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoiceSnapshot
+import com.petermathie.vibecheck.data.sanitizeExerciseNotes
+import com.petermathie.vibecheck.data.FRONT_SPLIT_HOLD_INPUT_CONFIG
 
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(db: SupportSQLiteDatabase) {
@@ -552,5 +554,71 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
             """.trimIndent(),
         )
         db.execSQL("DROP TABLE workout_set_bands_backup")
+    }
+}
+
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            UPDATE workouts
+            SET name = (
+                SELECT p.name
+                FROM programme_days d
+                JOIN programmes p ON p.id = d.programmeId
+                WHERE d.id = workouts.programmeDayId
+            )
+            WHERE name IN ('Workout', 'Stretching')
+              AND programmeDayId IS NOT NULL
+              AND EXISTS (
+                SELECT 1
+                FROM programme_days d
+                JOIN programmes p ON p.id = d.programmeId
+                WHERE d.id = workouts.programmeDayId
+                  AND d.name IN ('Workout', 'Stretching')
+                  AND p.name NOT IN ('', 'Workout', 'Stretching')
+            )
+            """.trimIndent(),
+        )
+
+        listOf("programme_exercises", "workout_exercises").forEach { table ->
+            val updates = mutableListOf<Pair<String, String>>()
+            db.query(
+                "SELECT id, notes FROM $table WHERE notes LIKE 'Private programme source %.md, line %'",
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val original = cursor.getString(1)
+                    val sanitized = sanitizeExerciseNotes(original)
+                    if (sanitized != original) updates += cursor.getString(0) to sanitized
+                }
+            }
+            updates.forEach { (id, notes) ->
+                db.execSQL("UPDATE $table SET notes=? WHERE id=?", arrayOf(notes, id))
+            }
+        }
+
+        db.execSQL(
+            """
+            UPDATE exercises
+            SET trackingType='HOLD', inputConfig=?
+            WHERE id='core:front-split'
+              AND source='vibe-trainer'
+              AND isCustom=0
+              AND trackingType='ROM_MEASUREMENT'
+              AND inputConfig=''
+            """.trimIndent(),
+            arrayOf(FRONT_SPLIT_HOLD_INPUT_CONFIG),
+        )
+        db.execSQL(
+            """
+            UPDATE workout_exercises
+            SET trackingType='HOLD', inputConfig=?
+            WHERE actualExerciseId='core:front-split'
+              AND trackingType='ROM_MEASUREMENT'
+              AND inputConfig=''
+              AND workoutId IN (SELECT id FROM workouts WHERE status='DRAFT')
+            """.trimIndent(),
+            arrayOf(FRONT_SPLIT_HOLD_INPUT_CONFIG),
+        )
     }
 }

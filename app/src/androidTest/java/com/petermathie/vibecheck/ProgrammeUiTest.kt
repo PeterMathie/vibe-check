@@ -246,6 +246,41 @@ class ProgrammeUiTest {
     }
 
     @Test
+    fun activeWorkoutPromptOffersExactlySaveDiscardAndCancel() {
+        seedProgramme(includeSecondRows = true)
+        runBlocking {
+            database.editorDao().workout(
+                WorkoutEntity("active", "day-a", "Alpha morning", "STRENGTH", "DRAFT", 1, null, "", null, false),
+            )
+        }
+        var saved: Pair<String, String>? = null
+        var discarded: Pair<String, Boolean>? = null
+        var cancelled = false
+        setProgrammeContent(
+            onStart = { dayId, replace -> discarded = dayId to replace },
+            onSaveCurrentAndStart = { workoutId, dayId -> saved = workoutId to dayId },
+            onCancelStart = { cancelled = true },
+        )
+
+        compose.onNodeWithContentDescription("Edit programme Alpha").performClick()
+        compose.onAllNodesWithText("Start workout")[1].performClick()
+        compose.onAllNodes(hasTextExactly("Save current workout") and hasClickAction())[0].assertIsDisplayed()
+        compose.onAllNodes(hasTextExactly("Discard current workout") and hasClickAction())[0].assertIsDisplayed()
+        compose.onAllNodes(hasTextExactly("Cancel") and hasClickAction())[0].assertIsDisplayed().performClick()
+        assertTrue(cancelled)
+        assertEquals(null, saved)
+        assertEquals(null, discarded)
+
+        compose.onAllNodesWithText("Start workout")[1].performClick()
+        compose.onAllNodes(hasTextExactly("Save current workout") and hasClickAction())[0].performClick()
+        assertEquals("active" to "day-b", saved)
+
+        compose.onAllNodesWithText("Start workout")[1].performClick()
+        compose.onAllNodes(hasTextExactly("Discard current workout") and hasClickAction())[0].performClick()
+        assertEquals("day-b" to true, discarded)
+    }
+
+    @Test
     fun createRenameDuplicateArchiveAndDeleteRemainInEditContext() {
         createDatabase()
         runBlocking {
@@ -406,6 +441,8 @@ class ProgrammeUiTest {
     private fun setProgrammeContent(
         mode: TrainingMode = TrainingMode.STRENGTH,
         onModeChange: (TrainingMode) -> Unit = {},
+        onSaveCurrentAndStart: (String, String) -> Unit = { _, _ -> },
+        onCancelStart: () -> Unit = {},
         onStart: (String, Boolean) -> Unit,
     ) {
         val viewModel = lifecycle.own(EditorViewModel(database))
@@ -417,7 +454,14 @@ class ProgrammeUiTest {
                     LocalAppFabClearance provides 88.dp,
                 ) {
                     Box(Modifier.fillMaxSize()) {
-                        ProgrammeEditor(viewModel, mode, onModeChange, onStart)
+                        ProgrammeEditor(
+                            viewModel,
+                            mode,
+                            onModeChange,
+                            onStart,
+                            onSaveCurrentAndStart,
+                            onCancelStart,
+                        )
                         host.action?.takeIf { it.visible }?.let {
                             AppFloatingAction(
                                 action = it,

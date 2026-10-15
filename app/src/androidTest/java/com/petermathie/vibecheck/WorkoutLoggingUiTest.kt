@@ -98,6 +98,23 @@ class WorkoutLoggingUiTest {
     }
 
     @Test
+    fun foregroundRestCompletionRemainsVisibleAfterCountdownEnds() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        context.getSharedPreferences("settings", 0).edit()
+            .putLong("restEnd", System.currentTimeMillis() + 500L)
+            .apply()
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText("Rest complete").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onAllNodesWithText("Rest complete")[0].assertIsDisplayed()
+    }
+
+    @Test
     fun holdResultCanBeCorrectedThroughTheSameWorkoutRow() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()

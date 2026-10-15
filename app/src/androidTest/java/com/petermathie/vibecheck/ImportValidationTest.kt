@@ -9,6 +9,7 @@ import com.petermathie.vibecheck.data.DataTransfer
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
@@ -46,6 +47,23 @@ class ImportValidationTest {
         DataTransfer.import(db, legacyBackup)
 
         assertEquals("vibe-trainer", JSONObject(DataTransfer.export(db)).getString("format"))
+    }
+
+    @Test
+    fun legacyFrontSplitCatalogueDefinitionUpgradesDuringImport() = runBlocking {
+        val exercises = exported.getJSONArray("exercises")
+        val frontSplit = (0 until exercises.length())
+            .map { JSONObject(exercises.getJSONObject(it).toString()) }
+            .single { it.getString("id") == "core:front-split" }
+            .put("trackingType", "ROM_MEASUREMENT")
+            .put("inputConfig", "")
+
+        DataTransfer.import(db, document(rows("exercises", frontSplit)))
+
+        val imported = db.editorDao().exercises().first().single { it.id == "core:front-split" }
+        assertEquals("HOLD", imported.trackingType)
+        assertTrue(imported.inputConfig.contains("timeHeld=true"))
+        assertTrue(imported.inputConfig.contains("reps=false"))
     }
 
     @Test

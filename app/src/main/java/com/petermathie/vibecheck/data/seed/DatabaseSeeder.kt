@@ -26,6 +26,7 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.WorkoutEntity
 import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
+import com.petermathie.vibecheck.data.FRONT_SPLIT_HOLD_INPUT_CONFIG
 import com.petermathie.vibecheck.domain.model.ExerciseTag
 import com.petermathie.vibecheck.domain.model.MuscleRole
 import com.petermathie.vibecheck.domain.model.SetResult
@@ -560,10 +561,11 @@ class DatabaseSeeder @Inject constructor(
                 null,
                 "vibe-trainer",
                 false,
-                inputConfig = if (id == "core:handstand") {
-                    "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=true;reps=false"
-                } else {
-                    ""
+                inputConfig = when (id) {
+                    "core:handstand" ->
+                        "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=true;reps=false"
+                    "core:front-split" -> FRONT_SPLIT_HOLD_INPUT_CONFIG
+                    else -> ""
                 },
             )
 
@@ -581,7 +583,7 @@ class DatabaseSeeder @Inject constructor(
             curated("core:pull-up", "Pull-up", TrackingType.ASSISTED_REPS),
             curated("core:overhead-press", "Overhead press", TrackingType.WEIGHT_REPS),
             curated("core:back-extension", "Back extension", TrackingType.WEIGHT_REPS),
-            curated("core:front-split", "Front split", TrackingType.ROM_MEASUREMENT, ExerciseTag.STRETCHING),
+            curated("core:front-split", "Front split", TrackingType.HOLD, ExerciseTag.STRETCHING),
             curated("core:forward-fold", "Forward fold", TrackingType.ROM_MEASUREMENT, ExerciseTag.STRETCHING),
             curated("core:side-split", "Side split", TrackingType.ROM_MEASUREMENT, ExerciseTag.STRETCHING),
             curated("core:bridge", "Bridge", TrackingType.ROM_MEASUREMENT, ExerciseTag.STRETCHING),

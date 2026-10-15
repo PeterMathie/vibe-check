@@ -94,15 +94,16 @@ class TrainingRepository @Inject constructor(
             database.editorDao().deleteEntryDraftsForWorkout(existing.id)
             workoutDao.updateWorkout(existing.copy(status = WorkoutStatus.DISCARDED.name))
         }
-        val day = requireNotNull(programmeDao.day(dayId))
+        requireNotNull(programmeDao.day(dayId))
         val mode = requireNotNull(programmeDao.modeForDay(dayId))
+        val workoutName = requireNotNull(programmeDao.workoutNameForDay(dayId))
         val exercises = programmeDao.exercisesForDay(dayId)
         val workoutId = UUID.randomUUID().toString()
         workoutDao.insertWorkout(
             WorkoutEntity(
                 id = workoutId,
                 programmeDayId = dayId,
-                name = day.name,
+                name = workoutName,
                 mode = mode,
                 status = WorkoutStatus.DRAFT.name,
                 startedAt = System.currentTimeMillis(),
@@ -119,7 +120,7 @@ class TrainingRepository @Inject constructor(
                 plannedExerciseId = row.exerciseId,
                 actualExerciseId = row.exerciseId,
                 position = row.position,
-                notes = row.notes,
+                notes = sanitizeExerciseNotes(row.notes),
                 restSeconds = row.restSeconds,
                 supersetGroup = row.supersetGroup,
                 exerciseName = row.canonicalName,
@@ -176,13 +177,16 @@ class TrainingRepository @Inject constructor(
     suspend fun updateExerciseNotes(workoutExerciseId: String, notes: String) =
         workoutDao.updateExerciseNotes(workoutExerciseId, notes)
 
-    suspend fun finishWorkout(workoutId: String): WorkoutCompletion? = database.withTransaction {
+    suspend fun finishWorkout(
+        workoutId: String,
+        preserveEntryDrafts: Boolean = false,
+    ): WorkoutCompletion? = database.withTransaction {
         if (workoutDao.qualifyingSetCount(workoutId) == 0) return@withTransaction null
         val mode = workoutDao.workoutMode(workoutId)?.let(TrainingMode::valueOf)
             ?: error("Workout $workoutId does not exist")
         val affectedMuscleIds = workoutDao.affectedMuscleIds(workoutId)
         if (workoutDao.finish(workoutId, System.currentTimeMillis()) != 1) return@withTransaction null
-        database.editorDao().deleteEntryDraftsForWorkout(workoutId)
+        if (!preserveEntryDrafts) database.editorDao().deleteEntryDraftsForWorkout(workoutId)
         WorkoutCompletion(mode, affectedMuscleIds)
     }
 
@@ -276,7 +280,7 @@ class TrainingRepository @Inject constructor(
                 actualExerciseId = exercise.actualExerciseId,
                 exerciseName = exercise.canonicalName,
                 trackingType = TrackingType.valueOf(exercise.trackingType),
-                notes = exercise.notes,
+                notes = sanitizeExerciseNotes(exercise.notes),
                 restSeconds = exercise.restSeconds,
                 sets = sets,
             )
