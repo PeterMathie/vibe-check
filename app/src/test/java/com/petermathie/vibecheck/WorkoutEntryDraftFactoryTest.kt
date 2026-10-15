@@ -3,6 +3,8 @@ package com.petermathie.vibecheck
 import com.petermathie.vibecheck.ui.emptyEntryDraft
 import com.petermathie.vibecheck.ui.entryDraftIsEmpty
 import com.petermathie.vibecheck.ui.newSetEntryDraft
+import com.petermathie.vibecheck.ui.canChangeExerciseVariation
+import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
@@ -104,6 +106,37 @@ class WorkoutEntryDraftFactoryTest {
 
         assertEquals("muscle-up-band", muscleUp.variationId)
         assertBlankInputs(muscleUp)
+    }
+
+    @Test
+    fun incompatibleVariationChangeKeepsEnteredMeasurements() {
+        val wall = ExerciseInputConfig(timeHeld = true, timeUnderTension = true)
+        val freestanding = ExerciseInputConfig(
+            timeUnderTension = true,
+            repeatedTimeMeasurements = true,
+        )
+        val entered = emptyEntryDraft("handstand", 1).copy(timeHeld = "12")
+
+        assertFalse(canChangeExerciseVariation(wall, freestanding, listOf(entered), emptyList()))
+        assertFalse(
+            canChangeExerciseVariation(
+                wall,
+                freestanding,
+                emptyList(),
+                listOf(emptySet("handstand", 1).copy(holdMillis = 12_000)),
+            ),
+        )
+        assertTrue(canChangeExerciseVariation(wall, freestanding, listOf(emptyEntryDraft("handstand", 1)), emptyList()))
+        assertTrue(canChangeExerciseVariation(wall, wall, listOf(entered), emptyList()))
+    }
+
+    @Test
+    fun setMeasurementDetectionCoversRepeatedTimes() {
+        assertTrue(
+            com.petermathie.vibecheck.ui.setHasMeasurements(
+                emptySet("handstand", 1).copy(timeMeasurementsMillis = "[8000,10000]"),
+            ),
+        )
     }
 
     @Test
