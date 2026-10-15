@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -204,6 +205,9 @@ class WorkoutLoggingUiTest {
     @Test
     fun handstandVariationSwitchesInputsAndSnapshotsItsConfiguration() {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("settings", 0).edit()
+            .putBoolean("showExerciseVariations", true)
+            .commit()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         runBlocking {
             DatabaseSeeder(context, database).seedIfNeeded()
@@ -238,6 +242,139 @@ class WorkoutLoggingUiTest {
             1,
             runBlocking { database.editorDao().sets().first().count { it.variationId == "handstand-free" } },
         )
+    }
+
+    @Test
+    fun variationControlsAreHiddenByDefaultButKeepNonDefaultSelectionsVisible() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("settings", 0).edit()
+            .putBoolean("showExerciseVariations", false)
+            .commit()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val handstand = runBlocking {
+            database.editorDao().workoutExercises().first()
+                .first { it.workoutId == workoutId && it.actualExerciseId == "core:handstand" }
+        }
+        runBlocking {
+            database.editorDao().set(
+                emptySet(handstand.id, 1).copy(
+                    variationId = "handstand-free",
+                    timeUnderTensionMillis = 15_000,
+                    variationNameSnapshot = "Freestanding handstand",
+                    variationTrackingTypeSnapshot = "SKILL_HOLD",
+                    variationInputConfigSnapshot = ExerciseInputConfig(timeUnderTension = true).encode(),
+                ),
+            )
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription(
+                "Variation for Handstand set 1: Freestanding handstand",
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription(
+            "Variation for Handstand set 1: Freestanding handstand",
+        ).assertExists()
+        compose.onNodeWithContentDescription("Variation for Handstand set 2: Wall handstand")
+            .assertDoesNotExist()
+    }
+
+    @Test
+    fun exerciseHeadingCollapsesWithoutLosingDraftAndSetOrdinalsAreNotVisible() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Time Under Tension for Handstand set 1")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("9")
+        compose.onNodeWithContentDescription("Handstand exercise section")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+            .performClick()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Handstand exercise section")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+            .performClick()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.EditableText,
+                    AnnotatedString("9.0"),
+                ),
+            )
+        compose.onNodeWithContentDescription("Set 3 for Handstand").performScrollTo()
+        compose.onNodeWithContentDescription("Handstand exercise section").assertIsDisplayed()
+    }
+
+    @Test
+    fun openingWorkoutSelectsNextFieldAwareEmptySet() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val handstand = runBlocking {
+            database.editorDao().workoutExercises().first()
+                .first { it.workoutId == workoutId && it.actualExerciseId == "core:handstand" }
+        }
+        runBlocking {
+            database.editorDao().set(
+                emptySet(handstand.id, 1).copy(
+                    variationId = "handstand-wall",
+                    holdMillis = 8_000,
+                ),
+            )
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Time Under Tension for Handstand set 2")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Set 2 for Handstand")
+            .assertIsSelected()
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Selected for entry",
+                ),
+            )
+        compose.onNodeWithContentDescription("Set 1 for Handstand").assertIsNotSelected()
+    }
+
+    @Test
+    fun selectedBandsExposeIconBorderAndSelectionSemantics() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = runBlocking {
+            DatabaseSeeder(context, database).seedIfNeeded()
+            TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context)
+                .startWorkout("demo-day-pull")
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+        compose.onAllNodes(hasScrollAction())[0]
+            .performScrollToNode(hasContentDescription("Pull-up exercise section"))
+        compose.onNodeWithContentDescription("Pull-up exercise section").assertIsDisplayed()
+        compose.onAllNodes(hasScrollAction())[0]
+            .performScrollToNode(hasContentDescription("Yellow resistance band"))
+        compose.onAllNodesWithContentDescription("Yellow resistance band")[0]
+            .assert(
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Not selected"),
+            )
+            .performClick()
+            .assertIsSelected()
+            .assert(
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Selected"),
+            )
     }
 
     @Test
@@ -289,6 +426,9 @@ class WorkoutLoggingUiTest {
 
     private fun assertCompactLogger(fontScale: Float) {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        context.getSharedPreferences("settings", 0).edit()
+            .putBoolean("showExerciseVariations", true)
+            .commit()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         val workoutId = startPushWorkout(context)
         val viewModel = lifecycle.own(EditorViewModel(database))

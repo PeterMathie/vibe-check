@@ -8,6 +8,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.petermathie.vibecheck.data.DemoRemovalSummary
+import com.petermathie.vibecheck.data.BackupPreferences
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.SettingsScreen
@@ -81,5 +82,34 @@ class SettingsUiTest {
         compose.onNodeWithText(
             "Removed demo personal data: 2 workouts, 1 programmes, 3 habits, 4 body entries and 5 photos.",
         ).assertExists()
+    }
+
+    @Test
+    fun variationVisibilitySettingPersistsAndRoundTripsThroughBackup() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferences = context.getSharedPreferences("settings", 0)
+        preferences.edit().putBoolean("showExerciseVariations", false).commit()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme {
+                SettingsScreen(viewModel, onStyle = {}, onRemoveDemo = {})
+            }
+        }
+
+        compose.onNodeWithText("Show exercise variations").performScrollTo()
+        compose.onAllNodes(isToggleable())[3].performClick()
+        compose.runOnIdle {
+            assertTrue(preferences.getBoolean("showExerciseVariations", false))
+        }
+
+        val backup = BackupPreferences.attach(
+            """{"format":"vibe-trainer","version":1,"tables":{}}""",
+            preferences,
+        )
+        preferences.edit().putBoolean("showExerciseVariations", false).commit()
+        BackupPreferences.restore(BackupPreferences.validate(backup), preferences)
+
+        assertTrue(preferences.getBoolean("showExerciseVariations", false))
     }
 }

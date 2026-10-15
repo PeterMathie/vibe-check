@@ -13,7 +13,10 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.TrainingMode
 import com.petermathie.vibecheck.ui.HistoryDayScreen
+import com.petermathie.vibecheck.ui.HistoryScreen
+import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.MainViewModel
+import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -136,6 +139,50 @@ class HistoryUiTest {
 
         assertEquals(previewDay, state.homeRecencyDay)
         assertNull(state.selectedHistoryDay)
+    }
+
+    @Test
+    fun workoutHistoryShowsRecordedTimingWithoutOpeningTheWorkout() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = runBlocking {
+            DatabaseSeeder(context, database).seedIfNeeded()
+            val repository = TrainingRepository(
+                database,
+                database.programmeDao(),
+                database.workoutDao(),
+                database.trackerDao(),
+                context,
+            )
+            val id = repository.startWorkout("demo-day-push")
+            val handstand = database.editorDao().workoutExercises().first()
+                .first { it.workoutId == id && it.actualExerciseId == "core:handstand" }
+            database.editorDao().set(
+                emptySet(handstand.id, 1).copy(
+                    holdMillis = 12_500,
+                    timeUnderTensionMillis = 30_000,
+                ),
+            )
+            val workout = database.editorDao().workouts().first().first { it.id == id }
+            database.editorDao().workout(
+                workout.copy(status = "FINISHED", finishedAt = System.currentTimeMillis()),
+            )
+            id
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme {
+                HistoryScreen(viewModel, onMap = {})
+            }
+        }
+
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("Handstand · TUT 12.5s · Total 30s")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Handstand · TUT 12.5s · Total 30s").assertIsDisplayed()
+        compose.onNodeWithText("Back to history").assertDoesNotExist()
+        assertTrue(runBlocking { database.editorDao().workouts().first().any { it.id == workoutId } })
     }
 
     private companion object {

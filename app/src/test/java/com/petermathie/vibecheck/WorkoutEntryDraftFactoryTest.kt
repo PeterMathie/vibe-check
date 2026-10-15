@@ -1,7 +1,10 @@
 package com.petermathie.vibecheck
 
 import com.petermathie.vibecheck.ui.emptyEntryDraft
+import com.petermathie.vibecheck.ui.entryDraftIsEmpty
 import com.petermathie.vibecheck.ui.newSetEntryDraft
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -101,6 +104,20 @@ class WorkoutEntryDraftFactoryTest {
 
         assertEquals("muscle-up-band", muscleUp.variationId)
         assertBlankInputs(muscleUp)
+    }
+
+    @Test
+    fun nextEmptySetUsesEveryConfiguredInput() {
+        val weighted = ExerciseInputConfig(weightUnit = "kg", reps = true)
+        val timing = ExerciseInputConfig(timeHeld = true, timeUnderTension = true)
+        val assisted = ExerciseInputConfig(reps = true, bandResistance = true)
+
+        assertTrue(entryDraftIsEmpty(emptyEntryDraft("row", 1), weighted))
+        assertTrue(entryDraftIsEmpty(emptyEntryDraft("row", 1).copy(performance = " x "), weighted))
+        assertFalse(entryDraftIsEmpty(emptyEntryDraft("row", 1).copy(performance = "60 x "), weighted))
+        assertFalse(entryDraftIsEmpty(emptyEntryDraft("row", 1).copy(timeUnderTension = "30"), timing))
+        assertFalse(entryDraftIsEmpty(emptyEntryDraft("row", 1).copy(bandIds = "[\"band-red\"]"), assisted))
+        assertFalse(entryDraftIsEmpty(emptyEntryDraft("row", 1).copy(rpe = "8"), ExerciseInputConfig()))
     }
 
     private fun assertBlankInputs(draft: com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity) {
