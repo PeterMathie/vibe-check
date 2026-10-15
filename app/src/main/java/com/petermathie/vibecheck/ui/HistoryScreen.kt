@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.ExerciseEntity
@@ -14,6 +15,7 @@ import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.workout.formatQuantitative
+import com.petermathie.vibecheck.domain.workout.decodeTimeMeasurementsMillis
 import java.time.Instant
 import java.time.ZoneId
 import java.time.LocalDate
@@ -24,6 +26,8 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
     val exerciseRows by vm.workoutExercises.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     val sets by vm.sets.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val weightUnit = if (context.getSharedPreferences("settings", 0).getBoolean("lb", false)) "lb" else "kg"
     var query by remember { mutableStateOf("") };var selected by remember { mutableStateOf<String?>(null) };var date by remember { mutableStateOf(LocalDate.now().toString()) }
     val filteredWorkouts = workouts.filter { workout -> workout.status=="FINISHED"&&(workout.name.contains(query,true)||exerciseRows.any { row -> row.workoutId==workout.id && (row.notes.contains(query,true)||row.exerciseName.contains(query,true)||exercises.any { it.id==row.actualExerciseId && it.canonicalName.contains(query,true) }) }) }
     BackHandler(selected!=null){selected=null}
@@ -44,7 +48,7 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
             VibeCard {
                 Text(w.name, style = MaterialTheme.typography.titleMedium)
                 Text(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(), style = MaterialTheme.typography.bodySmall)
-                workoutTimingSummaries(w.id, exerciseRows, exercises, sets).forEach { summary ->
+                workoutTimingSummaries(w.id, exerciseRows, exercises, sets, w.bodyweightKg, weightUnit).forEach { summary ->
                     Text(summary, style = MaterialTheme.typography.bodySmall)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -62,6 +66,8 @@ internal fun workoutTimingSummaries(
     exerciseRows: List<WorkoutExerciseEntity>,
     exercises: List<ExerciseEntity>,
     sets: List<WorkoutSetEntity>,
+    bodyweightKg: Double? = null,
+    weightUnit: String = "kg",
 ): List<String> = exerciseRows
     .filter { it.workoutId == workoutId }
     .sortedBy { it.position }
@@ -82,16 +88,50 @@ internal fun workoutTimingSummaries(
                         "${formatQuantitative(millis / 1000.0)}s"
                 }
             }
-            add(if (config.timeHeld) "TUT" else "Hold", set.holdMillis)
+            add(
+                when {
+                    row.actualExerciseId == "core:planche" ||
+                        name.equals("Planche", ignoreCase = true) -> "Total Time"
+                    config.timeHeld -> "TUT"
+                    else -> "Hold"
+                },
+                set.holdMillis,
+            )
+            val repeatedTimes = decodeTimeMeasurementsMillis(set.timeMeasurementsMillis)
+            if (repeatedTimes.isNotEmpty()) {
+                repeatedTimes.forEach { add("Times", it) }
+            }
             add("Total", set.timeUnderTensionMillis)
             add("Left hold", set.leftHoldMillis)
             add("Right hold", set.rightHoldMillis)
+            if (config.bodyweight && set.reps != null && set.reps > 0) {
+                val displayBodyweight = bodyweightKg?.let {
+                    if (weightUnit == "lb") it * 2.2046226218 else it
+                }
+                val displayAdded = set.addedWeightKg?.let {
+                    if (weightUnit == "lb") it * 2.2046226218 else it
+                }
+                val load = buildString {
+                    append(
+                        displayBodyweight?.let { "Bodyweight ${formatHistoryWeight(it)}$weightUnit" }
+                            ?: "Bodyweight not recorded",
+                    )
+                    if (displayAdded != null) {
+                        append(" + ${formatHistoryWeight(displayAdded)}$weightUnit added")
+                    }
+                    append(" × ${formatQuantitative(set.reps)} reps")
+                }
+                values.getOrPut("Load") { mutableListOf() } += load
+            }
         }
         if (values.isEmpty()) {
             null
         } else {
             "$name · " + values.entries.joinToString(" · ") { (label, durations) ->
-                "$label ${durations.joinToString(" / ")}"
+                if (label == "Load") durations.joinToString(" / ") else "$label ${durations.joinToString(" / ")}"
             }
         }
     }
+
+private fun formatHistoryWeight(value: Double): String =
+    formatBodyweight(value).trimEnd('0').trimEnd('.')

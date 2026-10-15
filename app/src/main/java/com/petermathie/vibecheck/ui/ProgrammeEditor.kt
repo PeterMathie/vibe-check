@@ -536,7 +536,10 @@ internal fun ProgrammePrescriptionDialog(
                 if (tracksDuration) {
                     EditField("Target seconds", holdSeconds) { holdSeconds = it }
                 }
-                EditField("Target RPE", rpe) { rpe = it }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    EditField("Target RPE", rpe, Modifier.weight(1f)) { rpe = it }
+                    RpeInfoButton("Explain target RPE")
+                }
                 EditField("Rest seconds", rest) { rest = it }
             }
         },

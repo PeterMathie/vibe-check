@@ -71,6 +71,22 @@ class ExerciseEditorUiTest {
     }
 
     @Test
+    fun plancheSettingsUseTotalTimeTerminologyOnly() {
+        val planche = ExerciseEntity(
+            "core:planche", "Planche", "STRENGTH", "SKILL_HOLD", null, null, "vibe-trainer", false,
+        )
+        compose.setContent {
+            VibeCheckTheme {
+                ExerciseSettingsDialog(planche, onDismiss = {}, onSave = {})
+            }
+        }
+
+        compose.onNodeWithContentDescription("Total Time (seconds)").assertExists()
+        compose.onNodeWithContentDescription("Elapsed Time (seconds)").assertExists()
+        compose.onNodeWithContentDescription("Time Under Tension (seconds)").assertDoesNotExist()
+    }
+
+    @Test
     fun catalogueGroupsMusclesAndExposesVariationSettingsAndVideos() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()

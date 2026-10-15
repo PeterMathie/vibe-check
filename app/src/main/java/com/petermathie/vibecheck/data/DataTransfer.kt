@@ -154,6 +154,45 @@ object DataTransfer {
                         }
                         row.put("variationRankSnapshot", rank ?: JSONObject.NULL)
                     }
+                    if (table == "workout_sets" && !row.has("timeMeasurementsMillis")) {
+                        row.put("timeMeasurementsMillis", "[]")
+                    }
+                    if (table == "workout_entry_drafts" && !row.has("timeMeasurements")) {
+                        row.put("timeMeasurements", "[]")
+                    }
+                    if (
+                        table == "exercises" &&
+                        row.optString("id") == "core:dip" &&
+                        row.optInt("isCustom") == 0 &&
+                        row.optString("inputConfig") in setOf("", "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=false")
+                    ) {
+                        sql.query("SELECT inputConfig FROM exercises WHERE id='core:dip'").use {
+                            if (it.moveToFirst()) row.put("inputConfig", it.getString(0))
+                        }
+                    }
+                    if (
+                        table == "exercise_variations" &&
+                        row.optInt("isSeeded") == 1 &&
+                        row.optString("id") in setOf("handstand-free", "pull-up-bodyweight", "pull-up-weighted")
+                    ) {
+                        val legacyConfig = row.optString("inputConfig")
+                        val recognisedLegacy = when (row.getString("id")) {
+                            "handstand-free" -> legacyConfig ==
+                                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=true;reps=false;bodyweight=false;addedWeight=false"
+                            "pull-up-bodyweight" -> legacyConfig ==
+                                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=false"
+                            else -> legacyConfig ==
+                                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=true"
+                        }
+                        if (recognisedLegacy) {
+                            sql.query(
+                                "SELECT inputConfig FROM exercise_variations WHERE id=?",
+                                arrayOf(row.getString("id")),
+                            ).use {
+                                if (it.moveToFirst()) row.put("inputConfig", it.getString(0))
+                            }
+                        }
+                    }
                     if (table == "workout_sets" && !row.has("legacyReps")) {
                         fun legacyCount(name: String): Any {
                             if (row.isNull(name)) return JSONObject.NULL

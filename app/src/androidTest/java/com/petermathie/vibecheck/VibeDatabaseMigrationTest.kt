@@ -17,6 +17,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_12_13
 import com.petermathie.vibecheck.data.local.MIGRATION_13_14
 import com.petermathie.vibecheck.data.local.MIGRATION_14_15
 import com.petermathie.vibecheck.data.local.MIGRATION_15_16
+import com.petermathie.vibecheck.data.local.MIGRATION_16_17
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -33,6 +34,54 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate16To17AddsBackwardCompatibleRepeatedTimeColumns() {
+        helper.createDatabase(databaseName, 16).apply {
+            execSQL(
+                """
+                INSERT INTO exercises
+                    (id,canonicalName,tag,trackingType,equipment,instructions,source,isCustom,isArchived,inputConfig,
+                     targetSets,targetRepsMin,targetRepsMax,targetRpe,restSeconds)
+                VALUES ('e','Handstand','STRENGTH','SKILL_HOLD',NULL,NULL,'USER',1,0,'',
+                        3,NULL,NULL,NULL,60)
+                """.trimIndent(),
+            )
+            execSQL(
+                "INSERT INTO workouts (id,programmeDayId,name,mode,status,startedAt,finishedAt,notes,bodyweightKg,isDemo) VALUES ('w',NULL,'Workout','STRENGTH','DRAFT',1,NULL,'',NULL,0)",
+            )
+            execSQL(
+                """
+                INSERT INTO workout_exercises
+                    (id,workoutId,plannedExerciseId,actualExerciseId,position,notes,restSeconds,supersetGroup,
+                     exerciseName,trackingType,targets,inputConfig,targetSets,targetRepsMin,targetRepsMax,
+                     targetHoldSeconds,targetRpe)
+                VALUES ('we','w','e','e',0,'',60,NULL,'Handstand','SKILL_HOLD','','',3,NULL,NULL,NULL,NULL)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO workout_sets
+                    (id,workoutExerciseId,ordinal,setType,result,variationId,weightKg,reps,holdMillis,leftReps,
+                     rightReps,leftHoldMillis,rightHoldMillis,addedWeightKg,assistanceKg,rpe,romValue,romUnit,
+                     notes,loggedAt,updatedAt,variationRankSnapshot,timeUnderTensionMillis,bandResistance,
+                     variationNameSnapshot,variationTrackingTypeSnapshot,variationInputConfigSnapshot,
+                     legacyReps,legacyLeftReps,legacyRightReps)
+                VALUES ('s','we',1,'WORKING','COMPLETED',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,
+                        NULL,NULL,'',1,1,NULL,12000,0,'','','',NULL,NULL,NULL)
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        helper.runMigrationsAndValidate(databaseName, 17, true, MIGRATION_16_17).use { migrated ->
+            migrated.query("SELECT timeUnderTensionMillis,timeMeasurementsMillis FROM workout_sets WHERE id='s'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(12_000L, it.getLong(0))
+                assertEquals("[]", it.getString(1))
+            }
+        }
+    }
 
     @Test
     fun migrate15To16RepairsNamesNotesAndFrontSplitWithoutReplacingRows() {

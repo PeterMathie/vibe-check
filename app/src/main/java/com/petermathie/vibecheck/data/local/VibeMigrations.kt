@@ -591,6 +591,7 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
                     val sanitized = sanitizeExerciseNotes(original)
                     if (sanitized != original) updates += cursor.getString(0) to sanitized
                 }
+
             }
             updates.forEach { (id, notes) ->
                 db.execSQL("UPDATE $table SET notes=? WHERE id=?", arrayOf(notes, id))
@@ -619,6 +620,17 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
               AND workoutId IN (SELECT id FROM workouts WHERE status='DRAFT')
             """.trimIndent(),
             arrayOf(FRONT_SPLIT_HOLD_INPUT_CONFIG),
+        )
+    }
+}
+
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "ALTER TABLE workout_sets ADD COLUMN timeMeasurementsMillis TEXT NOT NULL DEFAULT '[]'",
+        )
+        db.execSQL(
+            "ALTER TABLE workout_entry_drafts ADD COLUMN timeMeasurements TEXT NOT NULL DEFAULT '[]'",
         )
     }
 }

@@ -252,6 +252,7 @@ interface WorkoutDao {
           AND ws.setType = 'WORKING'
           AND ws.result = 'COMPLETED'
           AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
+            OR COALESCE(ws.timeUnderTensionMillis, 0) > 0
             OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
             OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0
             OR COALESCE(ws.romValue, 0) > 0)
@@ -268,6 +269,7 @@ interface WorkoutDao {
           AND ws.setType = 'WORKING'
           AND ws.result = 'COMPLETED'
           AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
+            OR COALESCE(ws.timeUnderTensionMillis, 0) > 0
             OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
             OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0)
         ORDER BY wm.muscleId
@@ -300,6 +302,7 @@ interface WorkoutDao {
           AND ws.result = 'COMPLETED'
           AND ws.romValue IS NULL
           AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
+            OR COALESCE(ws.timeUnderTensionMillis, 0) > 0
             OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
             OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0)
         ORDER BY w.finishedAt DESC

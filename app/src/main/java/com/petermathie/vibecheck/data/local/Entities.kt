@@ -299,6 +299,7 @@ data class WorkoutSetEntity(
     val legacyReps: Int? = null,
     val legacyLeftReps: Int? = null,
     val legacyRightReps: Int? = null,
+    @androidx.room.ColumnInfo(defaultValue = "'[]'") val timeMeasurementsMillis: String = "[]",
 )
 
 @Entity(
@@ -359,6 +360,7 @@ data class WorkoutEntryDraftEntity(
     val updatedAt: Long,
     @androidx.room.ColumnInfo(defaultValue = "''") val timeHeld: String = "",
     @androidx.room.ColumnInfo(defaultValue = "''") val timeUnderTension: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "'[]'") val timeMeasurements: String = "[]",
 )
 
 @Entity(tableName = "trackers", primaryKeys = ["id"])
