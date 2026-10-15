@@ -8,6 +8,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.petermathie.vibecheck.data.DataTransfer
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
+import com.petermathie.vibecheck.domain.workout.encodeTimeMeasurementsMillis
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -89,6 +90,7 @@ class ImportValidationTest {
             updatedAt = 123456L,
             timeHeld = "15",
             timeUnderTension = "9",
+            timeMeasurements = "[\"8\",\"10\"]",
         )
         db.editorDao().entryDraft(draft)
         val backup = DataTransfer.export(db)
@@ -97,6 +99,84 @@ class ImportValidationTest {
         DataTransfer.import(db, backup)
 
         assertEquals(draft, db.editorDao().entryDraft(workoutExerciseId))
+    }
+
+    @Test
+    fun repeatedTimesRoundTripAndMustMatchTheirTotal() = runBlocking {
+        val set = fixture("workout_sets")
+            .put("timeUnderTensionMillis", 18_000)
+            .put("timeMeasurementsMillis", encodeTimeMeasurementsMillis(listOf(8_000, 10_000)))
+
+        DataTransfer.import(db, document(rows("workout_sets", set)))
+        val roundTripped = JSONObject(DataTransfer.export(db))
+            .getJSONObject("tables")
+            .getJSONArray("workout_sets")
+        assertTrue(
+            (0 until roundTripped.length()).map(roundTripped::getJSONObject).any {
+                it.getString("id") == set.getString("id") &&
+                    it.getString("timeMeasurementsMillis") == "[8000,10000]"
+            },
+        )
+
+        rejected(
+            rows(
+                "workout_sets",
+                JSONObject(set.toString()).put("timeUnderTensionMillis", 17_000),
+            ),
+            "equal total time",
+        )
+    }
+
+    @Test
+    fun version16BackupRowsGainEmptyRepeatedTimeFields() = runBlocking {
+        val workoutExerciseId = fixture("workout_exercises").getString("id")
+        db.editorDao().entryDraft(
+            WorkoutEntryDraftEntity(
+                workoutExerciseId = workoutExerciseId,
+                setId = "legacy-draft-set",
+                ordinal = 4,
+                performance = "",
+                rpe = "7",
+                detailsOpen = false,
+                warmUp = false,
+                failed = false,
+                bandIds = "[]",
+                variationId = null,
+                leftValue = "",
+                rightValue = "",
+                addedWeight = "",
+                assistance = "",
+                romValue = "",
+                romUnit = "cm",
+                updatedAt = 1,
+            ),
+        )
+        val currentTables = JSONObject(DataTransfer.export(db)).getJSONObject("tables")
+        val legacySet = fixture("workout_sets").apply { remove("timeMeasurementsMillis") }
+        val legacyDraft = JSONObject(
+            currentTables.getJSONArray("workout_entry_drafts").getJSONObject(0).toString(),
+        ).apply { remove("timeMeasurements") }
+
+        DataTransfer.import(
+            db,
+            document(
+                JSONObject()
+                    .put("workout_sets", JSONArray().put(legacySet))
+                    .put("workout_entry_drafts", JSONArray().put(legacyDraft)),
+            ),
+        )
+
+        val backup = JSONObject(DataTransfer.export(db)).getJSONObject("tables")
+        val setRows = backup.getJSONArray("workout_sets")
+        val draftRows = backup.getJSONArray("workout_entry_drafts")
+        assertTrue((0 until setRows.length()).map(setRows::getJSONObject).any {
+            it.getString("id") == legacySet.getString("id") &&
+                it.getString("timeMeasurementsMillis") == "[]"
+        })
+        assertTrue((0 until draftRows.length()).map(draftRows::getJSONObject).any {
+            it.getString("setId") == legacyDraft.getString("setId") &&
+                it.getString("timeMeasurements") == "[]"
+        })
     }
 
     /** A valid insert comes first, proving later validation errors undo earlier writes. */

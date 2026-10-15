@@ -34,11 +34,11 @@ object SessionProgress {
         }
     }
 
-    fun valid(s: WorkoutSetEntity): Boolean = s.setType == "WORKING" && s.result == "COMPLETED" && s.romValue == null && ((s.reps ?: 0.0)>0.0 || (s.holdMillis ?: 0)>0 || (s.leftReps ?: 0.0)>0.0 || (s.rightReps ?: 0.0)>0.0 || (s.leftHoldMillis ?: 0)>0 || (s.rightHoldMillis ?: 0)>0)
+    fun valid(s: WorkoutSetEntity): Boolean = s.setType == "WORKING" && s.result == "COMPLETED" && s.romValue == null && ((s.reps ?: 0.0)>0.0 || (s.holdMillis ?: 0)>0 || (s.timeUnderTensionMillis ?: 0)>0 || (s.leftReps ?: 0.0)>0.0 || (s.rightReps ?: 0.0)>0.0 || (s.leftHoldMillis ?: 0)>0 || (s.rightHoldMillis ?: 0)>0)
     fun score(s: WorkoutSetEntity, bodyweight: Double?, width: Double, trackingType: String? = null): Double? {
         if(!valid(s)) return null
         val reps = s.reps ?: listOfNotNull(s.leftReps,s.rightReps).minOrNull() ?: 0.0
-        val hold = s.holdMillis ?: listOfNotNull(s.leftHoldMillis,s.rightHoldMillis).minOrNull()
+        val hold = s.holdMillis ?: s.timeUnderTensionMillis ?: listOfNotNull(s.leftHoldMillis,s.rightHoldMillis).minOrNull()
         if(hold != null && hold>0) return ProgressScorer.assistedHold(hold,width)
         if(width>0 || trackingType=="ASSISTED_REPS") {
             val loadRatio=if(bodyweight!=null && bodyweight>0) ((bodyweight+(s.addedWeightKg ?: 0.0)-(s.assistanceKg ?: 0.0))/bodyweight).coerceAtLeast(0.0) else 1.0
@@ -77,7 +77,7 @@ object SessionProgress {
 
     fun records(sets: List<WorkoutSetEntity>, points: List<ProgressPoint>) = PersonalRecords(
         weightKg = sets.mapNotNull { it.weightKg }.maxOrNull(),
-        holdMillis = sets.flatMap { listOfNotNull(it.holdMillis, it.leftHoldMillis, it.rightHoldMillis) }.maxOrNull(),
+        holdMillis = sets.flatMap { listOfNotNull(it.holdMillis, it.timeUnderTensionMillis, it.leftHoldMillis, it.rightHoldMillis) }.maxOrNull(),
         estimatedOneRepMaxKg = sets.filter { it.weightKg != null && it.reps != null }
             .maxOfOrNull { it.weightKg!! * (1 + it.reps!! / 30.0) },
         scoredPerformance = points.maxByOrNull { it.score },

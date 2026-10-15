@@ -5,6 +5,7 @@ import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.workoutTimingSummaries
+import com.petermathie.vibecheck.domain.workout.encodeTimeMeasurementsMillis
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -47,6 +48,84 @@ class WorkoutHistoryTimingSummaryTest {
         assertEquals(
             emptyList<String>(),
             workoutTimingSummaries("other", listOf(row), listOf(exercise), listOf(timed)),
+        )
+    }
+
+    @Test
+    fun repeatedHandstandTimesAndWeightedBodyweightStayExplicit() {
+        val handstand = ExerciseEntity(
+            "handstand", "Handstand", "STRENGTH", "SKILL_HOLD", null, null, "test", false,
+        )
+        val pullUp = ExerciseEntity(
+            "pull-up", "Pull-up", "STRENGTH", "BODYWEIGHT_REPS", null, null, "test", false,
+        )
+        val handstandRow = WorkoutExerciseEntity(
+            "handstand-row", "workout", handstand.id, handstand.id, 0, "", 60, null,
+            handstand.canonicalName, handstand.trackingType, "",
+            ExerciseInputConfig(
+                timeUnderTension = true,
+                repeatedTimeMeasurements = true,
+            ).encode(),
+        )
+        val pullUpRow = WorkoutExerciseEntity(
+            "pull-up-row", "workout", pullUp.id, pullUp.id, 1, "", 60, null,
+            pullUp.canonicalName, pullUp.trackingType, "",
+            ExerciseInputConfig(reps = true, bodyweight = true, addedWeight = true).encode(),
+        )
+        val attempts = emptySet(handstandRow.id, 1).copy(
+            timeUnderTensionMillis = 18_000,
+            timeMeasurementsMillis = encodeTimeMeasurementsMillis(listOf(8_000, 10_000)),
+        )
+        val weighted = emptySet(pullUpRow.id, 1).copy(reps = 5.0, addedWeightKg = 10.0)
+
+        assertEquals(
+            listOf(
+                "Handstand · Times 8s / 10s · Total 18s",
+                "Pull-up · Bodyweight 80kg + 10kg added × 5 reps",
+            ),
+            workoutTimingSummaries(
+                "workout",
+                listOf(handstandRow, pullUpRow),
+                listOf(handstand, pullUp),
+                listOf(attempts, weighted),
+                bodyweightKg = 80.0,
+            ),
+        )
+        assertEquals(
+            listOf(
+                "Handstand · Times 8s / 10s · Total 18s",
+                "Pull-up · Bodyweight 176.37lb + 22.05lb added × 5 reps",
+            ),
+            workoutTimingSummaries(
+                "workout",
+                listOf(handstandRow, pullUpRow),
+                listOf(handstand, pullUp),
+                listOf(attempts, weighted),
+                bodyweightKg = 80.0,
+                weightUnit = "lb",
+            ),
+        )
+    }
+
+    @Test
+    fun plancheUsesTotalTimeWithoutRenamingOtherHolds() {
+        val planche = ExerciseEntity(
+            "core:planche", "Planche", "STRENGTH", "SKILL_HOLD", null, null, "test", false,
+        )
+        val row = WorkoutExerciseEntity(
+            "row", "workout", planche.id, planche.id, 0, "", 60, null,
+            planche.canonicalName, planche.trackingType, "",
+            ExerciseInputConfig(timeHeld = true).encode(),
+        )
+
+        assertEquals(
+            listOf("Planche · Total Time 12s"),
+            workoutTimingSummaries(
+                "workout",
+                listOf(row),
+                listOf(planche),
+                listOf(emptySet(row.id, 1).copy(holdMillis = 12_000)),
+            ),
         )
     }
 

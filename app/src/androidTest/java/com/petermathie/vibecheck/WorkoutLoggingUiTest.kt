@@ -32,6 +32,7 @@ import com.petermathie.vibecheck.ui.WorkoutEditor
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.workout.decodeTimeMeasurementsMillis
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -226,13 +227,14 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("Wall handstand").performClick()
         compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("15")
+        compose.onNodeWithContentDescription("Freestanding handstand time 1 for set 1").performTextInput("15")
 
         compose.waitUntil(15_000) {
             runBlocking {
                 database.editorDao().sets().first().singleOrNull {
                     it.variationId == "handstand-free" &&
                         it.timeUnderTensionMillis == 15_000L &&
+                        decodeTimeMeasurementsMillis(it.timeMeasurementsMillis) == listOf(15_000L) &&
                         it.variationNameSnapshot == "Freestanding handstand" &&
                         it.variationInputConfigSnapshot.contains("timeHeld=false")
                 } != null
@@ -242,6 +244,105 @@ class WorkoutLoggingUiTest {
             1,
             runBlocking { database.editorDao().sets().first().count { it.variationId == "handstand-free" } },
         )
+    }
+
+    @Test
+    fun freestandingHandstandStoresMultipleTimesAndRpeHelpKeepsDraft() {
+                val context = ApplicationProvider.getApplicationContext<Context>()
+                context.getSharedPreferences("settings", 0).edit()
+                    .putBoolean("showExerciseVariations", true)
+                    .commit()
+                database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+                val workoutId = startPushWorkout(context)
+                val viewModel = lifecycle.own(EditorViewModel(database))
+                compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+                compose.waitUntil(15_000) {
+                    compose.onAllNodesWithContentDescription("Variation for Handstand set 1: Wall handstand")
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").performClick()
+                compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
+                compose.onNodeWithContentDescription("Freestanding handstand time 1 for set 1").performTextInput("8")
+                compose.onNodeWithText("Add time measurement").performClick()
+                compose.onNodeWithContentDescription("Freestanding handstand time 2 for set 1").performTextInput("10")
+                compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
+                compose.onNodeWithContentDescription("Explain RPE for Handstand set 1").performClick()
+                compose.onNodeWithText("Rate of perceived exertion").assertIsDisplayed()
+                compose.onNodeWithText("Got it").performClick()
+                compose.onNodeWithContentDescription("RPE for Handstand set 1").assertTextContains("8")
+                compose.onNodeWithText("Total Time: 18s").assertIsDisplayed()
+
+                val handstandId = runBlocking {
+                    database.editorDao().workoutExercises().first()
+                        .first { it.workoutId == workoutId && it.actualExerciseId == "core:handstand" }.id
+                }
+                compose.waitUntil(15_000) {
+                    runBlocking {
+                        database.editorDao().sets().first().any {
+                            it.workoutExerciseId == handstandId &&
+                                it.timeUnderTensionMillis == 18_000L &&
+                                decodeTimeMeasurementsMillis(it.timeMeasurementsMillis) == listOf(8_000L, 10_000L) &&
+                                it.rpe == 8.0
+                        }
+                    }
+                }
+                assertEquals(1, runBlocking { database.workoutDao().qualifyingSetCount(workoutId) })
+    }
+
+    @Test
+    fun poundBasedWeightedDipKeepsRepsAndAddedLoadWhenRpeChanges() {
+                val context = ApplicationProvider.getApplicationContext<Context>()
+                context.getSharedPreferences("settings", 0).edit().putBoolean("lb", true).commit()
+                database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+                val workoutId = startPushWorkout(context)
+                val dipId = runBlocking {
+                    val workout = database.editorDao().workouts().first().first { it.id == workoutId }
+                    database.editorDao().workout(workout.copy(bodyweightKg = 80.0))
+                    val dip = database.editorDao().workoutExercises().first()
+                        .first { it.workoutId == workoutId && it.actualExerciseId == "core:dip" }
+                    database.editorDao().set(
+                        emptySet(dip.id, 1).copy(reps = 5.0, addedWeightKg = 10.0),
+                    )
+                    dip.id
+                }
+                val viewModel = lifecycle.own(EditorViewModel(database))
+                compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+                compose.onAllNodes(hasScrollAction())[0]
+                    .performScrollToNode(hasContentDescription("Set 1 for Dip"))
+                compose.onAllNodesWithText("Bodyweight: 176.37 lb")[0].assertIsDisplayed()
+                compose.onNodeWithContentDescription("Reps for Dip set 1").assertTextContains("5")
+                compose.onNodeWithContentDescription("Added weight for Dip set 1").assertTextContains("22.05")
+                compose.onNodeWithContentDescription("RPE for Dip set 1").performTextInput("8")
+
+                compose.waitUntil(15_000) {
+                    runBlocking {
+                        database.editorDao().sets().first().any {
+                            it.workoutExerciseId == dipId &&
+                                it.reps == 5.0 &&
+                                kotlin.math.abs((it.addedWeightKg ?: 0.0) - 10.0) < 0.001 &&
+                                it.rpe == 8.0
+                        }
+                    }
+                }
+                compose.onNodeWithText("Total load: 198.42 lb").performScrollTo().assertIsDisplayed()
+                context.getSharedPreferences("settings", 0).edit().putBoolean("lb", false).commit()
+    }
+
+    @Test
+    fun plancheLoggingUsesTotalTimeLabel() {
+                val context = ApplicationProvider.getApplicationContext<Context>()
+                database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+                val workoutId = startPushWorkout(context)
+                val viewModel = lifecycle.own(EditorViewModel(database))
+                compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+
+                compose.onAllNodes(hasScrollAction())[0]
+                    .performScrollToNode(hasContentDescription("Set 1 for Planche"))
+                compose.onNodeWithContentDescription("Total Time for Planche set 1")
+                    .assertTextContains("Total Time (s)")
+                compose.onNodeWithContentDescription("Time Under Tension for Planche set 1").assertDoesNotExist()
     }
 
     @Test

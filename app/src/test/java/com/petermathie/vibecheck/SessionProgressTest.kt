@@ -17,6 +17,11 @@ class SessionProgressTest {
         val set=emptySet("e",1).copy(holdMillis=10000)
         assertTrue(SessionProgress.score(set,null,0.6)!! > SessionProgress.score(set,null,3.7)!!)
     }
+    @Test fun totalTimeOnlySetQualifiesForCompletionAndProgress(){
+        val set=emptySet("e",1).copy(timeUnderTensionMillis=18_000)
+        assertTrue(SessionProgress.valid(set))
+        assertEquals(18.0, SessionProgress.score(set,null,0.0)!!, 0.00001)
+    }
     @Test fun compactWeightedEntryConvertsPounds(){
         val set=parsePerformance(emptySet("e",1),"220.46226218 x 5",false,true,true)!!
         assertEquals(100.0,set.weightKg!!,0.00001)

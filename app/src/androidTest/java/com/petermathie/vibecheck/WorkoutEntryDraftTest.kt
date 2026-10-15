@@ -70,6 +70,7 @@ class WorkoutEntryDraftTest {
             leftValue = "6",
             timeHeld = "12",
             timeUnderTension = "30",
+            timeMeasurements = "[\"8\",\"10\"]",
         )
         database.editorDao().entryDraft(draft)
 
@@ -209,6 +210,8 @@ class WorkoutEntryDraftTest {
                 com.petermathie.vibecheck.data.local.MIGRATION_12_13,
                 com.petermathie.vibecheck.data.local.MIGRATION_13_14,
                 com.petermathie.vibecheck.data.local.MIGRATION_14_15,
+                com.petermathie.vibecheck.data.local.MIGRATION_15_16,
+                com.petermathie.vibecheck.data.local.MIGRATION_16_17,
             )
             .build()
         repository = TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context)

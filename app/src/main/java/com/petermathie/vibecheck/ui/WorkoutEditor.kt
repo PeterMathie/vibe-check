@@ -39,6 +39,11 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.workout.formatQuantitative
 import com.petermathie.vibecheck.domain.workout.hasInvalidQuantitativeInput
 import com.petermathie.vibecheck.domain.workout.quantitativeInput
+import com.petermathie.vibecheck.domain.workout.decodeTimeMeasurementInputs
+import com.petermathie.vibecheck.domain.workout.decodeTimeMeasurementsMillis
+import com.petermathie.vibecheck.domain.workout.encodeTimeMeasurementInputs
+import com.petermathie.vibecheck.domain.workout.encodeTimeMeasurementsMillis
+import com.petermathie.vibecheck.domain.workout.parseTimeMeasurementsMillis
 import org.json.JSONArray
 import java.time.Instant
 import java.time.ZoneId
@@ -59,6 +64,9 @@ internal fun entryDraftIsEmpty(
         reps.takeIf { inputConfig.reps },
         draft.timeHeld.takeIf { inputConfig.timeHeld },
         draft.timeUnderTension.takeIf { inputConfig.timeUnderTension },
+        draft.timeMeasurements.takeIf {
+            inputConfig.repeatedTimeMeasurements && decodeTimeMeasurementInputs(it).any(String::isNotBlank)
+        },
         draft.addedWeight.takeIf { inputConfig.addedWeight },
         draft.bandIds.takeIf { inputConfig.bandResistance && it != "[]" },
         draft.rpe.takeIf { it.isNotBlank() },
@@ -258,6 +266,7 @@ fun WorkoutEditor(
                         exercise,
                         sets.filter { it.workoutExerciseId == row.id },
                         previous,
+                        workout.bodyweightKg,
                         showExerciseVariations,
                         autoFocusNextEmptySet = workout.status != "FINISHED" && row.id == rows.firstOrNull()?.id,
                         onInputValidityChanged = { validEntryRows[row.id] = it },
@@ -273,6 +282,7 @@ fun WorkoutEditor(
                 set.result == "COMPLETED" && listOf(
                     set.reps,
                     set.holdMillis?.toDouble(),
+                    set.timeUnderTensionMillis?.toDouble(),
                     set.leftReps?.toDouble(),
                     set.rightReps?.toDouble(),
                     set.leftHoldMillis?.toDouble(),
@@ -399,6 +409,7 @@ private fun WorkoutExerciseCard(
     exercise: ExerciseEntity?,
     sets: List<WorkoutSetEntity>,
     previous: List<WorkoutSetEntity>,
+    bodyweightKg: Double?,
     showExerciseVariations: Boolean,
     autoFocusNextEmptySet: Boolean,
     onInputValidityChanged: (Boolean) -> Unit,
@@ -444,8 +455,8 @@ private fun WorkoutExerciseCard(
             val config = configFor(set.variationId, set.ordinal)
             drafts[set.ordinal] = draftFromSet(
                 set,
-                config.timeHeld,
-                config.weightUnit,
+                config,
+                preferredWeightUnit,
                 assignments.filter { it.setId == set.id }.sortedBy { it.ordinal }.map { it.bandId },
             )
         }
@@ -491,7 +502,11 @@ private fun WorkoutExerciseCard(
             if (inputConfig.timeHeld) add(draft.timeHeld.ifBlank {
                 if (!inputConfig.reps && inputConfig.weightUnit == null) draft.performance else ""
             })
-            if (inputConfig.timeUnderTension) add(draft.timeUnderTension)
+            if (inputConfig.repeatedTimeMeasurements) {
+                addAll(decodeTimeMeasurementInputs(draft.timeMeasurements))
+            } else if (inputConfig.timeUnderTension) {
+                add(draft.timeUnderTension)
+            }
             if (inputConfig.addedWeight) add(draft.addedWeight)
         }
         if (values.any { it.isNotEmpty() && !quantitativeInput(it).isValid }) {
@@ -508,6 +523,23 @@ private fun WorkoutExerciseCard(
         val (resistance, reps) = performanceParts(pending)
         val base = sets.find { it.ordinal == pending.ordinal }
             ?: emptySet(row.id, pending.ordinal).copy(id = pending.setId)
+        val repeatedTimes = if (inputConfig.repeatedTimeMeasurements) {
+            parseTimeMeasurementsMillis(pending.timeMeasurements) ?: return null
+        } else {
+            emptyList()
+        }
+        val addedWeight = quantitativeInput(pending.addedWeight).value?.let { displayValue ->
+            val restoredDisplay = base.addedWeightKg?.let {
+                if (preferredWeightUnit == "lb") it * 2.2046226218 else it
+            }?.let(::formatWorkoutWeight)
+            if (restoredDisplay == pending.addedWeight) {
+                base.addedWeightKg
+            } else if (preferredWeightUnit == "lb") {
+                displayValue / 2.2046226218
+            } else {
+                displayValue
+            }
+        }
         val parsed = base.copy(
             weightKg = quantitativeInput(resistance).value?.let {
                 if (inputConfig.weightUnit == "lb") it / 2.2046226218 else it
@@ -515,11 +547,14 @@ private fun WorkoutExerciseCard(
             reps = quantitativeInput(reps).value,
             variationId = pending.variationId,
             holdMillis = quantitativeInput(pending.timeHeld).value?.times(1000)?.toLong(),
-            timeUnderTensionMillis = quantitativeInput(pending.timeUnderTension).value?.times(1000)?.toLong(),
-            bandResistance = inputConfig.bandResistance,
-            addedWeightKg = quantitativeInput(pending.addedWeight).value?.let {
-                if (preferredWeightUnit == "lb") it / 2.2046226218 else it
+            timeUnderTensionMillis = if (inputConfig.repeatedTimeMeasurements) {
+                repeatedTimes.takeIf(List<Long>::isNotEmpty)?.sum()
+            } else {
+                quantitativeInput(pending.timeUnderTension).value?.times(1000)?.toLong()
             },
+            timeMeasurementsMillis = encodeTimeMeasurementsMillis(repeatedTimes),
+            bandResistance = inputConfig.bandResistance,
+            addedWeightKg = addedWeight,
             rpe = quantitativeInput(pending.rpe, 10.0).value,
             updatedAt = System.currentTimeMillis(),
         )
@@ -548,6 +583,23 @@ private fun WorkoutExerciseCard(
             if (resistance.isBlank() && result.isBlank()) "" else "$resistance x $result"
         } else result
         updateDraft(draftAt(ordinal).copy(performance = performance, updatedAt = System.currentTimeMillis()))
+    }
+    fun repeatedTimeInputs(draft: WorkoutEntryDraftEntity): List<String> {
+        val values = decodeTimeMeasurementInputs(draft.timeMeasurements)
+        return values.ifEmpty {
+            listOf(draft.timeUnderTension.takeIf(String::isNotBlank).orEmpty())
+        }
+    }
+    fun updateRepeatedTime(ordinal: Int, index: Int, value: String) {
+        val draft = draftAt(ordinal)
+        val values = repeatedTimeInputs(draft).toMutableList()
+        values[index] = value
+        updateDraft(
+            draft.copy(
+                timeMeasurements = encodeTimeMeasurementInputs(values),
+                updatedAt = System.currentTimeMillis(),
+            ),
+        )
     }
     SideEffect {
         onInputValidityChanged(drafts.values.none { inputError(it) != null })
@@ -580,11 +632,16 @@ private fun WorkoutExerciseCard(
             val focusWeight = weighted
             val focusReps = !focusWeight && inputConfig.reps
             val focusHeld = !focusWeight && !focusReps && inputConfig.timeHeld
-            val focusTotal = !focusWeight && !focusReps && !focusHeld && inputConfig.timeUnderTension
-            val focusAdded = !focusWeight && !focusReps && !focusHeld && !focusTotal && inputConfig.addedWeight
-            val focusBand = !focusWeight && !focusReps && !focusHeld && !focusTotal && !focusAdded &&
+            val focusRepeated = !focusWeight && !focusReps && !focusHeld &&
+                inputConfig.repeatedTimeMeasurements
+            val focusTotal = !focusWeight && !focusReps && !focusHeld && !focusRepeated &&
+                inputConfig.timeUnderTension
+            val focusAdded = !focusWeight && !focusReps && !focusHeld && !focusRepeated && !focusTotal &&
+                inputConfig.addedWeight
+            val focusBand = !focusWeight && !focusReps && !focusHeld && !focusRepeated && !focusTotal && !focusAdded &&
                 inputConfig.bandResistance
-            val focusRpe = !focusWeight && !focusReps && !focusHeld && !focusTotal && !focusAdded && !focusBand
+            val focusRpe = !focusWeight && !focusReps && !focusHeld && !focusRepeated && !focusTotal &&
+                !focusAdded && !focusBand
             VibeSurface(
                 level = if (ordinal == nextEmptyOrdinal) VibeSurfaceLevel.SELECTED else VibeSurfaceLevel.INSET,
                 state = if (ordinal == nextEmptyOrdinal) {
@@ -678,7 +735,10 @@ private fun WorkoutExerciseCard(
                     }
                 }
                 if (inputConfig.bodyweight) {
-                    Text("Bodyweight: tracked from workout", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "Bodyweight: ${bodyweightKg?.let { "${formatWorkoutWeight(if (preferredWeightUnit == "lb") it * 2.2046226218 else it)} $preferredWeightUnit" } ?: "not recorded for workout"}",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -725,8 +785,18 @@ private fun WorkoutExerciseCard(
                         onValueChange = {
                             updateDraft(draft.copy(timeHeld = it, performance = "", updatedAt = System.currentTimeMillis()))
                         },
-                        label = "TUT (s)",
-                        description = "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                        label = if (
+                            row.actualExerciseId == "core:planche" ||
+                            exercise?.canonicalName.equals("Planche", ignoreCase = true)
+                        ) "Total Time (s)" else "TUT (s)",
+                        description = if (
+                            row.actualExerciseId == "core:planche" ||
+                            exercise?.canonicalName.equals("Planche", ignoreCase = true)
+                        ) {
+                            "Total Time for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                        } else {
+                            "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                        },
                         modifier = Modifier
                             .width(96.dp)
                             .weight(1f)
@@ -738,7 +808,7 @@ private fun WorkoutExerciseCard(
                                 },
                             ),
                     )
-                    if (inputConfig.timeUnderTension) QuantitativeTextField(
+                    if (inputConfig.timeUnderTension && !inputConfig.repeatedTimeMeasurements) QuantitativeTextField(
                         value = draft.timeUnderTension,
                         onValueChange = {
                             updateDraft(draft.copy(timeUnderTension = it, updatedAt = System.currentTimeMillis()))
@@ -773,6 +843,11 @@ private fun WorkoutExerciseCard(
                         label = "RPE",
                         description = "RPE for ${exercise?.canonicalName.orEmpty()} set $ordinal",
                         maximum = 10.0,
+                        trailingIcon = {
+                            RpeInfoButton(
+                                "Explain RPE for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                            )
+                        },
                         modifier = Modifier
                             .width(76.dp)
                             .weight(1f)
@@ -784,6 +859,75 @@ private fun WorkoutExerciseCard(
                                 },
                             ),
                     )
+                }
+                if (inputConfig.repeatedTimeMeasurements) {
+                    val measurements = repeatedTimeInputs(draft)
+                    measurements.forEachIndexed { measurementIndex, value ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            QuantitativeTextField(
+                                value = value,
+                                onValueChange = { updateRepeatedTime(ordinal, measurementIndex, it) },
+                                label = "Time ${measurementIndex + 1} (s)",
+                                description = "Freestanding handstand time ${measurementIndex + 1} for set $ordinal",
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .then(
+                                        if (
+                                            ordinal == nextEmptyOrdinal &&
+                                            focusRepeated &&
+                                            measurementIndex == 0
+                                        ) {
+                                            Modifier.focusRequester(entryFocusRequester)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            )
+                            if (measurements.size > 1) {
+                                IconButton(
+                                    onClick = {
+                                        val updated = measurements.toMutableList().also {
+                                            it.removeAt(measurementIndex)
+                                        }
+                                        updateDraft(
+                                            draft.copy(
+                                                timeMeasurements = encodeTimeMeasurementInputs(updated),
+                                                updatedAt = System.currentTimeMillis(),
+                                            ),
+                                        )
+                                    },
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = "Remove handstand time ${measurementIndex + 1} from set $ordinal",
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    val total = measurements.mapNotNull { quantitativeInput(it).value }.sum()
+                    if (total > 0) {
+                        Text(
+                            "Total Time: ${formatQuantitative(total)}s",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            updateDraft(
+                                draft.copy(
+                                    timeMeasurements = encodeTimeMeasurementInputs(measurements + ""),
+                                    updatedAt = System.currentTimeMillis(),
+                                ),
+                            )
+                        },
+                    ) {
+                        Icon(Icons.Outlined.Add, contentDescription = null)
+                        Text("Add time measurement")
+                    }
                 }
                 if (inputConfig.addedWeight) QuantitativeTextField(
                     value = draft.addedWeight,
@@ -800,6 +944,17 @@ private fun WorkoutExerciseCard(
                             },
                         ),
                 )
+                if (inputConfig.bodyweight && inputConfig.addedWeight) {
+                    val added = quantitativeInput(draft.addedWeight).value
+                    if (bodyweightKg != null && added != null) {
+                        val addedKg = if (preferredWeightUnit == "lb") added / 2.2046226218 else added
+                        val totalKg = bodyweightKg + addedKg
+                        Text(
+                            "Total load: ${formatWorkoutWeight(if (preferredWeightUnit == "lb") totalKg * 2.2046226218 else totalKg)} $preferredWeightUnit",
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                    }
+                }
                 inputError(draft)?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
@@ -1040,7 +1195,14 @@ private fun StopwatchDialog(initialMillis: Long, onDismiss: () -> Unit, onApply:
     )
 }
 
-private fun draftFromSet(set:WorkoutSetEntity,hold:Boolean,weightUnit:String?,bands:List<String> = emptyList()):WorkoutEntryDraftEntity {
+private fun draftFromSet(
+    set: WorkoutSetEntity,
+    config: ExerciseInputConfig,
+    preferredWeightUnit: String,
+    bands: List<String> = emptyList(),
+): WorkoutEntryDraftEntity {
+    val hold = config.timeHeld
+    val weightUnit = config.weightUnit
     val reps=set.reps ?: listOfNotNull(set.leftReps,set.rightReps).minOrNull()
     val holdMillis=set.holdMillis ?: listOfNotNull(set.leftHoldMillis,set.rightHoldMillis).minOrNull()
     val performance=when {
@@ -1058,12 +1220,27 @@ private fun draftFromSet(set:WorkoutSetEntity,hold:Boolean,weightUnit:String?,ba
         variationId=set.variationId,
         leftValue=(if(hold)set.leftHoldMillis?.div(1000.0) else set.leftReps)?.toString().orEmpty(),
         rightValue=(if(hold)set.rightHoldMillis?.div(1000.0) else set.rightReps)?.toString().orEmpty(),
-        addedWeight=set.addedWeightKg?.toString().orEmpty(),
-        assistance=set.assistanceKg?.toString().orEmpty(),
+        addedWeight=set.addedWeightKg?.let {
+            if (preferredWeightUnit == "lb") it * 2.2046226218 else it
+        }?.let(::formatWorkoutWeight).orEmpty(),
+        assistance=set.assistanceKg?.let {
+            if (preferredWeightUnit == "lb") it * 2.2046226218 else it
+        }?.let(::formatWorkoutWeight).orEmpty(),
         romValue=set.romValue?.toString().orEmpty(),
         romUnit=set.romUnit ?: "cm",
         timeHeld=set.holdMillis?.div(1000.0)?.toString().orEmpty(),
         timeUnderTension=set.timeUnderTensionMillis?.div(1000.0)?.toString().orEmpty(),
+        timeMeasurements = encodeTimeMeasurementInputs(
+            decodeTimeMeasurementsMillis(set.timeMeasurementsMillis).map {
+                formatQuantitative(it / 1000.0)
+            }.ifEmpty {
+                if (config.repeatedTimeMeasurements && set.timeUnderTensionMillis != null) {
+                    listOf(formatQuantitative(set.timeUnderTensionMillis / 1000.0))
+                } else {
+                    emptyList()
+                }
+            },
+        ),
     )
 }
 
@@ -1082,3 +1259,6 @@ private fun bandIds(value: String): List<String> {
 
 private fun encodeBandIds(values: List<String>): String =
     JSONArray().apply { values.forEach { put(it) } }.toString()
+
+private fun formatWorkoutWeight(value: Double): String =
+    formatBodyweight(value).trimEnd('0').trimEnd('.')

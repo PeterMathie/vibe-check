@@ -8,6 +8,7 @@ data class ExerciseInputConfig(
     val reps: Boolean = false,
     val bodyweight: Boolean = false,
     val addedWeight: Boolean = false,
+    val repeatedTimeMeasurements: Boolean = false,
 ) {
     fun encode(): String = listOf(
         "weightUnit=${weightUnit.orEmpty()}",
@@ -17,6 +18,7 @@ data class ExerciseInputConfig(
         "reps=$reps",
         "bodyweight=$bodyweight",
         "addedWeight=$addedWeight",
+        "repeatedTimeMeasurements=$repeatedTimeMeasurements",
     ).joinToString(";")
 
     companion object {
@@ -37,6 +39,8 @@ data class ExerciseInputConfig(
                 reps = fields["reps"]?.toBooleanStrictOrNull() ?: defaults.reps,
                 bodyweight = fields["bodyweight"]?.toBooleanStrictOrNull() ?: defaults.bodyweight,
                 addedWeight = fields["addedWeight"]?.toBooleanStrictOrNull() ?: defaults.addedWeight,
+                repeatedTimeMeasurements = fields["repeatedTimeMeasurements"]?.toBooleanStrictOrNull()
+                    ?: defaults.repeatedTimeMeasurements,
             )
         }
 

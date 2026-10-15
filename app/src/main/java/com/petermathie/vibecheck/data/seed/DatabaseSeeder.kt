@@ -53,6 +53,21 @@ class DatabaseSeeder @Inject constructor(
                     seedCatalogue()
                 } else {
                     database.catalogueDao().insertExerciseMuscles(CURATED_MAPPINGS)
+                    if (catalogueVersion < 3) {
+                        val sql = database.openHelper.writableDatabase
+                        sql.execSQL(
+                            "UPDATE exercises SET inputConfig=? WHERE id='core:dip' AND isCustom=0",
+                            arrayOf(DIP_INPUT_CONFIG),
+                        )
+                        sql.execSQL(
+                            "UPDATE exercise_variations SET inputConfig=? WHERE id='handstand-free' AND isSeeded=1",
+                            arrayOf(FREESTANDING_HANDSTAND_INPUT_CONFIG),
+                        )
+                        sql.execSQL(
+                            "UPDATE exercise_variations SET inputConfig=? WHERE id='pull-up-bodyweight' AND isSeeded=1",
+                            arrayOf(WEIGHTED_BODYWEIGHT_INPUT_CONFIG),
+                        )
+                    }
                 }
                 database.metadataDao().put(SeedMetadataEntity(CATALOGUE_KEY, CATALOGUE_VERSION))
             }
@@ -513,7 +528,7 @@ class DatabaseSeeder @Inject constructor(
 
     companion object {
         private const val CATALOGUE_KEY = "exercise-catalogue"
-        private const val CATALOGUE_VERSION = 2
+        private const val CATALOGUE_VERSION = 3
         private const val CURATED_ONLY_KEY = "curated-exercise-catalogue"
         private const val CURATED_ONLY_VERSION = 1
         private const val DEMO_KEY = "debug-demo"
@@ -522,6 +537,12 @@ class DatabaseSeeder @Inject constructor(
         private const val SCHEDULE_FREE_DEMO_VERSION = 1
         private const val PROGRESS_DEMO_KEY = "progress_demo"
         private const val PROGRESS_DEMO_VERSION = 10
+        private const val DIP_INPUT_CONFIG =
+            "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=true;repeatedTimeMeasurements=false"
+        private const val WEIGHTED_BODYWEIGHT_INPUT_CONFIG =
+            "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=true;repeatedTimeMeasurements=false"
+        private const val FREESTANDING_HANDSTAND_INPUT_CONFIG =
+            "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=true;reps=false;bodyweight=false;addedWeight=false;repeatedTimeMeasurements=true"
         private val MOOD_CHOICES = listOf(
             "Sad",
             "Tired",
@@ -564,6 +585,7 @@ class DatabaseSeeder @Inject constructor(
                 inputConfig = when (id) {
                     "core:handstand" ->
                         "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=true;reps=false"
+                    "core:dip" -> DIP_INPUT_CONFIG
                     "core:front-split" -> FRONT_SPLIT_HOLD_INPUT_CONFIG
                     else -> ""
                 },
@@ -627,7 +649,7 @@ class DatabaseSeeder @Inject constructor(
             ExerciseVariationEntity(
                 "handstand-free", "core:handstand", "Freestanding handstand", 20, true,
                 TrackingType.SKILL_HOLD.name,
-                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=true;reps=false;bodyweight=false;addedWeight=false",
+                FREESTANDING_HANDSTAND_INPUT_CONFIG,
             ),
             ExerciseVariationEntity("planche-tuck", "core:planche", "Tuck planche", 10, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
             ExerciseVariationEntity("planche-advanced-tuck", "core:planche", "Advanced tuck planche", 20, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
@@ -641,12 +663,12 @@ class DatabaseSeeder @Inject constructor(
             ExerciseVariationEntity(
                 "pull-up-bodyweight", "core:pull-up", "Bodyweight pull-up", 20, true,
                 TrackingType.BODYWEIGHT_REPS.name,
-                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=false",
+                WEIGHTED_BODYWEIGHT_INPUT_CONFIG,
             ),
             ExerciseVariationEntity(
                 "pull-up-weighted", "core:pull-up", "Weighted pull-up", 30, true,
                 TrackingType.WEIGHT_REPS.name,
-                "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=false;reps=true;bodyweight=true;addedWeight=true",
+                WEIGHTED_BODYWEIGHT_INPUT_CONFIG,
             ),
         )
 

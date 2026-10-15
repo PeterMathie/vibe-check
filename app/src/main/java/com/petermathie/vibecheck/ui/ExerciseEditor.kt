@@ -342,10 +342,22 @@ internal fun ExerciseSettingsDialog(
                         ExerciseSettingCheckbox("Band resistance", config.bandResistance) {
                             config = config.copy(bandResistance = it)
                         }
-                        ExerciseSettingCheckbox("Time Under Tension (seconds)", config.timeHeld) {
+                        val isPlanche = (
+                            exercise.id == "core:planche" ||
+                            exercise.canonicalName.equals("Planche", ignoreCase = true)
+                        )
+                        val primaryTimeLabel = if (isPlanche) {
+                            "Total Time (seconds)"
+                        } else {
+                            "Time Under Tension (seconds)"
+                        }
+                        ExerciseSettingCheckbox(primaryTimeLabel, config.timeHeld) {
                             config = config.copy(timeHeld = it)
                         }
-                        ExerciseSettingCheckbox("Total Time (seconds)", config.timeUnderTension) {
+                        ExerciseSettingCheckbox(
+                            if (isPlanche) "Elapsed Time (seconds)" else "Total Time (seconds)",
+                            config.timeUnderTension,
+                        ) {
                             config = config.copy(timeUnderTension = it)
                         }
                         HorizontalDivider(Modifier.padding(vertical = 8.dp))

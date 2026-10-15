@@ -5,13 +5,14 @@ import com.petermathie.vibecheck.domain.model.*
 import com.petermathie.vibecheck.domain.tracker.HabitChoiceIntensity
 import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import org.json.JSONObject
+import org.json.JSONArray
 import java.math.BigDecimal
 
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
     data class Column(val name: String, val type: String, val required: Boolean, val key: Boolean)
     private val booleanFields = setOf("isCustom", "isArchived", "isSeeded", "isDemo", "booleanValue", "targetMet")
-    private val nonNegative = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "widthCentimetresSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "reps", "leftReps", "rightReps", "legacyReps", "legacyLeftReps", "legacyRightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "weightKg", "addedWeightKg", "assistanceKg", "startedAt", "finishedAt", "loggedAt", "updatedAt", "recordedAt")
+    private val nonNegative = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "widthCentimetresSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "reps", "leftReps", "rightReps", "legacyReps", "legacyLeftReps", "legacyRightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "timeUnderTensionMillis", "weightKg", "addedWeightKg", "assistanceKg", "startedAt", "finishedAt", "loggedAt", "updatedAt", "recordedAt")
     private val intFields = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "legacyReps", "legacyLeftReps", "legacyRightReps", "version")
     private val boundedQuantitative = setOf("reps", "leftReps", "rightReps", "weightKg", "addedWeightKg", "assistanceKg", "romValue")
     private val numericTrackers = setOf("NUMBER", "COUNT", "DURATION", "RATING")
@@ -65,6 +66,27 @@ internal object ImportValidation {
         oneOf("choiceIntensity", HabitChoiceIntensity.entries.map { it.name }.toSet())
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
+        if (table == "workout_sets") {
+            val values = runCatching { JSONArray(row.getString("timeMeasurementsMillis")) }
+                .getOrElse { throw IllegalArgumentException("workout_sets.timeMeasurementsMillis must be an array") }
+            var total = 0L
+            repeat(values.length()) { index ->
+                val value = values.opt(index)
+                require(value is Number) { "workout_sets.timeMeasurementsMillis values must be integers" }
+                val millis = try {
+                    BigDecimal(value.toString()).longValueExact()
+                } catch (_: ArithmeticException) {
+                    throw IllegalArgumentException("workout_sets.timeMeasurementsMillis values must be integers")
+                }
+                require(millis >= 0) { "workout_sets.timeMeasurementsMillis values cannot be negative" }
+                total = Math.addExact(total, millis)
+            }
+            if (values.length() > 0) {
+                require(!row.isNull("timeUnderTensionMillis") && row.getLong("timeUnderTensionMillis") == total) {
+                    "Repeated time measurements must equal total time"
+                }
+            }
+        }
         if (table == "workouts") {
             require(row.getString("status") != "FINISHED" || !row.isNull("finishedAt")) { "Finished workout requires finishedAt" }
             require(row.isNull("finishedAt") || row.getLong("finishedAt") >= row.getLong("startedAt")) { "Workout finish precedes start" }
@@ -87,8 +109,9 @@ internal object ImportValidation {
         }
         if (table == "tracker_daily_values") require(row.getLong("epochDay") in java.time.LocalDate.MIN.toEpochDay()..java.time.LocalDate.MAX.toEpochDay()) { "Habit date is outside the supported calendar range" }
         if (table == "workout_sets" && row.getString("result") == "FAILED") {
-            val outcomes = listOf("reps", "leftReps", "rightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "romValue")
+            val outcomes = listOf("reps", "leftReps", "rightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "timeUnderTensionMillis", "romValue")
             require(outcomes.all { row.isNull(it) || row.getDouble(it) == 0.0 }) { "Failed/partial results must be zero" }
+            require(row.getString("timeMeasurementsMillis") == "[]") { "Failed/partial repeated times must be empty" }
         }
     }
 
