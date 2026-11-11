@@ -109,6 +109,9 @@ fun WorkoutEditor(
     }
     val rows = snapshots.filter { it.workoutId == workout.id }.sortedBy { it.position }
     val logged = sets.filter { s -> rows.any { it.id == s.workoutExerciseId } }
+    val previousWorkouts = workouts.filter {
+        it.status == "FINISHED" && it.finishedAt != null && it.finishedAt < workout.startedAt
+    }.associateBy { it.id }
     val validEntryRows = remember(workout.id) { mutableStateMapOf<String, Boolean>() }
     val collapsedRows = remember(workout.id) { mutableStateMapOf<String, Boolean>() }
     LazyColumn(
@@ -137,9 +140,13 @@ fun WorkoutEditor(
         }
         rows.forEach { row ->
             val exercise = definitions.find { it.id == row.actualExerciseId }?.let { if(row.exerciseName.isNotBlank())it.copy(canonicalName=row.exerciseName,trackingType=row.trackingType) else it }
-            val previousIds = snapshots.filter { it.actualExerciseId == row.actualExerciseId && it.workoutId != workout.id && workouts.any { w -> w.id == it.workoutId && w.status == "FINISHED" && (w.finishedAt ?: 0) < workout.startedAt } }.map { it.id }.toSet()
-            val previousRow = sets.filter { it.workoutExerciseId in previousIds }.maxByOrNull { it.loggedAt }?.workoutExerciseId
-            val previous = sets.filter { it.workoutExerciseId==previousRow }.sortedBy { it.ordinal }
+            val previous = snapshots.filter {
+                it.actualExerciseId == row.actualExerciseId && it.workoutId in previousWorkouts
+            }.sortedByDescending {
+                previousWorkouts[it.workoutId]?.finishedAt
+            }.flatMap { snapshot ->
+                sets.filter { it.workoutExerciseId == snapshot.id }.sortedBy { it.ordinal }
+            }
             val restSeconds=if(row.supersetGroup==null)row.restSeconds else rows.filter { it.supersetGroup==row.supersetGroup }.maxOf { it.restSeconds }
             stickyHeader(key = "${row.id}:heading") {
                 Surface(color = MaterialTheme.colorScheme.surface) {
@@ -430,7 +437,6 @@ private fun WorkoutExerciseCard(
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if(row.targets.isNotBlank())Text(row.targets,style=MaterialTheme.typography.bodySmall)
-        if(previous.isNotEmpty()) Text("Previous: ${previous.joinToString(" · ") { setDescription(it) }}", style = MaterialTheme.typography.bodySmall)
         row.supersetGroup?.let { Text("Circuit: $it · rest after round", style = MaterialTheme.typography.labelSmall) }
         repeat(visibleRows) { index ->
             val ordinal = index + 1
@@ -504,12 +510,14 @@ private fun WorkoutExerciseCard(
                                 contentDescription = "Variation for ${exercise?.canonicalName.orEmpty()} set $ordinal: $variationName"
                             },
                         )
-                    } else {
+                    } else if (recorded != null) {
                         Text(
-                            if (recorded == null) "Ready to log" else setDescription(recorded),
+                            setDescription(recorded, includeTimingAttempts = false),
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.labelLarge,
                         )
+                    } else {
+                        Spacer(Modifier.weight(1f))
                     }
                     IconButton(onClick = { activeOrdinal = if (isActive) 0 else ordinal }) {
                         Icon(
@@ -537,7 +545,7 @@ private fun WorkoutExerciseCard(
                     }
                 }
                 if (!isActive && recorded != null && exerciseVariations.isNotEmpty()) {
-                    Text(setDescription(recorded), style = MaterialTheme.typography.bodyMedium)
+                    Text(setDescription(recorded, includeTimingAttempts = false), style = MaterialTheme.typography.bodyMedium)
                 }
                 if (isActive) {
                 val focusRequester = remember(ordinal) { FocusRequester() }
@@ -546,6 +554,23 @@ private fun WorkoutExerciseCard(
                         focusRequester.requestFocus()
                         focusNext = false
                     }
+                }
+                val comparable = previous.filter {
+                    it.variationId == draft.variationId && it.setType == "WORKING" && it.result == "COMPLETED"
+                }
+                val latest = comparable.firstOrNull()
+                val previousSet = comparable.firstOrNull {
+                    it.workoutExerciseId == latest?.workoutExerciseId && it.ordinal == ordinal
+                } ?: latest
+                previousSet?.let {
+                    Text(
+                        "Previous: ${setDescription(it, includeTimingAttempts = false)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.semantics {
+                            contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                        },
+                    )
                 }
                 if (inputConfig.bodyweight) {
                     Text("Bodyweight: tracked from workout", style = MaterialTheme.typography.labelMedium)
@@ -613,21 +638,33 @@ private fun WorkoutExerciseCard(
                     )
                 }
                 if (attempts.size > 1) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        attempts.forEachIndexed { index, value ->
-                            QuantitativeTextField(
-                                value = value,
-                                onValueChange = { text ->
-                                    updateDraft(draft.copy(
-                                        tutEntries = encodeTimingInputs(attempts.toMutableList().apply { set(index, text) }),
-                                        timeHeld = "",
-                                        updatedAt = System.currentTimeMillis(),
-                                    ))
-                                },
-                                label = "TUT ${index + 1} (s)",
-                                description = "TUT attempt ${index + 1} for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                                modifier = Modifier.width(112.dp).then(if (index == 0 && !weighted && !inputConfig.reps) Modifier.focusRequester(focusRequester) else Modifier),
-                            )
+                    Text("TUT (s)", style = MaterialTheme.typography.labelMedium)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        attempts.chunked(4).forEachIndexed { rowIndex, entries ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                repeat(4) { columnIndex ->
+                                    val index = rowIndex * 4 + columnIndex
+                                    if (columnIndex < entries.size) {
+                                        QuantitativeTextField(
+                                            value = entries[columnIndex],
+                                            onValueChange = { text ->
+                                                updateDraft(draft.copy(
+                                                    tutEntries = encodeTimingInputs(attempts.toMutableList().apply { set(index, text) }),
+                                                    timeHeld = "",
+                                                    updatedAt = System.currentTimeMillis(),
+                                                ))
+                                            },
+                                            label = "${index + 1}",
+                                            description = "TUT attempt ${index + 1} for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                            modifier = Modifier.weight(1f).then(
+                                                if (index == 0 && !weighted && !inputConfig.reps) Modifier.focusRequester(focusRequester) else Modifier,
+                                            ),
+                                        )
+                                    } else {
+                                        Spacer(Modifier.weight(1f))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -717,29 +754,41 @@ private fun WorkoutExerciseCard(
             }
             }
         }
-        FilledTonalButton(
-            onClick={
-                val ordinal = visibleRows + 1
-                visibleRows = ordinal
-                activeOrdinal = ordinal
-                updateDraft(
-                    newSetEntryDraft(
-                        row.id,
-                        ordinal,
-                        drafts[ordinal - 1],
-                        defaultVariation?.id,
-                        validVariationIds,
-                    ),
-                )
-            },
-            modifier=Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "Add set for ${exercise?.canonicalName.orEmpty()}" },
-            shape = MaterialTheme.shapes.medium,
-        ) { Icon(Icons.Outlined.Add,contentDescription=null) }
-        TextButton(onClick = { notesOpen = !notesOpen }) {
-            Icon(Icons.Outlined.EditNote, null)
-            Text(if (notesOpen) "Hide notes" else "Exercise notes")
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            TextButton(
+                onClick = {
+                    val ordinal = visibleRows + 1
+                    visibleRows = ordinal
+                    activeOrdinal = ordinal
+                    updateDraft(
+                        newSetEntryDraft(
+                            row.id,
+                            ordinal,
+                            drafts[ordinal - 1],
+                            defaultVariation?.id,
+                            validVariationIds,
+                        ),
+                    )
+                },
+                modifier = Modifier.semantics { contentDescription = "Add set for ${exercise?.canonicalName.orEmpty()}" },
+            ) {
+                Icon(Icons.Outlined.Add, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Add set")
+            }
+            TextButton(
+                onClick = { notesOpen = !notesOpen },
+                modifier = Modifier.semantics {
+                    contentDescription = "${if (notesOpen) "Hide" else "Show"} notes for ${exercise?.canonicalName.orEmpty()}"
+                },
+            ) {
+                Icon(Icons.Outlined.EditNote, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(if (notesOpen) "Hide notes" else "Notes")
+            }
         }
         if (notesOpen) OutlinedTextField(notes, { notes = it; vm.save(row.copy(notes = it)) }, label = { Text("Exercise notes") }, modifier = Modifier.fillMaxWidth())
     }
@@ -919,11 +968,11 @@ private fun draftFromSet(set:WorkoutSetEntity,hold:Boolean,weightUnit:String?,ba
     )
 }
 
-fun setDescription(s: WorkoutSetEntity): String = when {
+fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true): String = when {
     s.romValue != null -> "ROM ${s.romValue} ${s.romUnit.orEmpty()}"
     s.leftReps != null || s.rightReps != null -> "L ${s.leftReps?.let(::formatQuantitative) ?: "0"} / R ${s.rightReps?.let(::formatQuantitative) ?: "0"} reps"
     s.leftHoldMillis != null || s.rightHoldMillis != null -> "L ${(s.leftHoldMillis ?: 0)/1000.0} / R ${(s.rightHoldMillis ?: 0)/1000.0}s"
-    timingMillis(s.tutEntriesMillis).size > 1 -> timingMillis(s.tutEntriesMillis)
+    includeTimingAttempts && timingMillis(s.tutEntriesMillis).size > 1 -> timingMillis(s.tutEntriesMillis)
         .joinToString(" + ") { "${formatQuantitative(it / 1000.0)}s" } + " = ${formatQuantitative((s.holdMillis ?: 0) / 1000.0)}s"
     s.holdMillis != null -> "${formatQuantitative(s.holdMillis/1000.0)}s"
     s.timeUnderTensionMillis != null -> "Total ${formatQuantitative(s.timeUnderTensionMillis/1000.0)}s"

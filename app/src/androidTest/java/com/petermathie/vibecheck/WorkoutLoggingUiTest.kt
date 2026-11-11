@@ -85,7 +85,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()
-        compose.onAllNodes(hasText("Exercise notes") and hasClickAction())[0].performClick()
+        compose.onNodeWithContentDescription("Show notes for Handstand").performScrollTo().performClick()
         compose.onAllNodes(hasText("Exercise notes") and hasSetTextAction())[0].performTextInput("Shoulders stable")
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().workoutExercises().first().any { it.notes == "Shoulders stable" } }
@@ -297,6 +297,8 @@ class WorkoutLoggingUiTest {
             .assertIsDisplayed()
             .assertTextContains("RPE")
         assertHandstandQuantitativeFieldsRemainOrdered()
+        compose.onNodeWithContentDescription("Add set for Handstand").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Show notes for Handstand").performScrollTo().assertIsDisplayed()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Finish workout"))
         compose.onNodeWithText("Finish workout").assertIsDisplayed()
     }
@@ -393,7 +395,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Set 2 for Bench press").assertExists()
         compose.onNodeWithContentDescription("Set 3 for Bench press").assertExists()
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertDoesNotExist()
-        compose.onNodeWithText("Add set").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add set for Bench press").assertTextContains("Add set")
         compose.onNodeWithContentDescription("Start 120 second rest for Bench press").assertExists()
 
         compose.onNodeWithContentDescription("Add set for Bench press").performScrollTo().performClick()

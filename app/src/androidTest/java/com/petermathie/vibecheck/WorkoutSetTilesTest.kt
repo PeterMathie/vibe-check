@@ -1,7 +1,14 @@
 package com.petermathie.vibecheck
 
 import android.content.Context
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -10,6 +17,7 @@ import com.petermathie.vibecheck.data.TrainingRepository
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.workout.encodeTimingMillis
 import com.petermathie.vibecheck.domain.workout.timingMillis
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.WorkoutEditor
@@ -55,6 +63,7 @@ class WorkoutSetTilesTest {
             compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").performScrollTo().performClick()
             compose.onNodeWithContentDescription("TUT attempt $index for Handstand set 1").performScrollTo().performTextInput(index.toString())
         }
+        assertFourByTwoTimingGrid()
         compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").assertIsNotEnabled()
         compose.onNodeWithText("TUT total: 36 s").assertExists()
         compose.waitUntil(15_000) {
@@ -63,6 +72,63 @@ class WorkoutSetTilesTest {
         val backup = runBlocking { DataTransfer.export(db) }
         runBlocking { DataTransfer.import(db, backup) }
         assertTrue(runBlocking { db.editorDao().sets().first().any { timingMillis(it.tutEntriesMillis).size == 8 && it.holdMillis == 36_000L } })
+    }
+
+    @Test
+    fun fourByTwoTimingGridRemainsUsableAt320DpAndDoubleFontScale() {
+        val workout = start()
+        runBlocking {
+            val row = db.editorDao().workoutExercises().first().first {
+                it.workoutId == workout && it.actualExerciseId == "core:handstand"
+            }
+            db.editorDao().set(emptySet(row.id, 1).copy(
+                variationId = "handstand-wall",
+                variationInputConfigSnapshot = ExerciseInputConfig(timeHeld = true, manyTuts = true).encode(),
+                holdMillis = 36_000L,
+                tutEntriesMillis = encodeTimingMillis(List(8) { (it + 1) * 1_000L }),
+            ))
+        }
+        val vm = lifecycle.own(EditorViewModel(db))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                VibeCheckTheme {
+                    Box(Modifier.width(320.dp)) { WorkoutEditor(vm, workout, {}, {}) }
+                }
+            }
+        }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Open set 1 for Handstand").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Open set 1 for Handstand").performScrollTo().performClick()
+        assertFourByTwoTimingGrid()
+        compose.onNodeWithText("TUT (s)").assertExists()
+        compose.onNodeWithContentDescription("TUT attempt 8 for Handstand set 1").performTextReplacement("9")
+        compose.waitUntil(15_000) {
+            runBlocking {
+                db.editorDao().sets().first().any {
+                    timingMillis(it.tutEntriesMillis) == listOf(1_000L, 2_000L, 3_000L, 4_000L, 5_000L, 6_000L, 7_000L, 9_000L)
+                }
+            }
+        }
+    }
+
+    private fun assertFourByTwoTimingGrid() {
+        compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").performScrollTo()
+        val bounds = (1..8).map {
+            compose.onNodeWithContentDescription("TUT attempt $it for Handstand set 1")
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        }
+        bounds.chunked(4).forEach { row ->
+            assertTrue(row.zipWithNext().all { (left, right) ->
+                kotlin.math.abs(left.center.y - right.center.y) < 2f && left.right <= right.left
+            })
+        }
+        repeat(4) { column ->
+            assertTrue(kotlin.math.abs(bounds[column].left - bounds[column + 4].left) < 2f)
+            assertTrue(kotlin.math.abs(bounds[column].width - bounds[column + 4].width) < 2f)
+            assertTrue(bounds[column].bottom <= bounds[column + 4].top)
+        }
     }
 
     @Test
@@ -102,6 +168,109 @@ class WorkoutSetTilesTest {
         assertTrue(runBlocking { db.editorDao().sets().first().any { it.holdMillis == 5_000L && it.rpe == 8.0 } })
         compose.onNodeWithContentDescription("More actions for Handstand").assertDoesNotExist()
         compose.onNodeWithText("Substitute exercise").assertDoesNotExist()
+    }
+
+    @Test
+    fun collapsedTimingShowsOnlyTotalsAndOpeningRetainsIndividualAttempts() {
+        val workout = start()
+        show(workout)
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("4")
+        compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").performTextInput("6")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
+        compose.waitUntil(15_000) {
+            runBlocking {
+                db.editorDao().sets().first().any {
+                    timingMillis(it.tutEntriesMillis) == listOf(4_000L, 6_000L) && it.timeUnderTensionMillis == 30_000L
+                }
+            }
+        }
+
+        compose.onNodeWithContentDescription("Close set 1 for Handstand").performScrollTo().performClick()
+        compose.onNodeWithText("10s · Total 30s").assertExists()
+        compose.onNodeWithText("4s + 6s = 10s · Total 30s").assertDoesNotExist()
+        compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").assertExists()
+
+        compose.onNodeWithContentDescription("Open set 1 for Handstand").performClick()
+        compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertTextContains("4")
+        compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").assertTextContains("6")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("30")
+    }
+
+    @Test
+    fun previousResultFollowsTheActiveOrdinalAndVariantWithoutUsingDraftHistory() {
+        val workout = start()
+        runBlocking {
+            val row = db.editorDao().workoutExercises().first().first {
+                it.workoutId == workout && it.actualExerciseId == "core:handstand"
+            }
+            val session = db.editorDao().workouts().first().first { it.id == workout }
+            listOf(
+                Triple("previous-wall", 4_000L, "handstand-wall"),
+                Triple("previous-free", 2_000L, "handstand-free"),
+                Triple("unfinished-wall", 1_000L, "handstand-wall"),
+            ).forEach { (id, offset, variant) ->
+                val finished = id != "unfinished-wall"
+                db.editorDao().workout(session.copy(
+                    id = id,
+                    status = if (finished) "FINISHED" else "DRAFT",
+                    startedAt = session.startedAt - offset - 60_000L,
+                    finishedAt = if (finished) session.startedAt - offset else null,
+                ))
+                db.editorDao().workoutExercise(row.copy(id = "$id-exercise", workoutId = id))
+                val durations = when (id) {
+                    "previous-wall" -> listOf(7_000L, 9_000L)
+                    "previous-free" -> listOf(11_000L)
+                    else -> listOf(99_000L)
+                }
+                durations.forEachIndexed { index, duration ->
+                    db.editorDao().set(emptySet("$id-exercise", index + 1).copy(
+                        variationId = variant,
+                        holdMillis = duration,
+                    ))
+                }
+            }
+        }
+        show(workout)
+        compose.waitUntil(15_000) {
+            compose.onAllNodes(
+                hasContentDescription("Previous performance for Handstand set 1") and hasText("Previous: 7s"),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertDoesNotExist()
+
+        compose.onNodeWithContentDescription("Open set 2 for Handstand").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
+        compose.onNodeWithContentDescription("Change variant for Handstand set 2").performScrollTo().performClick()
+        compose.onNodeWithText("Freestanding handstand").performClick()
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 11s")
+        compose.onNodeWithText("Previous: 99s").assertDoesNotExist()
+    }
+
+    @Test
+    fun unnamedEmptyTilesHaveNoPlaceholderAndLabelledFooterActionsShareARow() {
+        val workout = start()
+        show(workout)
+        compose.onNodeWithContentDescription("Workout exercise list")
+            .performScrollToNode(hasContentDescription("Set 1 for Dip"))
+        compose.onNodeWithText("Ready to log").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add set for Dip").performScrollTo().assertTextContains("Add set")
+        compose.onNodeWithContentDescription("Show notes for Dip").performScrollTo().assertTextContains("Notes")
+        val addBounds = compose.onNodeWithContentDescription("Add set for Dip").fetchSemanticsNode().boundsInRoot
+        val notesBounds = compose.onNodeWithContentDescription("Show notes for Dip").fetchSemanticsNode().boundsInRoot
+        assertTrue(kotlin.math.abs(addBounds.center.y - notesBounds.center.y) < 2f)
+        assertTrue(addBounds.right <= notesBounds.left)
+
+        compose.onNodeWithContentDescription("Add set for Dip").performClick()
+        compose.onNodeWithContentDescription("Reps for Dip set 4").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Show notes for Dip").performScrollTo().performClick()
+        compose.onAllNodes(hasText("Exercise notes") and hasSetTextAction())[0].performTextInput("Keep elbows close")
+        compose.waitUntil(15_000) {
+            runBlocking { db.editorDao().workoutExercises().first().any { it.notes == "Keep elbows close" } }
+        }
     }
 
     @Test
