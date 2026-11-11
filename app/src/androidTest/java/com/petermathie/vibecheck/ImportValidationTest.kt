@@ -72,6 +72,30 @@ class ImportValidationTest {
     }
 
     @Test
+    fun measurementOrderAndHistoricalSnapshotRoundTripWithoutSchemaChanges() = runBlocking {
+        val order = ";measurementOrder=rpe,totalTime,tut,reps,weight"
+        val exercise = fixture("exercises").apply { put("inputConfig", getString("inputConfig") + order) }
+        val set = fixture("workout_sets").put("variationInputConfigSnapshot", "reps=true$order")
+        DataTransfer.import(db, document(rows("exercises", exercise).put("workout_sets", JSONArray().put(set))))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertEquals(exercise.getString("inputConfig"), db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        db.openHelper.readableDatabase.query(
+            "SELECT variationInputConfigSnapshot FROM workout_sets WHERE id=?", arrayOf(set.getString("id")),
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(set.getString("variationInputConfigSnapshot"), it.getString(0))
+        }
+    }
+
+    @Test
+    fun malformedMeasurementOrdersRollBackAllChanges() = runBlocking {
+        rejected(rows("exercises", fixture("exercises").put("inputConfig", "measurementOrder=reps,reps")), "Duplicate measurement")
+        rejected(rows("exercise_variations", fixture("exercise_variations").put("inputConfig", "measurementOrder=unknown")), "Unknown measurement")
+        rejected(rows("workout_sets", fixture("workout_sets").put("variationInputConfigSnapshot", "measurementOrder=reps;measurementOrder=rpe")), "Duplicate measurement")
+    }
+
+    @Test
     fun unfinishedEntryDraftRoundTripsThroughBackup() = runBlocking {
         val workoutExerciseId = fixture("workout_exercises").getString("id")
         val draft = WorkoutEntryDraftEntity(

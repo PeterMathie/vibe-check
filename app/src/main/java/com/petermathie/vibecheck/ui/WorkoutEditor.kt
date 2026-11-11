@@ -3,6 +3,7 @@ package com.petermathie.vibecheck.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -20,6 +21,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -37,10 +39,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
 import com.petermathie.vibecheck.domain.workout.*
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
 import org.json.JSONArray
@@ -298,6 +305,9 @@ private fun WorkoutExerciseCard(
             defaultManyTuts = if (snapshot != null) false else ExerciseInputConfig.decode(
                 row.inputConfig, row.trackingType, row.actualExerciseId,
             ).manyTuts,
+            defaultMeasurementOrder = if (snapshot != null) emptyList() else ExerciseInputConfig.decode(
+                row.inputConfig, row.trackingType, row.actualExerciseId,
+            ).measurementOrder,
         )
     }
     var stopwatchOrdinal by remember { mutableStateOf<Int?>(null) }
@@ -445,17 +455,35 @@ private fun WorkoutExerciseCard(
             val ordinal = index + 1
             val draft = draftAt(ordinal)
             val inputConfig = configFor(draft.variationId, ordinal)
-            val weighted = inputConfig.weightUnit != null
             val (resistance,result) = performanceParts(draft)
             val isActive = activeOrdinal == ordinal
             val recorded = sets.find { it.ordinal == ordinal }
             val attempts = attemptsFor(draft)
+            val fields = inputConfig.orderedMeasurements.filter {
+                it in inputConfig.enabledMeasurements() ||
+                    it == ExerciseMeasurement.TUT && attempts.any(String::isNotBlank)
+            }
+            val firstInput = fields.firstOrNull {
+                it != ExerciseMeasurement.BODYWEIGHT && it != ExerciseMeasurement.BANDS
+            }
+            val fieldScale = maxOf(1f, LocalDensity.current.fontScale / 1.5f)
             VibeSurface(
                 level = if (isActive) VibeSurfaceLevel.RAISED else VibeSurfaceLevel.CARD,
                 shape = MaterialTheme.shapes.medium,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.shapes.medium)
-                    .semantics { contentDescription = "Set $ordinal for ${exercise?.canonicalName.orEmpty()}" },
+                    .pointerInput(isActive) {
+                        detectTapGestures { activeOrdinal = if (isActive) 0 else ordinal }
+                    }
+                    .semantics {
+                        contentDescription = "Set $ordinal for ${exercise?.canonicalName.orEmpty()}"
+                        stateDescription = if (isActive) "Expanded" else "Collapsed"
+                        role = Role.Button
+                        onClick(label = if (isActive) "Collapse set" else "Expand set") {
+                            activeOrdinal = if (isActive) 0 else ordinal
+                            true
+                        }
+                    },
             ) {
             Column(
                 Modifier
@@ -464,7 +492,7 @@ private fun WorkoutExerciseCard(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
@@ -475,7 +503,20 @@ private fun WorkoutExerciseCard(
                             style = MaterialTheme.typography.labelLarge,
                         )
                     } else {
-                        Spacer(Modifier.weight(1f))
+                        Text(
+                            fields.filterNot { it == ExerciseMeasurement.BODYWEIGHT || it == ExerciseMeasurement.RPE }
+                                .ifEmpty { listOf(ExerciseMeasurement.RPE) }
+                                .joinToString(" · ") {
+                                    when (it) {
+                                        ExerciseMeasurement.WEIGHT -> "— ${inputConfig.weightUnit}"
+                                        ExerciseMeasurement.ADDED_WEIGHT -> "+— $preferredWeightUnit"
+                                        else -> it.placeholder
+                                    }
+                                },
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     if (exerciseVariations.isNotEmpty()) {
                         var variationMenu by remember(ordinal) { mutableStateOf(false) }
@@ -526,12 +567,6 @@ private fun WorkoutExerciseCard(
                         enabled = inputError(draft) == null && parsedSet(draft) != null,
                         onClick = { openNextEmpty(ordinal) },
                     )
-                    IconButton(onClick = { activeOrdinal = if (isActive) 0 else ordinal }) {
-                        Icon(
-                            if (isActive) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-                            "${if (isActive) "Close" else "Open"} set $ordinal for ${exercise?.canonicalName.orEmpty()}",
-                        )
-                    }
                     if (recorded != null && isActive) {
                         IconButton(onClick = {
                             sets.find { it.ordinal == ordinal }?.let { vm.removeSet(it.id) }
@@ -576,178 +611,170 @@ private fun WorkoutExerciseCard(
                         },
                     )
                 }
-                if (inputConfig.bodyweight) {
-                    Text("Bodyweight: tracked from workout", style = MaterialTheme.typography.labelMedium)
-                }
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     itemVerticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    maxItemsInEachRow = 3,
                 ) {
-                    if (weighted) QuantitativeTextField(
-                        value = resistance,
-                        onValueChange = { updatePerformance(ordinal, it, result) },
-                        enabled = draftLoaded,
-                        label = inputConfig.weightUnit.orEmpty(),
-                        description = "Resistance for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                        modifier = Modifier.width(96.dp).weight(1f).focusRequester(focusRequester),
-                    )
-                    if (inputConfig.reps) QuantitativeTextField(
-                        value = result,
-                        onValueChange = { updatePerformance(ordinal, resistance, it) },
-                        enabled = draftLoaded,
-                        label = "Reps",
-                        description = "Reps for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                        modifier = Modifier.width(96.dp).weight(1f).then(if (!weighted) Modifier.focusRequester(focusRequester) else Modifier),
-                    )
-                    if ((inputConfig.timeHeld || inputConfig.manyTuts || attempts.any { it.isNotBlank() }) && attempts.size == 1) QuantitativeTextField(
-                        value = attempts.first(),
-                        onValueChange = {
-                            updateDraft(draft.copy(tutEntries = encodeTimingInputs(listOf(it)), timeHeld = "", updatedAt = System.currentTimeMillis()))
-                        },
-                        enabled = draftLoaded,
-                        label = "TUT (s)",
-                        description = "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                        modifier = Modifier.width(96.dp).weight(1f).then(if (!weighted && !inputConfig.reps) Modifier.focusRequester(focusRequester) else Modifier),
-                    )
-                    if (inputConfig.timeUnderTension) QuantitativeTextField(
-                        value = draft.timeUnderTension,
-                        onValueChange = {
-                            updateDraft(draft.copy(timeUnderTension = it, updatedAt = System.currentTimeMillis()))
-                        },
-                        label = "Total",
-                        description = "Total Time for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                        modifier = Modifier.width(96.dp).weight(1f).then(
-                            if (!weighted && !inputConfig.reps && !inputConfig.timeHeld && !inputConfig.manyTuts && attempts.all { it.isBlank() }) Modifier.focusRequester(focusRequester) else Modifier,
-                        ),
-                        trailingIcon = {
-                            IconButton(onClick = { stopwatchOrdinal = ordinal }) {
-                                Icon(Icons.Outlined.Timer, contentDescription = "Open Total Time stopwatch for set $ordinal")
-                            }
-                        },
-                    )
-                    QuantitativeTextField(
-                        value = draft.rpe,
-                        onValueChange = {
-                            updateDraft(draft.copy(rpe = it, updatedAt = System.currentTimeMillis()))
-                        },
-                        enabled = draftLoaded,
-                        label = "RPE",
-                        description = "RPE for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                        maximum = 10.0,
-                        modifier = Modifier.width(76.dp).weight(1f),
-                        onNext = { openNextEmpty(ordinal) },
-                    )
-                }
-                if (attempts.size > 1) {
-                    Text("TUT (s)", style = MaterialTheme.typography.labelMedium)
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        attempts.chunked(4).forEachIndexed { rowIndex, entries ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                repeat(4) { columnIndex ->
-                                    val index = rowIndex * 4 + columnIndex
-                                    if (columnIndex < entries.size) {
-                                        QuantitativeTextField(
-                                            value = entries[columnIndex],
-                                            onValueChange = { text ->
-                                                updateDraft(draft.copy(
-                                                    tutEntries = encodeTimingInputs(attempts.toMutableList().apply { set(index, text) }),
-                                                    timeHeld = "",
-                                                    updatedAt = System.currentTimeMillis(),
-                                                ))
-                                            },
-                                            label = "${index + 1}",
-                                            description = "TUT attempt ${index + 1} for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                                            modifier = Modifier.weight(1f).then(
-                                                if (index == 0 && !weighted && !inputConfig.reps) Modifier.focusRequester(focusRequester) else Modifier,
-                                            ),
-                                        )
-                                    } else {
-                                        Spacer(Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (inputConfig.manyTuts || attempts.size > 1) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Start,
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            "${attempts.size}/$MAX_TUT_ENTRIES",
-                            style = MaterialTheme.typography.labelMedium,
-                        )
-                        if (inputConfig.manyTuts) SetIconButton(
-                            label = "Add time",
-                            description = "Add TUT entry for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                            icon = Icons.Outlined.Add,
-                            enabled = attempts.size < MAX_TUT_ENTRIES,
-                            onClick = {
-                                updateDraft(draft.copy(tutEntries = encodeTimingInputs(attempts + ""), timeHeld = "", updatedAt = System.currentTimeMillis()))
-                            },
-                        )
-                    }
-                    if (!inputConfig.manyTuts && attempts.size > 1) Text(
-                        "One-entry mode. Previously recorded attempts are retained.",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                if (inputConfig.addedWeight) QuantitativeTextField(
-                    value = draft.addedWeight,
-                    onValueChange = { updateDraft(draft.copy(addedWeight = it, updatedAt = System.currentTimeMillis())) },
-                    label = "Added weight ($preferredWeightUnit)",
-                    description = "Added weight for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                inputError(draft)?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-                if (inputConfig.bandResistance) {
-                    Text("Band resistance", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        availableBands.forEach { band ->
-                            val selected = band.id in bandIds(draft.bandIds)
-                            VibeSurface(
-                                level = if (selected) VibeSurfaceLevel.INSET else VibeSurfaceLevel.RAISED,
-                                state = if (selected) VibeSurfaceState.SELECTED else VibeSurfaceState.RESTING,
-                                shape = MaterialTheme.shapes.medium,
-                                onClick = {
-                                    val values = bandIds(draft.bandIds).toMutableList()
-                                    if (selected) values.remove(band.id) else values.add(band.id)
-                                    updateDraft(draft.copy(bandIds = encodeBandIds(values), updatedAt = System.currentTimeMillis()))
+                    fields.forEach { field ->
+                        val focus = if (field == firstInput) Modifier.focusRequester(focusRequester) else Modifier
+                        when (field) {
+                            ExerciseMeasurement.BODYWEIGHT -> Text(
+                                "Bodyweight: tracked from workout",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            ExerciseMeasurement.WEIGHT -> QuantitativeTextField(
+                                value = resistance,
+                                onValueChange = { updatePerformance(ordinal, it, result) },
+                                enabled = draftLoaded,
+                                label = inputConfig.weightUnit.orEmpty(),
+                                description = "Resistance for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                modifier = Modifier.width(96.dp * fieldScale).then(focus),
+                            )
+                            ExerciseMeasurement.REPS -> QuantitativeTextField(
+                                value = result,
+                                onValueChange = { updatePerformance(ordinal, resistance, it) },
+                                enabled = draftLoaded,
+                                label = "Reps",
+                                description = "Reps for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                modifier = Modifier.width(96.dp * fieldScale).then(focus),
+                            )
+                            ExerciseMeasurement.TUT -> if (!inputConfig.manyTuts && attempts.size == 1) QuantitativeTextField(
+                                value = attempts.first(),
+                                onValueChange = {
+                                    updateDraft(draft.copy(tutEntries = encodeTimingInputs(listOf(it)), timeHeld = "", updatedAt = System.currentTimeMillis()))
                                 },
-                                modifier = Modifier
-                                    .shadow(if (selected) 0.dp else 4.dp, MaterialTheme.shapes.medium)
-                                    .clip(MaterialTheme.shapes.medium)
-                                    .drawWithContent {
-                                        drawContent()
-                                        if (selected) {
-                                            drawRect(
-                                                Brush.verticalGradient(
-                                                    listOf(Color.Black.copy(alpha = 0.18f), Color.Transparent),
-                                                    endY = 8.dp.toPx(),
-                                                ),
-                                                size = Size(size.width, 8.dp.toPx()),
-                                            )
+                                enabled = draftLoaded,
+                                label = "TUT (s)",
+                                description = "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                modifier = Modifier.width(96.dp * fieldScale).then(focus),
+                            ) else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("TUT (s)", style = MaterialTheme.typography.labelMedium)
+                                attempts.chunked(4).forEachIndexed { rowIndex, entries ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        repeat(4) { columnIndex ->
+                                            val index = rowIndex * 4 + columnIndex
+                                            if (columnIndex < entries.size) {
+                                                QuantitativeTextField(
+                                                    value = entries[columnIndex],
+                                                    onValueChange = { text ->
+                                                        updateDraft(draft.copy(
+                                                            tutEntries = encodeTimingInputs(attempts.toMutableList().apply { set(index, text) }),
+                                                            timeHeld = "",
+                                                            updatedAt = System.currentTimeMillis(),
+                                                        ))
+                                                    },
+                                                    label = "${index + 1}",
+                                                    description = if (attempts.size == 1) {
+                                                        "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                                                    } else "TUT attempt ${index + 1} for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                                    modifier = Modifier.weight(1f).then(if (index == 0) focus else Modifier),
+                                                )
+                                            } else {
+                                                Spacer(Modifier.weight(1f))
+                                            }
                                         }
                                     }
-                                    .semantics {
-                                    contentDescription = "${band.name} band for ${exercise?.canonicalName.orEmpty()} set $ordinal"
-                                    stateDescription = if (selected) "Selected, depressed" else "Not selected, raised"
+                                }
+                                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    Text("${attempts.size}/$MAX_TUT_ENTRIES", style = MaterialTheme.typography.labelMedium)
+                                    if (inputConfig.manyTuts) SetIconButton(
+                                        label = "Add time",
+                                        description = "Add TUT entry for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                        icon = Icons.Outlined.Add,
+                                        enabled = attempts.size < MAX_TUT_ENTRIES,
+                                        onClick = {
+                                            updateDraft(draft.copy(tutEntries = encodeTimingInputs(attempts + ""), timeHeld = "", updatedAt = System.currentTimeMillis()))
+                                        },
+                                    )
+                                }
+                                if (!inputConfig.manyTuts) Text(
+                                    "One-entry mode. Previously recorded attempts are retained.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            ExerciseMeasurement.TOTAL_TIME -> QuantitativeTextField(
+                                value = draft.timeUnderTension,
+                                onValueChange = {
+                                    updateDraft(draft.copy(timeUnderTension = it, updatedAt = System.currentTimeMillis()))
                                 },
-                            ) {
-                                Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                    if (selected) Icon(Icons.Outlined.Check, null, Modifier.size(16.dp))
-                                    Text(band.name, style = MaterialTheme.typography.labelLarge)
+                                label = "Total",
+                                description = "Total Time for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                modifier = Modifier.width(136.dp * fieldScale).then(focus),
+                                trailingIcon = {
+                                    IconButton(onClick = { stopwatchOrdinal = ordinal }) {
+                                        Icon(Icons.Outlined.Timer, contentDescription = "Open Total Time stopwatch for set $ordinal")
+                                    }
+                                },
+                            )
+                            ExerciseMeasurement.RPE -> QuantitativeTextField(
+                                value = draft.rpe,
+                                onValueChange = {
+                                    updateDraft(draft.copy(rpe = it, updatedAt = System.currentTimeMillis()))
+                                },
+                                enabled = draftLoaded,
+                                label = "RPE",
+                                description = "RPE for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                maximum = 10.0,
+                                modifier = Modifier.width(76.dp * fieldScale).then(focus),
+                                onNext = { openNextEmpty(ordinal) },
+                            )
+                            ExerciseMeasurement.ADDED_WEIGHT -> QuantitativeTextField(
+                                value = draft.addedWeight,
+                                onValueChange = { updateDraft(draft.copy(addedWeight = it, updatedAt = System.currentTimeMillis())) },
+                                label = "Added weight ($preferredWeightUnit)",
+                                description = "Added weight for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                                modifier = Modifier.width(112.dp * fieldScale).then(focus),
+                            )
+                            ExerciseMeasurement.BANDS -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Band resistance", style = MaterialTheme.typography.labelMedium)
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    availableBands.forEach { band ->
+                                        val selected = band.id in bandIds(draft.bandIds)
+                                        VibeSurface(
+                                            level = if (selected) VibeSurfaceLevel.INSET else VibeSurfaceLevel.RAISED,
+                                            state = if (selected) VibeSurfaceState.SELECTED else VibeSurfaceState.RESTING,
+                                            shape = MaterialTheme.shapes.medium,
+                                            onClick = {
+                                                val values = bandIds(draft.bandIds).toMutableList()
+                                                if (selected) values.remove(band.id) else values.add(band.id)
+                                                updateDraft(draft.copy(bandIds = encodeBandIds(values), updatedAt = System.currentTimeMillis()))
+                                            },
+                                            modifier = Modifier
+                                                .shadow(if (selected) 0.dp else 4.dp, MaterialTheme.shapes.medium)
+                                                .clip(MaterialTheme.shapes.medium)
+                                                .drawWithContent {
+                                                    drawContent()
+                                                    if (selected) {
+                                                        drawRect(
+                                                            Brush.verticalGradient(
+                                                                listOf(Color.Black.copy(alpha = 0.18f), Color.Transparent),
+                                                                endY = 8.dp.toPx(),
+                                                            ),
+                                                            size = Size(size.width, 8.dp.toPx()),
+                                                        )
+                                                    }
+                                                }
+                                                .semantics {
+                                                    contentDescription = "${band.name} band for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                                                    stateDescription = if (selected) "Selected, depressed" else "Not selected, raised"
+                                                },
+                                        ) {
+                                            Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                                if (selected) Icon(Icons.Outlined.Check, null, Modifier.size(16.dp))
+                                                Text(band.name, style = MaterialTheme.typography.labelLarge)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                }
+                inputError(draft)?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 }
             }

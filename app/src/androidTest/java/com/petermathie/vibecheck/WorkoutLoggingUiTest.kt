@@ -142,7 +142,7 @@ class WorkoutLoggingUiTest {
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
 
-        assertHandstandQuantitativeFieldsShareRow()
+        assertHandstandQuantitativeFieldsRemainOrdered()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("12")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
         compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").performClick()
@@ -154,14 +154,14 @@ class WorkoutLoggingUiTest {
         }
         compose.onNodeWithText("Stop").performClick()
         compose.onNodeWithText("Apply").performClick()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("TUT (s)")
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("1")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total")
         compose.onNodeWithText("Freestanding sec").assertDoesNotExist()
         compose.onNodeWithText("Total wall sec").assertDoesNotExist()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("99")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextClearance()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
-        val (heldBounds, tensionBounds, rpeBounds) = assertHandstandQuantitativeFieldsShareRow()
+        val (_, tensionBounds, _) = awaitHandstandQuantitativeFieldBounds(requireSameRow = false)
         val stopwatchBounds = compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").fetchSemanticsNode().boundsInRoot
         assertTrue(
             "Stopwatch should occupy the right side of Total Time: Total=$tensionBounds stopwatch=$stopwatchBounds",
@@ -287,7 +287,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
-            .assertTextContains("TUT (s)")
+            .assertTextContains("1")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
@@ -301,21 +301,6 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Show notes for Handstand").performScrollTo().assertIsDisplayed()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Finish workout"))
         compose.onNodeWithText("Finish workout").assertIsDisplayed()
-    }
-
-    private fun assertHandstandQuantitativeFieldsShareRow(): List<Rect> {
-        val bounds = awaitHandstandQuantitativeFieldBounds(requireSameRow = true)
-        val (heldBounds, tensionBounds, rpeBounds) = bounds
-        assertTrue(
-            "TUT, Total, and RPE should share a row: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
-            kotlin.math.abs(heldBounds.center.y - tensionBounds.center.y) < 2f,
-        )
-        assertTrue(
-            "TUT, Total, and RPE should share a row: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
-            kotlin.math.abs(heldBounds.center.y - rpeBounds.center.y) < 2f,
-        )
-        assertOrderedAndNonOverlapping(bounds)
-        return bounds
     }
 
     private fun assertHandstandQuantitativeFieldsRemainOrdered() {
@@ -401,7 +386,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Add set for Bench press").performScrollTo().performClick()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 4 for Bench press"))
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertExists()
-        compose.onNodeWithContentDescription("Open set 1 for Bench press").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Set 1 for Bench press").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Resistance for Bench press set 1").performTextInput("60")
         compose.onNodeWithContentDescription("Reps for Bench press set 1").performTextInput("5")
         compose.onNodeWithContentDescription("RPE for Bench press set 1").performTextInput("8")

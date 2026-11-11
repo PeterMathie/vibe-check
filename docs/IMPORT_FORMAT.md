@@ -60,6 +60,8 @@ Photos are not part of this JSON format; export them separately. Legacy set `not
 
 ## Set timing (schema 16)
 
+Exercise and variation `inputConfig` may include an optional `measurementOrder` entry, for example `measurementOrder=rpe,reps,weight`. Keys are `bodyweight`, `weight`, `reps`, `tut`, `totalTime`, `rpe`, `addedWeight` and `bands`. Unlisted measurements follow in that default order; disabled measurements are not shown. An omitted variation order inherits the exercise default for new sets. Recorded configurations retain their own order, including the legacy default when no order was saved. Duplicate entries, duplicate keys and unknown measurement keys are rejected transactionally. This uses existing configuration/snapshot columns; there is no additional schema or backup-version change.
+
 `inputConfig` supports `manyTuts=true` or `manyTuts=false`. When omitted, new Handstand entries default to many and other exercises to one; saved variation configurations freeze the chosen setting. Exercise measurement settings supply the default; an explicit variation setting takes precedence.
 
 `workout_sets.tutEntriesMillis` is a JSON-array string containing zero to eight non-negative integer millisecond durations, for example `"[1500,2000]"`. A non-empty array must sum to `holdMillis`; the scalar total keeps existing progress consumers compatible. `timeUnderTensionMillis` remains the separate total-time measurement and is not reinterpreted. Legacy version-1 rows may omit the new column: import supplies `"[]"` and retains both original scalar durations unchanged.

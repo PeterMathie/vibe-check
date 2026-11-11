@@ -8,6 +8,7 @@ import org.json.JSONObject
 import java.math.BigDecimal
 import com.petermathie.vibecheck.domain.workout.timingInputs
 import com.petermathie.vibecheck.domain.workout.timingMillis
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
@@ -67,11 +68,13 @@ internal object ImportValidation {
         oneOf("choiceIntensity", HabitChoiceIntensity.entries.map { it.name }.toSet())
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
-        if (row.has("inputConfig")) {
-            val modes = row.getString("inputConfig").split(";").filter { it.startsWith("manyTuts=") }
+        listOf("inputConfig", "variationInputConfigSnapshot").filter { row.has(it) }.forEach { column ->
+            val config = row.getString(column)
+            val modes = config.split(";").filter { it.startsWith("manyTuts=") }
             require(modes.size <= 1 && modes.all { it.substringAfter("=") in setOf("true", "false") }) {
                 "Invalid one/many timing configuration"
             }
+            ExerciseInputConfig.decode(config, row.optString("trackingType"))
         }
         if (table == "workout_entry_drafts") timingInputs(row.getString("tutEntries"))
         if (table == "workout_sets") {

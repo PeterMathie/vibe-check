@@ -9,6 +9,8 @@ import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
+import androidx.compose.runtime.mutableStateOf
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.ExerciseEditor
 import com.petermathie.vibecheck.ui.ExerciseSettingsDialog
@@ -100,5 +102,67 @@ class ExerciseEditorUiTest {
         compose.onNodeWithContentDescription("Edit Front split").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings for Front split").assertIsDisplayed()
         compose.onNodeWithContentDescription("Duplicate Front split").assertIsDisplayed()
+    }
+
+    @Test
+    fun measurementOrderCanMoveRepeatedlyAndReopenAfterSaving() {
+        val exercise = mutableStateOf(ExerciseEntity(
+            "compact-test", "Compact exercise", "STRENGTH", "WEIGHT_REPS", null, null, "core", true,
+        ))
+        val open = mutableStateOf(true)
+        compose.setContent {
+            VibeCheckTheme {
+                if (open.value) ExerciseSettingsDialog(exercise.value, { open.value = false }) {
+                    exercise.value = it
+                    open.value = false
+                } else androidx.compose.material3.TextButton(onClick = { open.value = true }) {
+                    androidx.compose.material3.Text("Reopen")
+                }
+            }
+        }
+        repeat(2) { moveEarlier("RPE") }
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(
+            listOf(ExerciseMeasurement.RPE, ExerciseMeasurement.WEIGHT, ExerciseMeasurement.REPS),
+            ExerciseInputConfig.decode(exercise.value.inputConfig, "WEIGHT_REPS").enabledMeasurements(),
+        )
+        compose.onNodeWithText("Reopen").performClick()
+        compose.onNodeWithContentDescription("Reorder RPE").performScrollTo()
+        val positions = listOf("RPE", "Weight", "Reps").map {
+            compose.onNodeWithContentDescription("Reorder $it").getUnclippedBoundsInRoot().top
+        }
+        assertTrue(positions.zipWithNext().all { (a, b) -> a < b })
+    }
+
+    @Test
+    fun variationMeasurementOrderSavesWithoutChangingParentSettings() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking { DatabaseSeeder(context, database).seedIfNeeded() }
+        val parentBefore = runBlocking { database.editorDao().exerciseById("core:handstand")!!.inputConfig }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { ExerciseEditor(viewModel) } }
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Handstand"))
+        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
+        moveEarlier("Total Time")
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking { ExerciseInputConfig.decode(database.editorDao().variationById("handstand-wall")!!.inputConfig, "SKILL_HOLD").measurementOrder.firstOrNull() == ExerciseMeasurement.TOTAL_TIME }
+        }
+        assertEquals(parentBefore, runBlocking { database.editorDao().exerciseById("core:handstand")!!.inputConfig })
+        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
+        compose.onNodeWithContentDescription("Reorder Total Time").performScrollTo()
+        assertTrue(
+            compose.onNodeWithContentDescription("Reorder Total Time").getUnclippedBoundsInRoot().top <
+                compose.onNodeWithContentDescription("Reorder Time Under Tension").getUnclippedBoundsInRoot().top,
+        )
+    }
+
+    private fun moveEarlier(label: String) {
+        val handle = compose.onNodeWithContentDescription("Reorder $label").performScrollTo()
+        val action = handle.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
+            .first { it.label == "Move earlier" }
+        compose.runOnIdle { assertTrue(action.action()) }
+        compose.waitForIdle()
     }
 }
