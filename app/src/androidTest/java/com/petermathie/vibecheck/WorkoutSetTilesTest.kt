@@ -9,6 +9,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,12 +40,12 @@ class WorkoutSetTilesTest {
     @get:Rule val lifecycle = ComposeRoomLifecycleRule { if (::db.isInitialized) db else null }
     private val compose get() = lifecycle.compose
 
-    private fun start(): String = runBlocking {
+    private fun start(day: String = "demo-day-push"): String = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         DatabaseSeeder(context, db).seedIfNeeded()
         TrainingRepository(db, db.programmeDao(), db.workoutDao(), db.trackerDao(), context)
-            .startWorkout("demo-day-push")
+            .startWorkout(day)
     }
 
     private fun show(workout: String) {
@@ -65,7 +67,9 @@ class WorkoutSetTilesTest {
         }
         assertFourByTwoTimingGrid()
         compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").assertIsNotEnabled()
-        compose.onNodeWithText("TUT total: 36 s").assertExists()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("TUT 36s").fetchSemanticsNodes().isNotEmpty()
+        }
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().sets().first().any { timingMillis(it.tutEntriesMillis) == List(8) { i -> (i + 1) * 1000L } && it.holdMillis == 36_000L } }
         }
@@ -146,7 +150,8 @@ class WorkoutSetTilesTest {
         compose.onNodeWithText("Freestanding handstand").performClick()
         compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").assertDoesNotExist()
         compose.onNodeWithText("One-entry mode. Previously recorded attempts are retained.").assertExists()
-        compose.onNodeWithContentDescription("Variation for Handstand set 2: Wall handstand").assertExists()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 2").performScrollTo().performClick()
+        compose.onNodeWithText("Wall handstand").assertIsSelected().performClick()
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().sets().first().any { it.variationId == "handstand-free" && it.holdMillis == 10_000L && timingMillis(it.tutEntriesMillis) == listOf(4_000L, 6_000L) } }
         }
@@ -187,10 +192,10 @@ class WorkoutSetTilesTest {
         }
 
         compose.onNodeWithContentDescription("Close set 1 for Handstand").performScrollTo().performClick()
-        compose.onNodeWithText("10s · Total 30s").assertExists()
+        compose.onNodeWithText("TUT 10s · Total 30s").assertExists()
         compose.onNodeWithText("4s + 6s = 10s · Total 30s").assertDoesNotExist()
         compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").assertExists()
+        compose.onNodeWithText("Wall handstand").assertDoesNotExist()
 
         compose.onNodeWithContentDescription("Open set 1 for Handstand").performClick()
         compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertTextContains("4")
@@ -271,6 +276,89 @@ class WorkoutSetTilesTest {
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().workoutExercises().first().any { it.notes == "Keep elbows close" } }
         }
+    }
+
+    @Test
+    fun variantNamesAppearOnlyInThePickerWithTheCurrentChoiceMarked() {
+        val workout = start()
+        show(workout)
+        compose.onNodeWithText("Wall handstand").assertDoesNotExist()
+        compose.onNodeWithText("Freestanding handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
+        compose.onNodeWithText("Wall handstand").assertIsSelected()
+        compose.onNodeWithText("Freestanding handstand").assertIsNotSelected().performClick()
+        compose.onNodeWithText("Freestanding handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
+        compose.onNodeWithText("Freestanding handstand").assertIsSelected()
+    }
+
+    @Test
+    fun iconActionsRemainAccessibleAndTimingSummaryIsNotRepeated() {
+        val workout = start()
+        show(workout)
+        compose.onNodeWithText("Next set").assertDoesNotExist()
+        compose.onNodeWithText("Add time", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set")
+            .assertHasClickAction().assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("4")
+        val addTime = compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1")
+            .assertHasClickAction().performScrollTo()
+        val tileBounds = compose.onNodeWithContentDescription("Set 1 for Handstand").fetchSemanticsNode().boundsInRoot
+        assertTrue(addTime.fetchSemanticsNode().boundsInRoot.right < tileBounds.center.x)
+        addTime.performClick()
+        compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").performTextInput("6")
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("TUT 10s").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onAllNodesWithText("TUT 10s").assertCountEquals(1)
+        compose.onNodeWithText("TUT total:", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set")
+            .performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertExists()
+        compose.onNodeWithText("TUT 10s").assertExists()
+    }
+
+    @Test
+    fun simpleExerciseKeepsInputsInOneRowWithoutASeparateCompletionRow() {
+        val workout = start("demo-day-pull")
+        show(workout)
+        compose.onNodeWithContentDescription("Workout exercise list")
+            .performScrollToNode(hasContentDescription("Set 1 for Back extension"))
+        val fields = listOf("Resistance", "Reps", "RPE").map {
+            compose.onNodeWithContentDescription("$it for Back extension set 1")
+                .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        }
+        assertTrue(fields.zipWithNext().all { (left, right) ->
+            kotlin.math.abs(left.center.y - right.center.y) < 2f && left.right <= right.left
+        })
+        val completion = compose.onNodeWithContentDescription("Complete set 1 for Back extension and open next empty set")
+            .assertHasClickAction().fetchSemanticsNode().boundsInRoot
+        assertTrue(completion.bottom <= fields.first().top)
+        val bounds = compose.onNodeWithContentDescription("Set 1 for Back extension").getUnclippedBoundsInRoot()
+        val height = bounds.bottom - bounds.top
+        assertTrue("Simple set tile should be at most 160dp, was $height", height <= 160.dp)
+        for (ordinal in 2..3) {
+            val empty = compose.onNodeWithContentDescription("Set $ordinal for Back extension")
+                .performScrollTo().getUnclippedBoundsInRoot()
+            assertEquals(48f, (empty.bottom - empty.top).value, 0.5f)
+        }
+    }
+
+    @Test
+    fun openAndCollapsedTilesKeepAContrastingBoundary() {
+        val workout = start()
+        show(workout)
+        fun assertBoundary() {
+            val tile = compose.onNodeWithContentDescription("Set 1 for Handstand")
+                .performScrollTo().captureToImage().toPixelMap()
+            val border = tile[0, tile.height / 2].luminance()
+            val fill = tile[4, tile.height / 2].luminance()
+            val contrast = (maxOf(border, fill) + 0.05f) / (minOf(border, fill) + 0.05f)
+            assertTrue("Set outline must remain visible: contrast=$contrast", contrast >= 3f)
+        }
+        assertBoundary()
+        compose.onNodeWithContentDescription("Close set 1 for Handstand").performScrollTo().performClick()
+        assertBoundary()
     }
 
     @Test

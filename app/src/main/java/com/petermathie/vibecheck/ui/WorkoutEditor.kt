@@ -2,6 +2,7 @@ package com.petermathie.vibecheck.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -34,6 +35,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
@@ -449,13 +452,15 @@ private fun WorkoutExerciseCard(
             val attempts = attemptsFor(draft)
             VibeSurface(
                 level = if (isActive) VibeSurfaceLevel.RAISED else VibeSurfaceLevel.CARD,
-                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.shapes.medium)
+                    .semantics { contentDescription = "Set $ordinal for ${exercise?.canonicalName.orEmpty()}" },
             ) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(10.dp)
-                    .semantics { contentDescription = "Set $ordinal for ${exercise?.canonicalName.orEmpty()}" },
+                    .padding(horizontal = 8.dp, vertical = if (!isActive && recorded == null) 0.dp else 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
@@ -463,11 +468,17 @@ private fun WorkoutExerciseCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
+                    if (recorded != null) {
+                        Text(
+                            setDescription(recorded, includeTimingAttempts = false, labelTimingTotal = true),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
                     if (exerciseVariations.isNotEmpty()) {
                         var variationMenu by remember(ordinal) { mutableStateOf(false) }
-                        val variationName = recorded?.takeIf { it.variationId == draft.variationId }
-                            ?.variationNameSnapshot?.takeIf { it.isNotBlank() }
-                            ?: variationFor(draft.variationId)?.name.orEmpty()
                         Box {
                             IconButton(
                                 enabled = draftLoaded,
@@ -479,6 +490,10 @@ private fun WorkoutExerciseCard(
                                 exerciseVariations.forEach { option ->
                                     DropdownMenuItem(
                                         text = { Text(option.name) },
+                                        modifier = Modifier.semantics { selected = option.id == draft.variationId },
+                                        leadingIcon = if (option.id == draft.variationId) {
+                                            { Icon(Icons.Outlined.Check, null) }
+                                        } else null,
                                         onClick = {
                                             val nextConfig = configFor(option.id, ordinal)
                                             val previousWeight = quantitativeInput(resistance).value?.let {
@@ -503,22 +518,14 @@ private fun WorkoutExerciseCard(
                                 }
                             }
                         }
-                        Text(
-                            variationName,
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.weight(1f).semantics {
-                                contentDescription = "Variation for ${exercise?.canonicalName.orEmpty()} set $ordinal: $variationName"
-                            },
-                        )
-                    } else if (recorded != null) {
-                        Text(
-                            setDescription(recorded, includeTimingAttempts = false),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                    } else {
-                        Spacer(Modifier.weight(1f))
                     }
+                    if (isActive) SetIconButton(
+                        label = "Next set",
+                        description = "Complete set $ordinal for ${exercise?.canonicalName.orEmpty()} and open next empty set",
+                        icon = Icons.Outlined.Check,
+                        enabled = inputError(draft) == null && parsedSet(draft) != null,
+                        onClick = { openNextEmpty(ordinal) },
+                    )
                     IconButton(onClick = { activeOrdinal = if (isActive) 0 else ordinal }) {
                         Icon(
                             if (isActive) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
@@ -543,9 +550,6 @@ private fun WorkoutExerciseCard(
                             )
                         }
                     }
-                }
-                if (!isActive && recorded != null && exerciseVariations.isNotEmpty()) {
-                    Text(setDescription(recorded, includeTimingAttempts = false), style = MaterialTheme.typography.bodyMedium)
                 }
                 if (isActive) {
                 val focusRequester = remember(ordinal) { FocusRequester() }
@@ -669,19 +673,24 @@ private fun WorkoutExerciseCard(
                     }
                 }
                 if (inputConfig.manyTuts || attempts.size > 1) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Start,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "TUT total: ${formatQuantitative(attempts.mapNotNull { quantitativeInput(it).value }.sum())} s",
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.weight(1f),
+                            "${attempts.size}/$MAX_TUT_ENTRIES",
+                            style = MaterialTheme.typography.labelMedium,
                         )
-                        if (inputConfig.manyTuts) TextButton(
+                        if (inputConfig.manyTuts) SetIconButton(
+                            label = "Add time",
+                            description = "Add TUT entry for ${exercise?.canonicalName.orEmpty()} set $ordinal",
+                            icon = Icons.Outlined.Add,
                             enabled = attempts.size < MAX_TUT_ENTRIES,
                             onClick = {
                                 updateDraft(draft.copy(tutEntries = encodeTimingInputs(attempts + ""), timeHeld = "", updatedAt = System.currentTimeMillis()))
                             },
-                            modifier = Modifier.semantics { contentDescription = "Add TUT entry for ${exercise?.canonicalName.orEmpty()} set $ordinal" },
-                        ) { Text("Add time · ${attempts.size}/8") }
+                        )
                     }
                     if (!inputConfig.manyTuts && attempts.size > 1) Text(
                         "One-entry mode. Previously recorded attempts are retained.",
@@ -738,16 +747,6 @@ private fun WorkoutExerciseCard(
                                 }
                             }
                         }
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(
-                        onClick = { openNextEmpty(ordinal) },
-                        enabled = inputError(draft) == null && parsedSet(draft) != null,
-                        modifier = Modifier.semantics { contentDescription = "Complete set $ordinal for ${exercise?.canonicalName.orEmpty()} and open next empty set" },
-                    ) {
-                        Icon(Icons.Outlined.Check, null, Modifier.size(18.dp))
-                        Text("Next set")
                     }
                 }
                 }
@@ -807,6 +806,26 @@ private fun WorkoutExerciseCard(
                 stopwatchOrdinal = null
             },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SetIconButton(
+    label: String,
+    description: String,
+    icon: ImageVector,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = rememberTooltipState(),
+    ) {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Icon(icon, contentDescription = description)
+        }
     }
 }
 
@@ -968,13 +987,13 @@ private fun draftFromSet(set:WorkoutSetEntity,hold:Boolean,weightUnit:String?,ba
     )
 }
 
-fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true): String = when {
+fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true, labelTimingTotal: Boolean = false): String = when {
     s.romValue != null -> "ROM ${s.romValue} ${s.romUnit.orEmpty()}"
     s.leftReps != null || s.rightReps != null -> "L ${s.leftReps?.let(::formatQuantitative) ?: "0"} / R ${s.rightReps?.let(::formatQuantitative) ?: "0"} reps"
     s.leftHoldMillis != null || s.rightHoldMillis != null -> "L ${(s.leftHoldMillis ?: 0)/1000.0} / R ${(s.rightHoldMillis ?: 0)/1000.0}s"
     includeTimingAttempts && timingMillis(s.tutEntriesMillis).size > 1 -> timingMillis(s.tutEntriesMillis)
         .joinToString(" + ") { "${formatQuantitative(it / 1000.0)}s" } + " = ${formatQuantitative((s.holdMillis ?: 0) / 1000.0)}s"
-    s.holdMillis != null -> "${formatQuantitative(s.holdMillis/1000.0)}s"
+    s.holdMillis != null -> "${if (labelTimingTotal) "TUT " else ""}${formatQuantitative(s.holdMillis/1000.0)}s"
     s.timeUnderTensionMillis != null -> "Total ${formatQuantitative(s.timeUnderTensionMillis/1000.0)}s"
     else -> "${s.weightKg?.let { "${formatQuantitative(it)} kg × " }.orEmpty()}${s.reps?.let(::formatQuantitative) ?: "0"} reps"
 } + (if (s.holdMillis != null && s.timeUnderTensionMillis != null) " · Total ${formatQuantitative(s.timeUnderTensionMillis / 1000.0)}s" else "") +
