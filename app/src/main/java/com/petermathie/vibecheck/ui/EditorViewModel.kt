@@ -151,10 +151,10 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     }
     suspend fun entryDraft(workoutExerciseId: String) = dao.entryDraft(workoutExerciseId)
     suspend fun entryDrafts(workoutExerciseId: String) = dao.entryDrafts(workoutExerciseId)
+    suspend fun bandsForExercise(workoutExerciseId: String) = dao.bandsForExercise(workoutExerciseId)
     fun saveEntryDraft(row: WorkoutEntryDraftEntity) = write {
         db.withTransaction {
             if (!dao.belongsToDraftWorkout(row.workoutExerciseId)) return@withTransaction
-            dao.deleteSet(row.setId)
             if (
                 !row.detailsOpen &&
                 row.variationId == null &&
@@ -167,6 +167,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                 row.romValue.isBlank() &&
                 row.timeHeld.isBlank() &&
                 row.timeUnderTension.isBlank() &&
+                row.tutEntries.isBlank() &&
                 row.bandIds == "[]"
             ) {
                 dao.deleteEntryDraft(row.workoutExerciseId, row.ordinal)

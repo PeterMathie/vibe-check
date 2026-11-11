@@ -36,7 +36,10 @@ interface EditorDao {
     @Query("SELECT * FROM workouts ORDER BY startedAt DESC") fun workouts(): Flow<List<WorkoutEntity>>
     @Query("SELECT * FROM workout_exercises ORDER BY position") fun workoutExercises(): Flow<List<WorkoutExerciseEntity>>
     @Query("SELECT * FROM workout_sets ORDER BY ordinal") fun sets(): Flow<List<WorkoutSetEntity>>
+    @Query("SELECT * FROM workout_sets WHERE id=:id") suspend fun setById(id: String): WorkoutSetEntity?
     @Query("SELECT * FROM workout_set_bands ORDER BY ordinal") fun setBands(): Flow<List<WorkoutSetBandEntity>>
+    @Query("SELECT b.* FROM workout_set_bands b JOIN workout_sets s ON s.id=b.setId WHERE s.workoutExerciseId=:workoutExerciseId ORDER BY b.ordinal")
+    suspend fun bandsForExercise(workoutExerciseId: String): List<WorkoutSetBandEntity>
     @Query("SELECT * FROM bands ORDER BY widthCentimetres") fun bands(): Flow<List<BandEntity>>
     @Query("SELECT * FROM bands WHERE id=:id") suspend fun bandById(id: String): BandEntity?
     @Upsert suspend fun workout(row: WorkoutEntity)
@@ -76,11 +79,20 @@ interface EditorDao {
     @Transaction
     suspend fun saveSetWithSnapshots(row: WorkoutSetEntity, bandIds: List<String>, consumeDraft: Boolean) {
         val variation = row.variationId?.let { variationById(it) }
+        val exercise = variation?.let { exerciseById(it.exerciseId) }
+        val original = setById(row.id)?.takeIf { it.variationId == row.variationId }
         val saved = row.copy(
-            variationRankSnapshot = variation?.progressionRank,
-            variationNameSnapshot = variation?.name.orEmpty(),
-            variationTrackingTypeSnapshot = variation?.trackingType.orEmpty(),
-            variationInputConfigSnapshot = variation?.inputConfig.orEmpty(),
+            variationRankSnapshot = original?.variationRankSnapshot ?: variation?.progressionRank,
+            variationNameSnapshot = original?.variationNameSnapshot?.takeIf { it.isNotBlank() } ?: variation?.name.orEmpty(),
+            variationTrackingTypeSnapshot = original?.variationTrackingTypeSnapshot?.takeIf { it.isNotBlank() } ?: variation?.trackingType.orEmpty(),
+            variationInputConfigSnapshot = original?.variationInputConfigSnapshot?.takeIf { it.isNotBlank() } ?: variation?.let {
+                com.petermathie.vibecheck.domain.programme.ExerciseInputConfig.decode(
+                    it.inputConfig, it.trackingType, it.exerciseId,
+                    defaultManyTuts = com.petermathie.vibecheck.domain.programme.ExerciseInputConfig.decode(
+                        exercise?.inputConfig.orEmpty(), exercise?.trackingType.orEmpty(), it.exerciseId,
+                    ).manyTuts,
+                ).encode()
+            }.orEmpty(),
         )
         set(saved)
         clearBands(saved.id)

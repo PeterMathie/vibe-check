@@ -49,6 +49,29 @@ class ImportValidationTest {
     }
 
     @Test
+    fun legacyTimingRowsAndMutableMeasurementConfigurationRemainPortable() = runBlocking {
+        val set = fixture("workout_sets").put("holdMillis", 1234)
+        set.remove("tutEntriesMillis")
+        val exercise = fixture("exercises")
+        val newConfig = exercise.getString("inputConfig") + ";manyTuts=true"
+        exercise.put("inputConfig", newConfig)
+        DataTransfer.import(db, document(rows("exercises", exercise).put("workout_sets", JSONArray().put(set))))
+        assertEquals(newConfig, db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        db.openHelper.readableDatabase.query("SELECT holdMillis,tutEntriesMillis FROM workout_sets WHERE id=?", arrayOf(set.getString("id"))).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1234L, it.getLong(0))
+            assertEquals("[]", it.getString(1))
+        }
+    }
+
+    @Test
+    fun timingOverflowAndMismatchedTotalsRollBack() = runBlocking {
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", "[1000,2000]").put("holdMillis", 1000)), "total")
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", List(9) { 1000 }.joinToString(",", "[", "]"))), "eight")
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", "[-1]")), "range")
+    }
+
+    @Test
     fun unfinishedEntryDraftRoundTripsThroughBackup() = runBlocking {
         val workoutExerciseId = fixture("workout_exercises").getString("id")
         val draft = WorkoutEntryDraftEntity(

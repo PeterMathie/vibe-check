@@ -15,7 +15,7 @@ Debug builds automatically load removable representative data: three strength pr
 - Proper seeded database, canonical names, aliases, Strength/Stretching/Both tags and tracking types.
 - Search by name, alias or muscle.
 - Exercise-to-muscle mappings use the same canonical IDs as every tappable SVG region.
-- Seeded definitions are read-only; duplicate them to customise.
+- Seeded catalogue identities are read-only; duplicate them to customise. Measurement settings, including one/many TUT entry, are editable and portable in backups.
 - Custom exercises and custom additions to seeded skill-variation lists.
 - Exercises with history are archived, never destructively removed.
 
@@ -29,7 +29,7 @@ Debug builds automatically load removable representative data: three strength pr
 - Finish requires at least one completed non-zero working set. A rejected finish preserves the active workout and pending input; once that minimum is met, finish immediately without warnings about other incomplete rows.
 - Notes at workout and exercise level. Set logging stays deliberately compact; individual sets do not have notes.
 - Warm-up/working labels; failed/partial attempts are stored as zero and excluded from calculations.
-- Previous performance, substitutions, supersets and circuits.
+- Previous performance, supersets and circuits. Historical substitutions remain attached to the performed exercise; the logger no longer offers a substitution action or a **More** menu.
 
 A substitution changes only the exercise performed in that workout slot. The substitute retains its own graph, history and PRs; unlike movements are never merged.
 
@@ -48,7 +48,11 @@ Bands share material, thickness and length, so width is the relative assistance 
 
 Stacks add their widths. Band-assisted performance is compared only within the same exercise variation.
 
-Each set is logged in one compact row: one performance field, an optional RPE column and the relevant timer/action controls. Hold exercises provide a count-up timer that fills the editable performance field. Rest timers can start automatically or manually, use group-level rules for supersets/circuits, and notify/vibrate in the Android background.
+Logging follows the page/exercise/set/measurement hierarchy. Each set has a separate compact tile; ordinary measurement fields share a row where space permits. The exercise heading stays visible during editing, and exercise sections can collapse. Completing an entry with the keyboard's Next action or **Next set** opens the next empty set. Redundant visible set-number headings are omitted; accessible controls still identify the exercise and set.
+
+A small selection icon opens each set's independent variant chooser, rather than a persistent dropdown. Measurement settings offer a one/many TUT switch: Planche defaults to one; Handstand defaults to many, starting with one input and adding up to eight per set. Attempts and their total persist across reopening and backup/restore. Changing to one retains existing attempts visibly without offering more slots. The existing separate total-time measurement remains distinct. Selected band controls are depressed, checked and accessible as selected; unselected controls are raised. History lists recorded times directly without requiring Edit.
+
+The total-time field provides a count-up stopwatch. Rest timers can start manually, use group-level rules for supersets/circuits, and notify/vibrate in the Android background.
 
 ## Muscle maps
 

@@ -300,7 +300,12 @@ private fun VariationSettingsDialog(
             isCustom = !variation.isSeeded,
             inputConfig = variation.inputConfig.ifBlank { parent?.inputConfig.orEmpty() },
         )
-        ExerciseSettingsDialog(effective, onDismiss) { settings ->
+        ExerciseSettingsDialog(
+            effective, onDismiss, parentExerciseId = variation.exerciseId,
+            defaultManyTuts = ExerciseInputConfig.decode(
+                parent?.inputConfig.orEmpty(), parent?.trackingType.orEmpty(), variation.exerciseId,
+            ).manyTuts,
+        ) { settings ->
             onSave(
                 variation.copy(
                     trackingType = settings.trackingType,
@@ -314,12 +319,18 @@ private fun VariationSettingsDialog(
 internal fun ExerciseSettingsDialog(
         exercise: ExerciseEntity,
         onDismiss: () -> Unit,
+        parentExerciseId: String = exercise.id,
+        defaultManyTuts: Boolean = parentExerciseId == "core:handstand",
         onSave: (ExerciseEntity) -> Unit,
     ) {
         val pounds = LocalContext.current.getSharedPreferences("settings", 0).getBoolean("lb", false)
         val weightUnit = if (pounds) "lb" else "kg"
         var config by remember(exercise.id) {
-            val decoded = ExerciseInputConfig.decode(exercise.inputConfig, exercise.trackingType)
+            val decoded = ExerciseInputConfig.decode(
+                exercise.inputConfig, exercise.trackingType,
+                parentExerciseId,
+                defaultManyTuts,
+            )
             mutableStateOf(if (decoded.weightUnit == null) decoded else decoded.copy(weightUnit = weightUnit))
         }
         AlertDialog(
@@ -343,8 +354,24 @@ internal fun ExerciseSettingsDialog(
                             config = config.copy(bandResistance = it)
                         }
                         ExerciseSettingCheckbox("Time Under Tension (seconds)", config.timeHeld) {
-                            config = config.copy(timeHeld = it)
+                            config = config.copy(timeHeld = it, manyTuts = it && config.manyTuts)
                         }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("TUT entries per set")
+                                Text(if (config.manyTuts) "Many · up to 8" else "One", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(
+                                checked = config.manyTuts,
+                                onCheckedChange = { config = config.copy(manyTuts = it, timeHeld = true) },
+                                modifier = Modifier.semantics { contentDescription = "Multiple TUT entries per set" },
+                            )
+                        }
+                        Text("Recorded attempts are retained when switching to one.", style = MaterialTheme.typography.bodySmall)
                         ExerciseSettingCheckbox("Total Time (seconds)", config.timeUnderTension) {
                             config = config.copy(timeUnderTension = it)
                         }

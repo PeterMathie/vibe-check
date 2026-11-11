@@ -18,6 +18,7 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
     val workouts by vm.workouts.collectAsStateWithLifecycle()
     val exerciseRows by vm.workoutExercises.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
+    val sets by vm.sets.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") };var selected by remember { mutableStateOf<String?>(null) };var date by remember { mutableStateOf(LocalDate.now().toString()) }
     val filteredWorkouts = workouts.filter { workout -> workout.status=="FINISHED"&&(workout.name.contains(query,true)||exerciseRows.any { row -> row.workoutId==workout.id && (row.notes.contains(query,true)||row.exerciseName.contains(query,true)||exercises.any { it.id==row.actualExerciseId && it.canonicalName.contains(query,true) }) }) }
     BackHandler(selected!=null){selected=null}
@@ -38,6 +39,16 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
             VibeCard {
                 Text(w.name, style = MaterialTheme.typography.titleMedium)
                 Text(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(), style = MaterialTheme.typography.bodySmall)
+                exerciseRows.filter { it.workoutId == w.id }.sortedBy { it.position }.forEach { row ->
+                    val results = sets.filter { it.workoutExerciseId == row.id }.sortedBy { it.ordinal }
+                    if (results.isNotEmpty()) {
+                        Text(
+                            row.exerciseName.ifBlank { exercises.find { it.id == row.actualExerciseId }?.canonicalName.orEmpty() },
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(results.joinToString(" · ") { setDescription(it) }, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     VibeActionButton("Edit", { selected=w.id }, modifier = Modifier.weight(1f), importance = ActionImportance.SECONDARY)
                     VibeActionButton("Body map", { onMap(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()) }, modifier = Modifier.weight(1f), importance = ActionImportance.SECONDARY)

@@ -8,6 +8,7 @@ data class ExerciseInputConfig(
     val reps: Boolean = false,
     val bodyweight: Boolean = false,
     val addedWeight: Boolean = false,
+    val manyTuts: Boolean = false,
 ) {
     fun encode(): String = listOf(
         "weightUnit=${weightUnit.orEmpty()}",
@@ -17,11 +18,17 @@ data class ExerciseInputConfig(
         "reps=$reps",
         "bodyweight=$bodyweight",
         "addedWeight=$addedWeight",
+        "manyTuts=$manyTuts",
     ).joinToString(";")
 
     companion object {
-        fun decode(value: String, trackingType: String): ExerciseInputConfig {
-            if (value.isBlank()) return defaults(trackingType)
+        fun decode(
+            value: String,
+            trackingType: String,
+            exerciseId: String? = null,
+            defaultManyTuts: Boolean = exerciseId == "core:handstand",
+        ): ExerciseInputConfig {
+            if (value.isBlank()) return defaults(trackingType).copy(manyTuts = defaultManyTuts)
             val fields = value.split(";").mapNotNull {
                 val parts = it.split("=", limit = 2)
                 parts.takeIf { pair -> pair.size == 2 }?.let { pair -> pair[0] to pair[1] }
@@ -37,6 +44,7 @@ data class ExerciseInputConfig(
                 reps = fields["reps"]?.toBooleanStrictOrNull() ?: defaults.reps,
                 bodyweight = fields["bodyweight"]?.toBooleanStrictOrNull() ?: defaults.bodyweight,
                 addedWeight = fields["addedWeight"]?.toBooleanStrictOrNull() ?: defaults.addedWeight,
+                manyTuts = fields["manyTuts"]?.toBooleanStrictOrNull() ?: defaultManyTuts,
             )
         }
 

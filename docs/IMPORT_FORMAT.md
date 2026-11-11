@@ -1,6 +1,6 @@
 # Structured import — format version 1
 
-This format currently targets database schema 15. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
+This format currently targets database schema 16. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
 
 ## Envelope and merge rules
 
@@ -42,7 +42,7 @@ Legacy workout snapshots may have an empty `trackingType`; new imports should su
 
 ## Definitions and relationships
 
-The app must have seeded its catalogue before import. Seeded exercises, their aliases/muscle mappings, seeded variations, muscles and bands are read-only: identical rows from a backup are accepted, but changed or new seeded definitions are rejected. To customise an exercise, use a new ID, `isCustom: true` and its own aliases/mappings. Custom variations use `isSeeded: false`. `core:` and `free:` exercise ID prefixes are reserved. Cross-version catalogue reconciliation is not implemented; conflicting definitions require reconciliation before import.
+The app must have seeded its catalogue before import. Seeded exercises, their aliases/muscle mappings, seeded variations, muscles and bands are read-only: identical rows from a backup are accepted, but changed or new seeded definitions are rejected. The one exception is exercise/variation `inputConfig`: user-editable measurement settings (including the one/many TUT toggle) can be restored without changing catalogue identities or historical snapshots. To customise an exercise, use a new ID, `isCustom: true` and its own aliases/mappings. Custom variations use `isSeeded: false`. `core:` and `free:` exercise ID prefixes are reserved. Cross-version catalogue reconciliation is not implemented; conflicting definitions require reconciliation before import.
 
 `seed_metadata` is validated but ignored on import: it describes this installation's seeding state and must not control a different installation.
 
@@ -57,3 +57,11 @@ Band link IDs are `band-yellow` (0.6 cm), `band-red` (1.2 cm), `band-black` (2.2
 Habit values must match the field: a numerical field has only `numericValue`, a Boolean field only `booleanValue`, and text/choice/date-time fields only `textValue`. Other value columns are null. Counts are non-negative whole numbers; durations are non-negative. Numeric targets require both comparison and target value, or both null. There is one value per `(fieldId, epochDay)`.
 
 Photos are not part of this JSON format; export them separately. Legacy set `notes` remains a database field for compatibility; new notes should be stored at exercise or workout level.
+
+## Set timing (schema 16)
+
+`inputConfig` supports `manyTuts=true` or `manyTuts=false`. When omitted, new Handstand entries default to many and other exercises to one; saved variation configurations freeze the chosen setting. Exercise measurement settings supply the default; an explicit variation setting takes precedence.
+
+`workout_sets.tutEntriesMillis` is a JSON-array string containing zero to eight non-negative integer millisecond durations, for example `"[1500,2000]"`. A non-empty array must sum to `holdMillis`; the scalar total keeps existing progress consumers compatible. `timeUnderTensionMillis` remains the separate total-time measurement and is not reinterpreted. Legacy version-1 rows may omit the new column: import supplies `"[]"` and retains both original scalar durations unchanged.
+
+`workout_entry_drafts.tutEntries` is a JSON-array string of up to eight text inputs, retaining incomplete decimal entry. Older draft rows may omit it; import supplies `""`. Changing many to one does not remove existing attempts; the logger retains and displays them but does not offer additional slots. The envelope format/version remain unchanged.

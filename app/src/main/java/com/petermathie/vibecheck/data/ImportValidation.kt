@@ -6,6 +6,8 @@ import com.petermathie.vibecheck.domain.tracker.HabitChoiceIntensity
 import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import org.json.JSONObject
 import java.math.BigDecimal
+import com.petermathie.vibecheck.domain.workout.timingInputs
+import com.petermathie.vibecheck.domain.workout.timingMillis
 
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
@@ -65,6 +67,19 @@ internal object ImportValidation {
         oneOf("choiceIntensity", HabitChoiceIntensity.entries.map { it.name }.toSet())
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
+        if (row.has("inputConfig")) {
+            val modes = row.getString("inputConfig").split(";").filter { it.startsWith("manyTuts=") }
+            require(modes.size <= 1 && modes.all { it.substringAfter("=") in setOf("true", "false") }) {
+                "Invalid one/many timing configuration"
+            }
+        }
+        if (table == "workout_entry_drafts") timingInputs(row.getString("tutEntries"))
+        if (table == "workout_sets") {
+            val entries = timingMillis(row.getString("tutEntriesMillis"))
+            require(entries.isEmpty() || (!row.isNull("holdMillis") && entries.sum() == row.getLong("holdMillis"))) {
+                "Timing entries must match the recorded hold total"
+            }
+        }
         if (table == "workouts") {
             require(row.getString("status") != "FINISHED" || !row.isNull("finishedAt")) { "Finished workout requires finishedAt" }
             require(row.isNull("finishedAt") || row.getLong("finishedAt") >= row.getLong("startedAt")) { "Workout finish precedes start" }
@@ -113,6 +128,7 @@ internal object ImportValidation {
             else -> false
         }
         if (protected) require(existing != null && row.keys().asSequence().all { key ->
+            if (key == "inputConfig" && table in setOf("exercises", "exercise_variations")) return@all true
             val a = row.get(key); val b = existing.get(key)
             if (a is Number && b is Number) BigDecimal(a.toString()).compareTo(BigDecimal(b.toString())) == 0 else a == b
         }) { "Cannot change seeded $table definitions; duplicate an exercise to customise it" }

@@ -37,6 +37,7 @@ android {
 
     buildTypes {
         debug {
+            versionNameSuffix = "-workout-review"
             buildConfigField("boolean", "SEED_DEMO_DATA", "true")
         }
         release {

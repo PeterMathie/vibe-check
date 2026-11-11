@@ -85,6 +85,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()
+        compose.onAllNodes(hasText("Exercise notes") and hasClickAction())[0].performClick()
         compose.onAllNodes(hasText("Exercise notes") and hasSetTextAction())[0].performTextInput("Shoulders stable")
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().workoutExercises().first().any { it.notes == "Shoulders stable" } }
@@ -202,9 +203,9 @@ class WorkoutLoggingUiTest {
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Variation").assertDoesNotExist()
         compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").assertExists()
-        compose.onNodeWithText("Wall handstand").performClick()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertExists()
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("15")
 
         compose.waitUntil(15_000) {
@@ -224,7 +225,7 @@ class WorkoutLoggingUiTest {
     }
 
     @Test
-    fun substitutionAfterARecordedSetPreservesOriginalHistory() {
+    fun removedSubstitutionControlsPreserveOriginalHistory() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         val workoutId = startPushWorkout(context)
@@ -239,19 +240,10 @@ class WorkoutLoggingUiTest {
                 compose.onAllNodesWithContentDescription("Workout exercise list").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithContentDescription("Workout exercise list")
-            .performScrollToNode(hasContentDescription("More actions for Bench press"))
-        compose.onNodeWithContentDescription("More actions for Bench press").performClick()
-        compose.onNodeWithText("Substitute exercise").performScrollTo().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Choose exercise").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(hasText("Name, alias or muscle") and hasSetTextAction()).performTextInput("Dip")
-        compose.onNode(hasTextExactly("Dip") and hasClickAction()).performClick()
-
-        compose.waitUntil(15_000) {
-            runBlocking {
-                database.editorDao().workoutExercises().first().count { it.workoutId == workoutId } == 7
-            }
-        }
-        assertEquals(2, runBlocking { database.editorDao().workoutExercises().first().count { it.workoutId == workoutId && it.actualExerciseId == "core:dip" } })
+            .performScrollToNode(hasContentDescription("Set 1 for Bench press"))
+        compose.onNodeWithContentDescription("More actions for Bench press").assertDoesNotExist()
+        compose.onNodeWithText("Substitute exercise").assertDoesNotExist()
+        assertEquals(6, runBlocking { database.editorDao().workoutExercises().first().count { it.workoutId == workoutId } })
         assertEquals(1, runBlocking { database.editorDao().sets().first().count { it.workoutExerciseId == bench.id && it.reps == 5.0 } })
     }
 
@@ -407,6 +399,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Add set for Bench press").performScrollTo().performClick()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 4 for Bench press"))
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertExists()
+        compose.onNodeWithContentDescription("Open set 1 for Bench press").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Resistance for Bench press set 1").performTextInput("60")
         compose.onNodeWithContentDescription("Reps for Bench press set 1").performTextInput("5")
         compose.onNodeWithContentDescription("RPE for Bench press set 1").performTextInput("8")
