@@ -52,6 +52,8 @@ Programme prescriptions (`targetSets`, rep/hold targets, `targetRpe` and `restSe
 
 Finished workouts require `finishedAt >= startedAt`. The merged database may contain at most one DRAFT. Supplying a second active draft is rejected; finish/discard the existing one or update its ID intentionally.
 
+Deleting or adding a set slot in the logger persists the current slot count in that workout exercise's existing `targetSets` column, including zero. Surviving sets and entry drafts are renumbered without changing their IDs or measurements. Programme prescriptions and the original textual `targets` remain unchanged. The one-time Planche band correction changes configuration only in catalogue/variation defaults, assignments and DRAFT snapshots; finished snapshots and band selections are untouched. Neither behaviour changes the schema or version-1 envelope. Import remains a merge, not a way to propagate deletions.
+
 Band link IDs are `band-yellow` (0.6 cm), `band-red` (1.2 cm), `band-black` (2.2 cm) and `band-purple` (3.1 cm). Each stacked band has a separate `workout_set_bands` row. No force conversion occurs during import.
 
 Habit values must match the field: a numerical field has only `numericValue`, a Boolean field only `booleanValue`, and text/choice/date-time fields only `textValue`. Other value columns are null. Counts are non-negative whole numbers; durations are non-negative. Numeric targets require both comparison and target value, or both null. There is one value per `(fieldId, epochDay)`.

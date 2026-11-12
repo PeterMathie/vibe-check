@@ -381,7 +381,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Set 3 for Bench press").assertExists()
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertDoesNotExist()
         compose.onNodeWithContentDescription("Add set for Bench press").assertTextContains("Add set")
-        compose.onNodeWithContentDescription("Start 120 second rest for Bench press").assertExists()
+        compose.onNodeWithContentDescription("Start 120 second rest for Bench press").assertDoesNotExist()
 
         compose.onNodeWithContentDescription("Add set for Bench press").performScrollTo().performClick()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 4 for Bench press"))

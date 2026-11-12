@@ -50,7 +50,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val measurements = dao.measurements().live()
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
-    private fun write(onSuccess: () -> Unit = {}, block: suspend () -> Unit) {
+    private fun write(onSuccess: () -> Unit = {}, block: suspend () -> Unit) =
         viewModelScope.launch {
             writes.withLock {
                 try {
@@ -63,7 +63,6 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                 }
             }
         }
-    }
     fun save(row: ProgrammeEntity) = write { dao.programme(row) }
     fun createProgramme(row: ProgrammeEntity, day: ProgrammeDayEntity, onCreated: () -> Unit = {}) = write(onCreated) {
         db.withTransaction {
@@ -190,6 +189,11 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun removeDay(id: String) = write { dao.deleteDay(id) }
     fun removeEntry(id: String) = write { dao.deleteEntry(id) }
     fun removeSet(id: String) = write { dao.deleteSet(id) }
+    fun removeWorkoutSet(id: String, ordinal: Int, remaining: Int, onRemoved: () -> Unit) =
+        write(onRemoved) { dao.deleteWorkoutSet(id, ordinal, remaining) }
+    fun setWorkoutSetCount(id: String, count: Int) = write { dao.setWorkoutSetCount(id, count) }
+    fun removeWorkoutExercise(id: String, onRemoved: () -> Unit = {}) =
+        write(onRemoved) { dao.deleteWorkoutExercise(id) }
     fun removeWorkout(id: String, onRemoved: () -> Unit = {}) = write(onRemoved) { dao.deleteWorkout(id) }
     fun clearValue(id: String, day: Long) = write { trackerStore.clearValue(id, day) }
     fun removeMeasurement(id: String) = write { dao.deleteMeasurement(id) }

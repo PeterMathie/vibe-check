@@ -49,6 +49,25 @@ interface EditorDao {
     @Upsert suspend fun set(row: WorkoutSetEntity)
     @Upsert suspend fun setBands(rows: List<WorkoutSetBandEntity>)
     @Query("DELETE FROM workout_sets WHERE id = :id") suspend fun deleteSet(id: String)
+    @Query("DELETE FROM workout_exercises WHERE id = :id") suspend fun deleteWorkoutExercise(id: String)
+    @Query("DELETE FROM workout_sets WHERE workoutExerciseId=:id AND ordinal=:ordinal")
+    suspend fun deleteSetAt(id: String, ordinal: Int)
+    @Query("UPDATE workout_sets SET ordinal=ordinal-1 WHERE workoutExerciseId=:id AND ordinal>:ordinal")
+    suspend fun shiftSetsAfterDeletion(id: String, ordinal: Int)
+    @Query("UPDATE workout_exercises SET targetSets=:count WHERE id=:id")
+    suspend fun setWorkoutSetCount(id: String, count: Int)
+    @Transaction
+    suspend fun deleteWorkoutSet(id: String, ordinal: Int, remaining: Int) {
+        require(ordinal > 0 && remaining >= 0) { "Invalid set deletion" }
+        val drafts = entryDrafts(id)
+        deleteSetAt(id, ordinal)
+        shiftSetsAfterDeletion(id, ordinal)
+        deleteEntryDrafts(id)
+        drafts.filter { it.ordinal != ordinal }.forEach {
+            entryDraft(if (it.ordinal > ordinal) it.copy(ordinal = it.ordinal - 1) else it)
+        }
+        setWorkoutSetCount(id, remaining)
+    }
     @Query("DELETE FROM workout_set_bands WHERE setId = :id") suspend fun clearBands(id: String)
     @Query("SELECT * FROM workout_entry_drafts WHERE workoutExerciseId = :workoutExerciseId ORDER BY ordinal LIMIT 1")
     suspend fun entryDraft(workoutExerciseId: String): WorkoutEntryDraftEntity?

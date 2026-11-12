@@ -26,6 +26,7 @@ import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.WorkoutEditor
 import com.petermathie.vibecheck.ui.HistoryScreen
 import com.petermathie.vibecheck.ui.ExerciseSettingsDialog
+import com.petermathie.vibecheck.ui.RestTimer
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import kotlinx.coroutines.flow.first
@@ -58,6 +59,88 @@ class WorkoutSetTilesTest {
     }
 
     @Test
+    fun tickStartsConfiguredRestAndParentContainsIndependentlyTappableSets() {
+        val workout = start()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        RestTimer.cancel(context)
+        try {
+            show(workout)
+            val tick = compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set")
+            tick.assertIsNotEnabled()
+            compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("5")
+            compose.runOnIdle {
+                assertEquals(0, context.getSharedPreferences("settings", 0).getLong("restEnd", 0))
+            }
+            val parent = compose.onNodeWithContentDescription("Exercise Handstand").getUnclippedBoundsInRoot()
+            val last = compose.onNodeWithContentDescription("Set 3 for Handstand").getUnclippedBoundsInRoot()
+            assertTrue(parent.bottom >= last.bottom && parent.left < last.left && parent.right > last.right)
+            tick.performScrollTo().performClick()
+            compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertExists()
+            compose.onNodeWithContentDescription("Exercise Handstand")
+                .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Expanded"))
+            val rest = runBlocking {
+                db.editorDao().workoutExercises().first().first { it.workoutId == workout && it.actualExerciseId == "core:handstand" }.restSeconds
+            }
+            compose.runOnIdle {
+                val remaining = context.getSharedPreferences("settings", 0).getLong("restEnd", 0) - System.currentTimeMillis()
+                assertTrue(remaining in (rest * 1_000L - 10_000)..(rest * 1_000L))
+            }
+            compose.onNodeWithContentDescription("Start 120 second rest for Handstand").assertDoesNotExist()
+        } finally {
+            RestTimer.cancel(context)
+        }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun stagedDeletionRemovesEmptyAndSavedTilesWithoutResurrectionOnReopening() {
+        val workout = start()
+        show(workout)
+        val row = runBlocking { db.editorDao().workoutExercises().first().first { it.workoutId == workout && it.actualExerciseId == "core:handstand" } }
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("5")
+        val savedId = runBlocking { db.editorDao().sets().first().single { it.workoutExerciseId == row.id }.id }
+        compose.onNodeWithContentDescription("Set 3 for Handstand").performScrollTo()
+        val empty = compose.onNodeWithContentDescription("Swipe actions for set 3 for Handstand")
+        empty.performCustomAccessibilityActionWithLabel("Reveal delete")
+        empty.performCustomAccessibilityActionWithLabel("Delete set 3 for Handstand")
+        compose.waitUntil(15_000) {
+            runBlocking { db.editorDao().workoutExerciseById(row.id)?.targetSets == 2 }
+        }
+        compose.onNodeWithContentDescription("Set 3 for Handstand").assertDoesNotExist()
+        val saved = compose.onNodeWithContentDescription("Swipe actions for set 1 for Handstand")
+        saved.performCustomAccessibilityActionWithLabel("Reveal delete")
+        saved.performCustomAccessibilityActionWithLabel("Delete set 1 for Handstand")
+        compose.waitUntil(15_000) { runBlocking { db.editorDao().setById(savedId) == null && db.editorDao().workoutExerciseById(row.id)?.targetSets == 1 } }
+        compose.onNodeWithContentDescription("Exercise heading for Handstand").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Exercise heading for Handstand").performClick()
+        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Set 2 for Handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
+            .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun pinnedHeadingAndExerciseBodyShareOneDeletionStage() {
+        val workout = start()
+        show(workout)
+        compose.onNodeWithContentDescription("RPE for Handstand set 3").performScrollTo()
+        compose.onNodeWithContentDescription("Pinned exercise heading for Handstand").assertIsDisplayed()
+        val wrappers = compose.onAllNodesWithContentDescription("Swipe actions for exercise Handstand")
+        wrappers.assertCountEquals(2)
+        wrappers.onFirst().performCustomAccessibilityActionWithLabel("Reveal delete")
+        wrappers.onLast().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Delete revealed"))
+        wrappers.onLast().performCustomAccessibilityActionWithLabel("Close delete")
+        wrappers.onFirst().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Closed"))
+        wrappers.onLast().performCustomAccessibilityActionWithLabel("Reveal delete")
+        wrappers.onLast().performCustomAccessibilityActionWithLabel("Delete exercise Handstand")
+        compose.waitUntil(15_000) {
+            runBlocking { db.editorDao().workoutExercises().first().none { it.workoutId == workout && it.actualExerciseId == "core:handstand" } }
+        }
+        assertTrue(runBlocking { db.editorDao().workoutExercises().first().any { it.workoutId == workout && it.actualExerciseId == "core:planche" } })
+    }
+
+    @Test
     fun manyTimingHasExactlyEightSlotsAndPersistsEveryAttemptAndTotal() {
         val workout = start()
         show(workout)
@@ -69,8 +152,9 @@ class WorkoutSetTilesTest {
         assertFourByTwoTimingGrid()
         compose.onNodeWithContentDescription("Add TUT entry for Handstand set 1").assertIsNotEnabled()
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithText("TUT 36s").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithContentDescription("TUT total for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
         }
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("TUT 36s", substring = true)
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().sets().first().any { timingMillis(it.tutEntriesMillis) == List(8) { i -> (i + 1) * 1000L } && it.holdMillis == 36_000L } }
         }
@@ -105,9 +189,8 @@ class WorkoutSetTilesTest {
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("Set 1 for Handstand").performScrollTo().performClick()
         assertFourByTwoTimingGrid()
-        compose.onNodeWithText("TUT (s)").assertExists()
+        compose.onNode(hasText("TUT (s)") and hasAnyAncestor(hasContentDescription("Set 1 for Handstand"))).assertExists()
         compose.onNodeWithContentDescription("TUT attempt 8 for Handstand set 1").performTextReplacement("9")
         compose.waitUntil(15_000) {
             runBlocking {
@@ -159,17 +242,18 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun completingTileOpensNextEmptyAndExercisesCollapseWithoutLosingValues() {
+    fun completingTileSelectsNextEmptyAndExercisesCollapseWithoutLosingValues() {
         val workout = start()
         show(workout)
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("5")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performImeAction()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertExists()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Collapse Handstand").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("5")
+        compose.onNodeWithContentDescription("Set 2 for Handstand").assertIsSelected()
+        compose.onNodeWithContentDescription("Exercise heading for Handstand").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Set 2 for Handstand").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Expand Handstand").performClick()
+        compose.onNodeWithContentDescription("Exercise heading for Handstand").performClick()
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         assertTrue(runBlocking { db.editorDao().sets().first().any { it.holdMillis == 5_000L && it.rpe == 8.0 } })
         compose.onNodeWithContentDescription("More actions for Handstand").assertDoesNotExist()
@@ -177,7 +261,7 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun collapsedTimingShowsOnlyTotalsAndOpeningRetainsIndividualAttempts() {
+    fun timingFieldsRemainDirectlyEditableWithOneSumAndSeparateTotalTime() {
         val workout = start()
         show(workout)
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("4")
@@ -192,13 +276,9 @@ class WorkoutSetTilesTest {
             }
         }
 
-        compose.onNodeWithContentDescription("Set 1 for Handstand").performScrollTo().performClick()
-        compose.onNodeWithText("TUT 10s · Total 30s").assertExists()
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("TUT 10s", substring = true)
         compose.onNodeWithText("4s + 6s = 10s · Total 30s").assertDoesNotExist()
-        compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertDoesNotExist()
         compose.onNodeWithText("Wall handstand").assertDoesNotExist()
-
-        compose.onNodeWithContentDescription("Set 1 for Handstand").performClick()
         compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertTextContains("4")
         compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").assertTextContains("6")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("30")
@@ -247,7 +327,8 @@ class WorkoutSetTilesTest {
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertDoesNotExist()
 
-        compose.onNodeWithContentDescription("Set 2 for Handstand").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Set 2 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertDoesNotExist()
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
         compose.onNodeWithContentDescription("Change variant for Handstand set 2").performScrollTo().performClick()
@@ -257,13 +338,13 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun emptyTilesShowMeasurementCuesAndLabelledFooterActionsShareARow() {
+    fun emptyTilesProvideFieldsAndLabelledFooterActionsShareARow() {
         val workout = start()
         show(workout)
         compose.onNodeWithContentDescription("Workout exercise list")
             .performScrollToNode(hasContentDescription("Set 1 for Dip"))
         compose.onNodeWithText("Ready to log").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Set 2 for Dip").assert(hasAnyDescendant(hasText("— reps", substring = true)))
+        compose.onNodeWithContentDescription("Reps for Dip set 2").assertIsEnabled()
         compose.onNodeWithContentDescription("Add set for Dip").performScrollTo().assertTextContains("Add set")
         compose.onNodeWithContentDescription("Show notes for Dip").performScrollTo().assertTextContains("Notes")
         val addBounds = compose.onNodeWithContentDescription("Add set for Dip").fetchSemanticsNode().boundsInRoot
@@ -310,14 +391,14 @@ class WorkoutSetTilesTest {
         addTime.performClick()
         compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").performTextInput("6")
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithText("TUT 10s").fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithContentDescription("TUT total for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onAllNodesWithText("TUT 10s").assertCountEquals(1)
+        compose.onAllNodesWithContentDescription("TUT total for Handstand set 1").assertCountEquals(1)
         compose.onNodeWithText("TUT total:", substring = true).assertDoesNotExist()
         compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set")
             .performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertExists()
-        compose.onNodeWithText("TUT 10s").assertExists()
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("TUT 10s", substring = true)
     }
 
     @Test
@@ -345,15 +426,15 @@ class WorkoutSetTilesTest {
         for (ordinal in 2..3) {
             val empty = compose.onNodeWithContentDescription("Set $ordinal for Back extension")
                 .performScrollTo().getUnclippedBoundsInRoot()
-            assertEquals(48f, (empty.bottom - empty.top).value, 0.5f)
-            val cue = compose.onNode(hasText("— kg · — reps") and hasAnyAncestor(hasContentDescription("Set $ordinal for Back extension")))
-                .getUnclippedBoundsInRoot()
-            assertEquals((empty.top + empty.bottom).value / 2f, (cue.top + cue.bottom).value / 2f, 0.5f)
+            assertTrue("Every simple tile remains compact with editable fields", empty.bottom - empty.top <= 160.dp)
+            compose.onNodeWithContentDescription("Resistance for Back extension set $ordinal").assertIsEnabled()
+            compose.onNodeWithContentDescription("Reps for Back extension set $ordinal").assertIsEnabled()
+            compose.onNodeWithContentDescription("Complete set $ordinal for Back extension and open next empty set").assertIsNotEnabled()
         }
     }
 
     @Test
-    fun openAndCollapsedTilesKeepAContrastingBoundary() {
+    fun activeAndInactiveTilesKeepAContrastingBoundary() {
         val workout = start()
         show(workout)
         fun assertBoundary() {
@@ -365,29 +446,34 @@ class WorkoutSetTilesTest {
             assertTrue("Set outline must remain visible: contrast=$contrast", contrast >= 3f)
         }
         assertBoundary()
-        compose.onNodeWithContentDescription("Set 1 for Handstand").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Set 2 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         assertBoundary()
     }
 
     @Test
-    fun tileBodyTogglesButFieldsAndPickerKeepTheTileOpen() {
+    fun everyTileHasDirectFieldsALeftVariantControlAndAnAlwaysPresentTick() {
         val workout = start()
         show(workout)
         val tile = compose.onNodeWithContentDescription("Set 1 for Handstand")
-        val expanded = SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Expanded")
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
-            .performTouchInput { click() }.performTextInput("4")
-        tile.assert(expanded)
-        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performTouchInput { click() }
-        compose.onNodeWithText("Wall handstand").performClick()
-        tile.assert(expanded)
+        for (ordinal in 1..3) {
+            compose.onNodeWithContentDescription("Time Under Tension for Handstand set $ordinal").assertIsEnabled()
+            compose.onNodeWithContentDescription("Complete set $ordinal for Handstand and open next empty set").assertIsNotEnabled()
+        }
+        val bounds = tile.getUnclippedBoundsInRoot()
+        val swap = compose.onNodeWithContentDescription("Change variant for Handstand set 1").getUnclippedBoundsInRoot()
+        val tick = compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set").getUnclippedBoundsInRoot()
+        assertTrue(swap.left < bounds.left + (bounds.right - bounds.left) / 2)
+        assertTrue(tick.left > swap.right)
+        assertEquals(swap.top.value, tick.top.value, 0.5f)
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2")
+            .performScrollTo().performTextInput("4")
+        compose.onNodeWithContentDescription("Complete set 2 for Handstand and open next empty set").assertIsEnabled()
+        compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set").assertIsNotEnabled()
         tile.performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(8f, 8f)) }
-        tile.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Collapsed"))
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
         compose.onNodeWithContentDescription("Open set 1 for Handstand").assertDoesNotExist()
         compose.onNodeWithContentDescription("Close set 1 for Handstand").assertDoesNotExist()
-        tile.performTouchInput { click(androidx.compose.ui.geometry.Offset(8f, 8f)) }
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("4")
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertTextContains("4")
     }
 
     @Test
@@ -429,7 +515,7 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun changingVariantOnCollapsedRecordedSetPreservesAllMeasurements() {
+    fun changingRecordedSetVariantPreservesAllMeasurements() {
         val workout = start()
         val recorded = runBlocking {
             val config = ExerciseInputConfig(weightUnit = "kg", reps = true, addedWeight = true,
@@ -464,7 +550,7 @@ class WorkoutSetTilesTest {
         assertEquals(recorded.rpe, updated.rpe)
         assertEquals(listOf("band-yellow", "band-black"), runBlocking { db.editorDao().setBands().first().filter { it.setId == recorded.id }.map { it.bandId } })
         compose.onNodeWithContentDescription("Set 1 for Handstand").assert(
-            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Expanded"),
+            SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "Active set"),
         )
         compose.onNodeWithContentDescription("TUT attempt 2 for Handstand set 1").assertTextContains("6")
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performScrollTo().performClick()
@@ -536,10 +622,10 @@ class WorkoutSetTilesTest {
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().setBands().first().any { it.bandId == "band-yellow" } }
         }
-        compose.onNodeWithContentDescription("Collapse Dip").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Expand Dip").performClick()
+        compose.onNodeWithContentDescription("Reps for Dip set 1").assertTextContains("5")
+        compose.onNodeWithContentDescription("Exercise heading for Dip").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Exercise heading for Dip").performClick()
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Dip").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Set 1 for Dip").performClick()
         compose.onNodeWithContentDescription("Yellow band for Dip set 1").performScrollTo().assertIsSelected()
     }
 

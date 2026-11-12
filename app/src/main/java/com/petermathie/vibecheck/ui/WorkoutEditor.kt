@@ -5,14 +5,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Cached
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.components.VibeSurface
@@ -43,6 +42,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
@@ -124,6 +124,18 @@ fun WorkoutEditor(
     }.associateBy { it.id }
     val validEntryRows = remember(workout.id) { mutableStateMapOf<String, Boolean>() }
     val collapsedRows = remember(workout.id) { mutableStateMapOf<String, Boolean>() }
+    val exerciseSwipeStates = remember(workout.id) { mutableMapOf<String, StagedSwipeState>() }
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    var headingHeight by remember { mutableIntStateOf(0) }
+    suspend fun removeExercise(row: WorkoutExerciseEntity) {
+        vm.removeWorkoutExercise(row.id) {
+            validEntryRows.remove(row.id)
+            collapsedRows.remove(row.id)
+            exerciseSwipeStates.remove(row.id)
+        }.join()
+    }
+    Box(Modifier.fillMaxSize()) {
     LazyColumn(
         Modifier
             .fillMaxSize()
@@ -136,6 +148,7 @@ fun WorkoutEditor(
             bottom = 12.dp + LocalAppFabClearance.current,
         ),
         verticalArrangement = Arrangement.spacedBy(10.dp),
+        state = listState,
     ) {
         item {
             Text(workout.name, style = MaterialTheme.typography.headlineSmall)
@@ -158,39 +171,37 @@ fun WorkoutEditor(
                 sets.filter { it.workoutExerciseId == snapshot.id }.sortedBy { it.ordinal }
             }
             val restSeconds=if(row.supersetGroup==null)row.restSeconds else rows.filter { it.supersetGroup==row.supersetGroup }.maxOf { it.restSeconds }
-            stickyHeader(key = "${row.id}:heading") {
-                Surface(color = MaterialTheme.colorScheme.surface) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            item(key = row.id) {
+                val name = exercise?.canonicalName.orEmpty()
+                val collapsed = collapsedRows[row.id] == true
+                StagedSwipeToDelete(
+                    "exercise $name",
+                    { removeExercise(row) },
+                    state = exerciseSwipeStates.getOrPut(row.id) { StagedSwipeState() },
+                ) {
+                    VibeSurface(
+                        level = VibeSurfaceLevel.CARD,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth()
+                            .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.shapes.medium)
+                            .panelToggle("Exercise $name", !collapsed) { collapsedRows[row.id] = !collapsed },
                     ) {
-                        Text(
-                            exercise?.canonicalName.orEmpty(),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        IconButton(onClick = { RestTimer.start(context, restSeconds) }) {
-                            Icon(Icons.Outlined.Timer, "Start $restSeconds second rest for ${exercise?.canonicalName.orEmpty()}")
-                        }
-                        val collapsed = collapsedRows[row.id] == true
-                        IconButton(onClick = { collapsedRows[row.id] = !collapsed }) {
-                            Icon(
-                                if (collapsed) Icons.Outlined.ExpandMore else Icons.Outlined.ExpandLess,
-                                "${if (collapsed) "Expand" else "Collapse"} ${exercise?.canonicalName.orEmpty()}",
+                        Column {
+                            ExerciseHeading(name, !collapsed, { collapsedRows[row.id] = !collapsed })
+                            if (!collapsed) WorkoutExerciseCard(
+                                vm,
+                                row,
+                                exercise,
+                                sets.filter { it.workoutExerciseId == row.id },
+                                previous,
+                                onInputValidityChanged = { validEntryRows[row.id] = it },
+                                onCompleteSet = {
+                                    if (workout.status == "DRAFT" && restSeconds > 0) RestTimer.start(context, restSeconds)
+                                },
                             )
                         }
                     }
                 }
-            }
-            item(key = row.id) {
-                if (collapsedRows[row.id] != true) WorkoutExerciseCard(
-                    vm,
-                    row,
-                    exercise,
-                    sets.filter { it.workoutExerciseId == row.id },
-                    previous,
-                    onInputValidityChanged = { validEntryRows[row.id] = it },
-                )
             }
         }
         item {
@@ -225,6 +236,39 @@ fun WorkoutEditor(
                 Text("Delete workout")
             }
         }
+    }
+    val rowIds = rows.map { it.id }
+    val stickyItem by remember(listState, rowIds) {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.firstOrNull {
+                it.offset < 0 && it.key in rowIds
+            }?.let { Triple(it.key, it.offset, it.size) }
+        }
+    }
+    val currentStickyItem = stickyItem
+    val stickyRow = rows.find { it.id == currentStickyItem?.first }
+    if (stickyRow != null && currentStickyItem != null) {
+        val name = stickyRow.exerciseName.ifBlank {
+            definitions.find { it.id == stickyRow.actualExerciseId }?.canonicalName.orEmpty()
+        }
+        val expanded = collapsedRows[stickyRow.id] != true
+        val offset = minOf(0, currentStickyItem.second + currentStickyItem.third - headingHeight)
+        Box(
+            Modifier.offset(y = with(density) { offset.toDp() })
+                .padding(horizontal = 12.dp)
+                .onSizeChanged { headingHeight = it.height },
+        ) {
+            StagedSwipeToDelete(
+                "exercise $name",
+                { removeExercise(stickyRow) },
+                state = exerciseSwipeStates.getOrPut(stickyRow.id) { StagedSwipeState() },
+            ) {
+                Surface(color = MaterialTheme.colorScheme.surface) {
+                    ExerciseHeading(name, expanded, { collapsedRows[stickyRow.id] = expanded }, pinned = true)
+                }
+            }
+        }
+    }
     }
     if (bodyweight) {
         QuantitativeValueDialog(
@@ -265,6 +309,26 @@ fun WorkoutEditor(
     if (add) ExercisePicker(vm, { add = false }) { e -> vm.save(WorkoutExerciseEntity(newId(), workout.id, e.id, e.id, rows.size, "", 120, null)); add = false }
 }
 
+private fun Modifier.panelToggle(label: String, expanded: Boolean, toggle: () -> Unit): Modifier =
+    pointerInput(label, expanded) { detectTapGestures { toggle() } }
+        .semantics {
+            contentDescription = label
+            stateDescription = if (expanded) "Expanded" else "Collapsed"
+            role = Role.Button
+            onClick(label = if (expanded) "Collapse" else "Expand") { toggle(); true }
+        }
+
+@Composable
+private fun ExerciseHeading(name: String, expanded: Boolean, toggle: () -> Unit, pinned: Boolean = false) {
+    Text(
+        name,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .panelToggle("${if (pinned) "Pinned exercise" else "Exercise"} heading for $name", expanded, toggle)
+            .padding(12.dp),
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun WorkoutExerciseCard(
@@ -274,6 +338,7 @@ private fun WorkoutExerciseCard(
     sets: List<WorkoutSetEntity>,
     previous: List<WorkoutSetEntity>,
     onInputValidityChanged: (Boolean) -> Unit,
+    onCompleteSet: () -> Unit,
 ) {
     val variations by vm.variations.collectAsStateWithLifecycle()
     val availableBands by vm.bands.collectAsStateWithLifecycle()
@@ -417,6 +482,7 @@ private fun WorkoutExerciseCard(
         return parsed
     }
     fun updateDraft(updated: WorkoutEntryDraftEntity) {
+        activeOrdinal = updated.ordinal
         drafts[updated.ordinal] = updated
         val parsed = parsedSet(updated)
         if (parsed == null) {
@@ -467,20 +533,40 @@ private fun WorkoutExerciseCard(
                 it != ExerciseMeasurement.BODYWEIGHT && it != ExerciseMeasurement.BANDS
             }
             val fieldScale = maxOf(1f, LocalDensity.current.fontScale / 1.5f)
+            key(draft.setId) {
+            StagedSwipeToDelete(
+                label = "set $ordinal for ${exercise?.canonicalName.orEmpty()}",
+                onDelete = {
+                    vm.removeWorkoutSet(row.id, ordinal, visibleRows - 1) {
+                        val remaining = drafts.values.filter { it.ordinal != ordinal }.map {
+                            if (it.ordinal > ordinal) it.copy(ordinal = it.ordinal - 1) else it
+                        }
+                        drafts.clear()
+                        remaining.forEach { drafts[it.ordinal] = it }
+                        visibleRows--
+                        activeOrdinal = when {
+                            activeOrdinal > ordinal -> activeOrdinal - 1
+                            activeOrdinal == ordinal -> minOf(ordinal, visibleRows)
+                            else -> activeOrdinal
+                        }
+                    }.join()
+                },
+            ) {
             VibeSurface(
                 level = if (isActive) VibeSurfaceLevel.RAISED else VibeSurfaceLevel.CARD,
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.shapes.medium)
                     .pointerInput(isActive) {
-                        detectTapGestures { activeOrdinal = if (isActive) 0 else ordinal }
+                        detectTapGestures { activeOrdinal = ordinal }
                     }
                     .semantics {
                         contentDescription = "Set $ordinal for ${exercise?.canonicalName.orEmpty()}"
-                        stateDescription = if (isActive) "Expanded" else "Collapsed"
+                        stateDescription = if (isActive) "Active set" else "Editable set"
                         role = Role.Button
-                        onClick(label = if (isActive) "Collapse set" else "Expand set") {
-                            activeOrdinal = if (isActive) 0 else ordinal
+                        selected = isActive
+                        onClick(label = "Select set") {
+                            activeOrdinal = ordinal
                             true
                         }
                     },
@@ -488,7 +574,7 @@ private fun WorkoutExerciseCard(
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = if (!isActive && recorded == null) 0.dp else 8.dp),
+                    .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Row(
@@ -496,28 +582,6 @@ private fun WorkoutExerciseCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                 ) {
-                    if (recorded != null) {
-                        Text(
-                            setDescription(recorded, includeTimingAttempts = false, labelTimingTotal = true),
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelLarge,
-                        )
-                    } else {
-                        Text(
-                            fields.filterNot { it == ExerciseMeasurement.BODYWEIGHT || it == ExerciseMeasurement.RPE }
-                                .ifEmpty { listOf(ExerciseMeasurement.RPE) }
-                                .joinToString(" · ") {
-                                    when (it) {
-                                        ExerciseMeasurement.WEIGHT -> "— ${inputConfig.weightUnit}"
-                                        ExerciseMeasurement.ADDED_WEIGHT -> "+— $preferredWeightUnit"
-                                        else -> it.placeholder
-                                    }
-                                },
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                     if (exerciseVariations.isNotEmpty()) {
                         var variationMenu by remember(ordinal) { mutableStateOf(false) }
                         Box {
@@ -525,7 +589,7 @@ private fun WorkoutExerciseCard(
                                 enabled = draftLoaded,
                                 onClick = { variationMenu = true },
                             ) {
-                                Icon(Icons.Outlined.Tune, "Change variant for ${exercise?.canonicalName.orEmpty()} set $ordinal")
+                                Icon(Icons.Outlined.Cached, "Change variant for ${exercise?.canonicalName.orEmpty()} set $ordinal")
                             }
                             DropdownMenu(expanded = variationMenu, onDismissRequest = { variationMenu = false }) {
                                 exerciseVariations.forEach { option ->
@@ -560,36 +624,18 @@ private fun WorkoutExerciseCard(
                             }
                         }
                     }
-                    if (isActive) SetIconButton(
+                    Spacer(Modifier.weight(1f))
+                    SetIconButton(
                         label = "Next set",
                         description = "Complete set $ordinal for ${exercise?.canonicalName.orEmpty()} and open next empty set",
                         icon = Icons.Outlined.Check,
                         enabled = inputError(draft) == null && parsedSet(draft) != null,
-                        onClick = { openNextEmpty(ordinal) },
+                        onClick = { onCompleteSet(); openNextEmpty(ordinal) },
                     )
-                    if (recorded != null && isActive) {
-                        IconButton(onClick = {
-                            sets.find { it.ordinal == ordinal }?.let { vm.removeSet(it.id) }
-                            vm.discardEntryDraft(row.id, ordinal)
-                            drafts[ordinal] = newSetEntryDraft(
-                                row.id,
-                                ordinal,
-                                drafts[ordinal - 1],
-                                defaultVariation?.id,
-                                validVariationIds,
-                            )
-                        }) {
-                            Icon(
-                                Icons.Outlined.Delete,
-                                contentDescription = "Remove set $ordinal for ${exercise?.canonicalName.orEmpty()}",
-                            )
-                        }
-                    }
                 }
-                if (isActive) {
                 val focusRequester = remember(ordinal) { FocusRequester() }
                 LaunchedEffect(isActive, focusNext) {
-                    if (focusNext) {
+                    if (isActive && focusNext) {
                         focusRequester.requestFocus()
                         focusNext = false
                     }
@@ -601,7 +647,7 @@ private fun WorkoutExerciseCard(
                 val previousSet = comparable.firstOrNull {
                     it.workoutExerciseId == latest?.workoutExerciseId && it.ordinal == ordinal
                 } ?: latest
-                previousSet?.let {
+                previousSet?.takeIf { isActive }?.let {
                     Text(
                         "Previous: ${setDescription(it, includeTimingAttempts = false)}",
                         style = MaterialTheme.typography.bodySmall,
@@ -680,6 +726,14 @@ private fun WorkoutExerciseCard(
                                 }
                                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                                     Text("${attempts.size}/$MAX_TUT_ENTRIES", style = MaterialTheme.typography.labelMedium)
+                                    val values = attempts.map { quantitativeInput(it) }
+                                    if (values.none { !it.isValid } && values.any { it.value != null }) Text(
+                                        " · TUT ${formatQuantitative(values.sumOf { it.value ?: 0.0 })}s",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        modifier = Modifier.semantics {
+                                            contentDescription = "TUT total for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                                        },
+                                    )
                                     if (inputConfig.manyTuts) SetIconButton(
                                         label = "Add time",
                                         description = "Add TUT entry for ${exercise?.canonicalName.orEmpty()} set $ordinal",
@@ -777,6 +831,7 @@ private fun WorkoutExerciseCard(
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 }
+                }
             }
             }
         }
@@ -789,6 +844,7 @@ private fun WorkoutExerciseCard(
                     val ordinal = visibleRows + 1
                     visibleRows = ordinal
                     activeOrdinal = ordinal
+                    vm.setWorkoutSetCount(row.id, ordinal)
                     updateDraft(
                         newSetEntryDraft(
                             row.id,

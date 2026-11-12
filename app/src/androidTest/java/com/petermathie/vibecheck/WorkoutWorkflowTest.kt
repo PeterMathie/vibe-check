@@ -10,6 +10,8 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.SetDraft
 import com.petermathie.vibecheck.ui.MainViewModel
+import com.petermathie.vibecheck.ui.emptySet
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -66,6 +68,51 @@ class WorkoutWorkflowTest {
         assertTrue(requireNotNull(completion).affectedMuscleIds.isNotEmpty())
         assertNull(repository.observeDraft().first())
         assertTrue(repository.observeMuscleRecency(day.mode).first { it.isNotEmpty() }.isNotEmpty())
+    }
+
+    @Test(timeout = 120_000)
+    fun plancheBandCorrectionUpdatesDefaultsAndDraftsOnceWithoutRewritingHistory() = runBlocking {
+        val dao = database.editorDao()
+        val workout = repository.startWorkout("demo-day-push")
+        val row = dao.workoutExercises().first().single { it.workoutId == workout && it.actualExerciseId == "core:planche" }
+        val config = "weightUnit=lb;timeHeld=true;manyTuts=false;bandResistance=false;measurementOrder=tut,bands,rpe"
+        val exercise = requireNotNull(dao.exerciseById("core:planche"))
+        dao.exercise(exercise.copy(inputConfig = config))
+        dao.variations().first().filter { it.exerciseId == exercise.id }.forEach { dao.variation(it.copy(inputConfig = config)) }
+        val variant = dao.variations().first().first { it.exerciseId == exercise.id }
+        dao.variation(variant.copy(id = "custom-planche", name = "Custom Planche", inputConfig = config, isSeeded = false))
+        val assignments = dao.entries().first().filter { it.exerciseId == exercise.id }
+        assignments.forEach { dao.entry(it.copy(inputConfig = config)) }
+        dao.workoutExercise(row.copy(inputConfig = config))
+        val saved = emptySet(row.id, 1).copy(variationId = variant.id, holdMillis = 12_000, variationInputConfigSnapshot = config)
+        dao.set(saved)
+        val historicalRow = row.copy(id = "historical-planche", workoutId = "demo-workout-push-1", inputConfig = config)
+        dao.workoutExercise(historicalRow)
+        val historicalSet = saved.copy(id = "historical-set", workoutExerciseId = historicalRow.id)
+        dao.set(historicalSet)
+        val beforeBands = dao.setBands().first()
+        database.openHelper.writableDatabase.execSQL("DELETE FROM seed_metadata WHERE `key`='planche-band-measurement'")
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        DatabaseSeeder(context, database).seedIfNeeded()
+        val expected = config.replace("bandResistance=false", "bandResistance=true")
+        assertEquals(expected.split(";").sorted(), dao.exerciseById(exercise.id)!!.inputConfig.split(";").sorted())
+        dao.variations().first().filter { it.exerciseId == exercise.id }.forEach {
+            assertTrue(ExerciseInputConfig.decode(it.inputConfig, it.trackingType).bandResistance)
+        }
+        assertEquals(
+            config.split(";").filterNot { it.startsWith("bandResistance=") },
+            dao.workoutExerciseById(row.id)!!.inputConfig.split(";").filterNot { it.startsWith("bandResistance=") },
+        )
+        assertTrue(ExerciseInputConfig.decode(dao.setById(saved.id)!!.variationInputConfigSnapshot, "SKILL_HOLD").bandResistance)
+        assertEquals(historicalRow, dao.workoutExerciseById(historicalRow.id))
+        assertEquals(historicalSet, dao.setById(historicalSet.id))
+        assertEquals(beforeBands, dao.setBands().first())
+        assignments.forEach { assignment ->
+            assertTrue(ExerciseInputConfig.decode(dao.entries().first().single { it.id == assignment.id }.inputConfig, "SKILL_HOLD").bandResistance)
+        }
+        dao.exercise(exercise.copy(inputConfig = config))
+        DatabaseSeeder(context, database).seedIfNeeded()
+        assertEquals(config, dao.exerciseById(exercise.id)?.inputConfig)
     }
 
     @Test(timeout = 120_000)
