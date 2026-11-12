@@ -203,6 +203,8 @@ class WorkoutLoggingUiTest {
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Variation").assertDoesNotExist()
         compose.onNodeWithText("Wall handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertExists()
@@ -279,6 +281,9 @@ class WorkoutLoggingUiTest {
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("Change variant for Handstand set 1")
                 .fetchSemanticsNodes().isNotEmpty()

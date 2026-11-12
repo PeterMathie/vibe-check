@@ -56,6 +56,8 @@ Deleting or adding a set slot in the logger persists the current slot count in t
 
 Band link IDs are `band-yellow` (0.6 cm), `band-red` (1.2 cm), `band-black` (2.2 cm) and `band-purple` (3.1 cm). Each stacked band has a separate `workout_set_bands` row. No force conversion occurs during import.
 
+Logger tick/done locks are device-local UI preferences keyed by stable set ID, not a new database status or backup preference. They survive app restart but are not transferred by JSON export/import; pre-existing local locks are not inferred from or rewritten by imported `result` values. New installations and sets without an explicit local tick start unlocked, including historical records. Band abbreviations and the logger's RPE-last presentation do not rename stored bands or rewrite saved measurement orders.
+
 Habit values must match the field: a numerical field has only `numericValue`, a Boolean field only `booleanValue`, and text/choice/date-time fields only `textValue`. Other value columns are null. Counts are non-negative whole numbers; durations are non-negative. Numeric targets require both comparison and target value, or both null. There is one value per `(fieldId, epochDay)`.
 
 Photos are not part of this JSON format; export them separately. Legacy set `notes` remains a database field for compatibility; new notes should be stored at exercise or workout level.
