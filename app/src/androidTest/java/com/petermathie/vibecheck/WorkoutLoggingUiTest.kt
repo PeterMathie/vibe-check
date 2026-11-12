@@ -142,6 +142,9 @@ class WorkoutLoggingUiTest {
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
 
+        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         assertHandstandQuantitativeFieldsRemainOrdered()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("12")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
@@ -154,7 +157,7 @@ class WorkoutLoggingUiTest {
         }
         compose.onNodeWithText("Stop").performClick()
         compose.onNodeWithText("Apply").performClick()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("1")
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("12")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total")
         compose.onNodeWithText("Freestanding sec").assertDoesNotExist()
         compose.onNodeWithText("Total wall sec").assertDoesNotExist()
@@ -292,7 +295,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
-            .assertTextContains("1")
+            .assertTextContains("TUT s")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
