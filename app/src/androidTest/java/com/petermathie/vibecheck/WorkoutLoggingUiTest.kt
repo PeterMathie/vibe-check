@@ -284,7 +284,7 @@ class WorkoutLoggingUiTest {
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertIsDisplayed()
         compose.onNodeWithContentDescription("Set 1 for Handstand")
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.waitUntil(15_000) {

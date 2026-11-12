@@ -819,7 +819,7 @@ private fun WorkoutExerciseCard(
                         },
                     )
                     },
-                    swap = if (!showVariant) null else ({
+                    swap = if (exerciseVariations.isEmpty()) null else ({
                         var variationMenu by remember(ordinal) { mutableStateOf(false) }
                             Box {
                                 IconButton(enabled = draftLoaded && !isLocked, onClick = { variationMenu = true }) {
@@ -960,17 +960,19 @@ private fun SetMeasurementFlow(
     swap: (@Composable () -> Unit)?,
 ) {
     Layout(
-        contents = listOf(measurements, tick, { swap?.invoke(); Unit }),
+        contents = listOf(measurements, {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(Modifier.size(48.dp)) { tick() }
+                if (swap != null) Box(Modifier.size(48.dp)) { swap() }
+            }
+        }),
         modifier = Modifier.fillMaxWidth(),
-    ) { (inputs, ticks, swaps), constraints ->
+    ) { (inputs, actionNodes), constraints ->
         val gap = 4.dp.roundToPx()
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         // Reserve the same trailing space in both states so expansion never reflows row one.
-        val actionWidth = minOf(48.dp.roundToPx(), constraints.maxWidth)
-        val actionConstraints = loose.copy(minWidth = actionWidth, maxWidth = actionWidth)
-        val completion = ticks.single().measure(actionConstraints)
-        val variant = swaps.singleOrNull()?.measure(actionConstraints)
-        val inputWidth = (constraints.maxWidth - actionWidth - gap).coerceAtLeast(0)
+        val actions = actionNodes.single().measure(loose)
+        val inputWidth = (constraints.maxWidth - actions.width - gap).coerceAtLeast(0)
         val placeables = inputs.map { it.measure(Constraints(maxWidth = inputWidth)) }
         val rows = mutableListOf(mutableListOf<Int>())
         var usedWidth = 0
@@ -990,12 +992,11 @@ private fun SetMeasurementFlow(
             usedWidth += placeable.width
             if (isTiming) timingCells++
         }
-        if (expanded && variant != null && rows.size == 1) rows.add(mutableListOf())
         val shownRows = if (expanded) rows else rows.take(1)
         val heights = shownRows.mapIndexed { index, row ->
             maxOf(
                 row.maxOfOrNull { placeables[it].height } ?: 0,
-                if (index == 0) completion.height else if (index == 1) variant?.height ?: 0 else 0,
+                if (index == 0) actions.height else 0,
             )
         }
         layout(constraints.maxWidth, constraints.constrainHeight(heights.sum() + gap * (shownRows.size - 1))) {
@@ -1008,12 +1009,9 @@ private fun SetMeasurementFlow(
                     field.placeRelative(x, y + (height - field.height) / 2)
                     x += field.width + gap
                 }
-                val action = when (rowIndex) {
-                    0 -> completion
-                    1 -> variant
-                    else -> null
+                if (rowIndex == 0) {
+                    actions.placeRelative(constraints.maxWidth - actions.width, y + (height - actions.height) / 2)
                 }
-                action?.placeRelative(constraints.maxWidth - action.width, y + (height - action.height) / 2)
                 y += height + gap
             }
         }
