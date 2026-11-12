@@ -1124,6 +1124,8 @@ class WorkoutSetTilesTest {
         assertTrue("Worst-case groups must not overlap", groups.zipWithNext().all { (a, b) -> a.right <= b.left })
         capture("composable-worst-case.png")
         compose.onNodeWithContentDescription("Workout exercise list").performScrollToNode(hasContentDescription("Exercise heading for Dip"))
+        val previousRpe = compose.onNodeWithContentDescription("Previous RPE for Bench press set 2").getUnclippedBoundsInRoot()
+        assertTrue("Ordinary decimal RPE comparison must stay on one line", previousRpe.bottom - previousRpe.top <= 18.dp)
         capture("composable-simple.png")
         compose.runOnIdle { font.floatValue = 2f; width.value = 320.dp }
         compose.onNodeWithContentDescription("Workout exercise list").performScrollToNode(hasContentDescription("Set 1 for Skill hold demo"))

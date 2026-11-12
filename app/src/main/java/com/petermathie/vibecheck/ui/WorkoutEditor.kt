@@ -717,7 +717,7 @@ private fun WorkoutExerciseCard(
                         MetricValue(
                             draft.rpe, "RPE", "RPE for $identity",
                             previousSet?.rpe?.let(::formatQuantitative), isLocked, draftLoaded,
-                            width = 32, maximum = 10.0, secondary = true, onNext = { openNextEmpty(ordinal) },
+                            width = 44, maximum = 10.0, secondary = true, onNext = { openNextEmpty(ordinal) },
                             onChange = { updateDraft(draft.copy(rpe = it)) },
                         )
                     },

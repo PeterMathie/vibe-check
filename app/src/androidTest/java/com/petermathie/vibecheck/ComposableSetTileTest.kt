@@ -47,7 +47,7 @@ class ComposableSetTileTest {
         val previous = emptySet("previous", 1).copy(
             reps = 6.0, weightKg = 20.0, romValue = 40.0, romUnit = "degrees",
             holdMillis = 36_000, tutEntriesMillis = encodeTimingMillis(List(8) { (it + 1) * 1_000L }),
-            timeUnderTensionMillis = 42_000, rpe = 7.0,
+            timeUnderTensionMillis = 42_000, rpe = 7.5,
         )
         compose.setContent {
             val density = LocalDensity.current
@@ -85,7 +85,7 @@ class ComposableSetTileTest {
                             },
                             rpe = {
                                 MetricValue(
-                                    draft.rpe, "RPE", "RPE for Fixture set 1", "7", false, true, width = 32, secondary = true,
+                                    draft.rpe, "RPE", "RPE for Fixture set 1", "7.5", false, true, width = 44, secondary = true,
                                     onChange = { draft = draft.copy(rpe = it) },
                                 )
                             },
@@ -121,6 +121,9 @@ class ComposableSetTileTest {
                 }
                 val rpe = compose.onNodeWithContentDescription("RPE for Fixture set 1").getUnclippedBoundsInRoot()
                 val tick = compose.onNodeWithContentDescription("Complete fixture").getUnclippedBoundsInRoot()
+                val previousRpe = compose.onNodeWithContentDescription("Previous RPE for Fixture set 1").getUnclippedBoundsInRoot()
+                assertTrue("$load/$result: decimal RPE comparison stays on one line",
+                    (previousRpe.bottom - previousRpe.top).value <= 18f * fontScale)
                 assertTrue(rpe.right <= tick.left)
                 assertTrue("$load/$result: completion stays beside RPE",
                     kotlin.math.abs(rpe.top.value - tick.top.value) <= 8f)
