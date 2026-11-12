@@ -205,7 +205,7 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Variation").assertDoesNotExist()
-        compose.onNodeWithText("Wall handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
         compose.onNodeWithContentDescription("Set 1 for Handstand")
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()

@@ -2,8 +2,6 @@ package com.petermathie.vibecheck.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
@@ -53,6 +51,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -552,7 +551,9 @@ private fun WorkoutExerciseCard(
         onInputValidityChanged(drafts.values.none { inputError(it) != null })
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        if(row.targets.isNotBlank())Text(row.targets,style=MaterialTheme.typography.bodySmall)
+        row.targets.takeIf {
+            it.isNotBlank() && !it.trim().matches(Regex("\\d+\\s+sets?", RegexOption.IGNORE_CASE))
+        }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         row.supersetGroup?.let { Text("Circuit: $it · rest after round", style = MaterialTheme.typography.labelSmall) }
         repeat(visibleRows) { index ->
             val ordinal = index + 1
@@ -584,8 +585,9 @@ private fun WorkoutExerciseCard(
             val variantName = recorded?.takeIf { it.variationId == draft.variationId }
                 ?.variationNameSnapshot?.takeIf(String::isNotBlank)
                 ?: variationFor(draft.variationId)?.name.orEmpty()
-            val showVariant = isExpanded && exerciseVariations.isNotEmpty()
-            val headingInset = if (exerciseVariations.isNotEmpty()) 8.dp * LocalDensity.current.fontScale else 0.dp
+            val showVariant = draft.variationId != null && variantName.isNotBlank() &&
+                (index == 0 || draft.variationId != draftAt(ordinal - 1).variationId)
+            val headingInset = if (showVariant) 8.dp * LocalDensity.current.fontScale else 0.dp
             key(draft.setId) {
             var confirming by remember { mutableStateOf(false) }
             StagedSwipeToDelete(
@@ -637,12 +639,11 @@ private fun WorkoutExerciseCard(
                         }
                     },
             ) {
-            Column(
+            Box(
                 Modifier
                     .fillMaxWidth()
                     .animateContentSize()
-                    .padding(start = 8.dp, end = 8.dp, bottom = 8.dp, top = maxOf(8.dp, headingInset + 4.dp)),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 8.dp),
             ) {
                 val focusRequester = remember(ordinal) { FocusRequester() }
                 LaunchedEffect(isActive, focusNext) {
@@ -660,6 +661,7 @@ private fun WorkoutExerciseCard(
                 } ?: latest
                 SetMeasurementFlow(
                     expanded = isExpanded,
+                    topInset = maxOf(8.dp, headingInset + 4.dp),
                     measurements = {
                     fields.forEach { field ->
                         if (isLocked && field != ExerciseMeasurement.BANDS) {
@@ -860,29 +862,33 @@ private fun WorkoutExerciseCard(
                                 }
                             }
                     }),
+                    details = {
+                        if (!inputConfig.manyTuts && attempts.size > 1 && isExpanded) Text(
+                            "One-entry mode. Previously recorded attempts are retained.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    },
+                    footer = {
+                        inputError(draft)?.let {
+                            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                        previousSet?.let {
+                            Text(
+                                "Previous: ${setDescription(it, includeTimingAttempts = false)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                                modifier = Modifier.align(androidx.compose.ui.Alignment.End)
+                                    .semantics {
+                                        contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                                    },
+                            )
+                        }
+                    },
                 )
-                if (!inputConfig.manyTuts && attempts.size > 1 && isExpanded) Text(
-                    "One-entry mode. Previously recorded attempts are retained.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                inputError(draft)?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-                previousSet?.let {
-                    Text(
-                        "Previous: ${setDescription(it, includeTimingAttempts = false)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                        modifier = Modifier.align(androidx.compose.ui.Alignment.End)
-                            .semantics {
-                                contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
-                            },
-                    )
                 }
                 }
-                }
-                    androidx.compose.animation.AnimatedVisibility(showVariant, enter = fadeIn(), exit = fadeOut()) {
+                    if (showVariant) {
                         val palette = LocalVibePalette.current
                         Text(
                             variantName,
@@ -959,9 +965,12 @@ private fun WorkoutExerciseCard(
 @Composable
 private fun SetMeasurementFlow(
     expanded: Boolean,
+    topInset: Dp,
     measurements: @Composable () -> Unit,
     tick: @Composable () -> Unit,
     swap: (@Composable () -> Unit)?,
+    details: @Composable () -> Unit,
+    footer: @Composable ColumnScope.() -> Unit,
 ) {
     Layout(
         contents = listOf(measurements, {
@@ -969,11 +978,19 @@ private fun SetMeasurementFlow(
                 if (swap != null) Box(Modifier.size(48.dp)) { swap() }
                 Box(Modifier.size(48.dp)) { tick() }
             }
+        }, {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { details() }
+        }, {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
         }),
         modifier = Modifier.fillMaxWidth(),
-    ) { (inputs, actionNodes), constraints ->
+    ) { (inputs, actionNodes, detailNodes, footerNodes), constraints ->
         val gap = 4.dp.roundToPx()
+        val sectionGap = 8.dp.roundToPx()
+        val bottomInset = 8.dp.roundToPx()
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val details = detailNodes.single().measure(loose)
+        val footer = footerNodes.single().measure(loose)
         // Reserve the same trailing space in both states so expansion never reflows row one.
         val actions = actionNodes.single().measure(loose)
         val inputWidth = (constraints.maxWidth - actions.width - gap).coerceAtLeast(0)
@@ -1003,8 +1020,13 @@ private fun SetMeasurementFlow(
                 if (index == 0) actions.height else 0,
             )
         }
-        layout(constraints.maxWidth, constraints.constrainHeight(heights.sum() + gap * (shownRows.size - 1))) {
-            var y = 0
+        // Mirror the persistent footer above row one; expanded details grow below that fixed row.
+        val rowInset = maxOf(topInset.roundToPx(), bottomInset + if (footer.height > 0) sectionGap + footer.height else 0)
+        val rowsHeight = heights.sum() + gap * (shownRows.size - 1)
+        val detailsHeight = if (details.height > 0) sectionGap + details.height else 0
+        val height = constraints.constrainHeight(rowsHeight + rowInset * 2 + detailsHeight)
+        layout(constraints.maxWidth, height) {
+            var y = rowInset
             shownRows.forEachIndexed { rowIndex, row ->
                 val height = heights[rowIndex]
                 var x = 0
@@ -1018,6 +1040,8 @@ private fun SetMeasurementFlow(
                 }
                 y += height + gap
             }
+            if (details.height > 0) details.placeRelative(0, rowInset + rowsHeight + sectionGap)
+            footer.placeRelative(0, height - bottomInset - footer.height)
         }
     }
 }

@@ -193,7 +193,7 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun flexTileKeepsSwapBesideTickAndRevealsBorderHeadingWithoutMovingFirstRowAtLargeFont() {
+    fun flexTileKeepsSwapAndBorderHeadingWithoutMovingFirstRowAtLargeFont() {
         val workout = start()
         runBlocking {
             val variant = db.editorDao().variationById("handstand-wall")!!
@@ -214,6 +214,7 @@ class WorkoutSetTilesTest {
         compose.onNodeWithText("Bodyweight: tracked from workout").assertDoesNotExist()
         compose.onNodeWithContentDescription("Reps for Handstand set 1").assertIsEnabled()
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
         val firstRow = listOf("Reps for Handstand set 1", "Time Under Tension for Handstand set 1",
             "Complete set 1 for Handstand and open next empty set", "Change variant for Handstand set 1")
         val collapsed = firstRow.map { compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot }
@@ -356,6 +357,10 @@ class WorkoutSetTilesTest {
         val descriptions = visible.map { "TUT attempt $it for Handstand set 1" } +
             listOf("Complete set 1 for Handstand and open next empty set", "Change variant for Handstand set 1")
         val collapsed = descriptions.map { compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot }
+        val collapsedTile = compose.onNodeWithContentDescription("Set 1 for Handstand").fetchSemanticsNode().boundsInRoot
+        collapsed.forEach {
+            assertEquals("Collapsed row must be vertically centred", collapsedTile.center.y, it.center.y, 1f)
+        }
         fun tileHeight() = compose.onNodeWithContentDescription("Set 1 for Handstand")
             .getUnclippedBoundsInRoot().let { it.bottom - it.top }
         fun assertFirstRowUnchanged() {
@@ -534,8 +539,27 @@ class WorkoutSetTilesTest {
         }
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertIsDisplayed()
         assertBottomRight(1)
+        val collapsedTile = compose.onNodeWithContentDescription("Set 1 for Handstand").getUnclippedBoundsInRoot()
+        val firstRow = listOf("Time Under Tension", "Change variant", "Complete set").map { label ->
+            val description = when (label) {
+                "Change variant" -> "Change variant for Handstand set 1"
+                "Complete set" -> "Complete set 1 for Handstand and open next empty set"
+                else -> "$label for Handstand set 1"
+            }
+            compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().also {
+                assertEquals("Collapsed fields and actions must be vertically centred",
+                    (collapsedTile.top + collapsedTile.bottom).value, (it.top + it.bottom).value, 1f)
+            }
+        }
+        val collapsedNote = compose.onNodeWithContentDescription("Previous performance for Handstand set 1")
+            .getUnclippedBoundsInRoot()
+        assertTrue("Previous result must not overlap the centred row", firstRow.all { it.bottom + 8.dp <= collapsedNote.top })
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
         expandSet("Handstand", 1)
+        assertEquals(firstRow, listOf("Time Under Tension for Handstand set 1",
+            "Change variant for Handstand set 1", "Complete set 1 for Handstand and open next empty set").map {
+            compose.onNodeWithContentDescription(it).getUnclippedBoundsInRoot()
+        })
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
         val note = compose.onNodeWithContentDescription("Previous performance for Handstand set 1").getUnclippedBoundsInRoot()
         val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").getUnclippedBoundsInRoot()
@@ -561,6 +585,7 @@ class WorkoutSetTilesTest {
     fun emptyTilesProvideFieldsAndLabelledFooterActionsShareARow() {
         val workout = start()
         show(workout)
+        compose.onNodeWithText("3 sets").assertDoesNotExist()
         compose.onNodeWithContentDescription("Workout exercise list")
             .performScrollToNode(hasContentDescription("Set 1 for Dip"))
         compose.onNodeWithText("Ready to log").assertDoesNotExist()
@@ -582,24 +607,79 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun variantSwapWorksWhileCollapsedAndNameAppearsOnlyWhenExpandedWithCurrentChoiceMarked() {
+    fun variantSwapUpdatesVisibleTransitionHeadersWhileCollapsedAndMarksCurrentChoice() {
         val workout = start()
         show(workout)
-        compose.onNodeWithText("Wall handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 2").assertDoesNotExist()
         compose.onNodeWithText("Freestanding handstand").assertDoesNotExist()
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertDoesNotExist()
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNode(hasText("Wall handstand") and hasClickAction()).assertIsSelected()
-        compose.onNodeWithText("Freestanding handstand").assertIsNotSelected().performClick()
-        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertDoesNotExist()
+        compose.onNode(hasText("Freestanding handstand") and hasClickAction()).assertIsNotSelected().performClick()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Freestanding handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 2").assertTextEquals("Wall handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 3").assertDoesNotExist()
         expandSet("Handstand", 1)
         compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Freestanding handstand")
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNode(hasText("Freestanding handstand") and hasClickAction()).assertIsSelected().performClick()
         expandSet("Handstand", 1)
-        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Freestanding handstand")
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertIsDisplayed()
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun variantHeadersUseIdentityAndSnapshotsAndRecomputeAfterEditsAndDeletion() {
+        val workout = start()
+        val row = runBlocking {
+            val row = db.editorDao().workoutExercises().first().first {
+                it.workoutId == workout && it.actualExerciseId == "core:handstand"
+            }
+            db.editorDao().workoutExercise(row.copy(targetSets = 5, targets = "5 sets · 4s hold"))
+            listOf("handstand-wall", "handstand-wall", "handstand-free", "handstand-free", "handstand-wall")
+                .forEachIndexed { index, variant ->
+                    db.editorDao().set(emptySet(row.id, index + 1).copy(
+                        variationId = variant,
+                        variationNameSnapshot = "Recorded handstand",
+                        variationInputConfigSnapshot = ExerciseInputConfig(timeHeld = true).encode(),
+                        holdMillis = (index + 1) * 1_000L,
+                    ))
+                }
+            row
+        }
+        show(workout)
+        compose.onNodeWithText("5 sets · 4s hold").assertExists()
+        for (ordinal in 1..5) {
+            val heading = compose.onNodeWithContentDescription("Variant for Handstand set $ordinal")
+            if (ordinal in setOf(1, 3, 5)) heading.assertTextEquals("Recorded handstand")
+            else heading.assertDoesNotExist()
+        }
+        compose.onNodeWithContentDescription("Change variant for Handstand set 2").performScrollTo().performClick()
+        compose.onNode(hasText("Freestanding handstand") and hasClickAction()).performClick()
+        compose.waitUntil(15_000) {
+            runBlocking { db.editorDao().sets().first().any {
+                it.workoutExerciseId == row.id && it.ordinal == 2 && it.variationId == "handstand-free"
+            } }
+        }
+        compose.onNodeWithContentDescription("Variant for Handstand set 2").assertTextEquals("Freestanding handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 3").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 4").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 5").assertTextEquals("Recorded handstand")
+
+        compose.onNodeWithContentDescription("Set 2 for Handstand").performScrollTo()
+        val swipe = compose.onNodeWithContentDescription("Swipe actions for set 2 for Handstand")
+        swipe.performCustomAccessibilityActionWithLabel("Reveal delete")
+        swipe.performCustomAccessibilityActionWithLabel("Delete set 2 for Handstand")
+        compose.waitUntil(15_000) {
+            runBlocking { db.editorDao().workoutExerciseById(row.id)?.targetSets == 4 }
+        }
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Recorded handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 2").assertTextEquals("Recorded handstand")
+        compose.onNodeWithContentDescription("Variant for Handstand set 3").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 4").assertTextEquals("Recorded handstand")
+        compose.onNodeWithContentDescription("Set 5 for Handstand").assertDoesNotExist()
     }
 
     @Test
@@ -688,12 +768,13 @@ class WorkoutSetTilesTest {
         compose.onNodeWithContentDescription("Workout exercise list")
             .performScrollToNode(hasContentDescription("Set 1 for Back extension"))
         compose.onNodeWithContentDescription("Change variant for Back extension set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Back extension set 1").assertDoesNotExist()
         val fields = listOf("Reps" to 56.dp, "Resistance" to 64.dp, "RPE" to 48.dp).map { (label, maximum) ->
             val field = compose.onNodeWithContentDescription("$label for Back extension set 1")
             val width = field.getUnclippedBoundsInRoot().let { bounds -> bounds.right - bounds.left }
             assertTrue("Inputs must be narrower: $label=$width", width <= maximum)
             val height = field.getUnclippedBoundsInRoot().let { bounds -> bounds.bottom - bounds.top }
-            assertTrue("Compact entry fields must be no taller than 48dp: $label=$height", height <= 48.dp)
+            assertTrue("Compact entry fields must be no taller than 48dp: $label=$height", height.value <= 48f + 0.001f)
             field
                 .assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         }
@@ -708,8 +789,8 @@ class WorkoutSetTilesTest {
         val height = bounds.bottom - bounds.top
         val note = compose.onNodeWithContentDescription("Previous performance for Back extension set 1")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue("Simple tile should grow only to accommodate its previous-result note, was $height",
-            height <= 80.dp + (note.bottom - note.top) + 8.dp)
+        assertTrue("Simple tile should reserve only the space needed for a centred row and its note, was $height",
+            height <= 48.dp + ((note.bottom - note.top) + 16.dp) * 2 + 1.dp)
         for (ordinal in 2..3) {
             val empty = compose.onNodeWithContentDescription("Set $ordinal for Back extension")
                 .performScrollTo().getUnclippedBoundsInRoot()
