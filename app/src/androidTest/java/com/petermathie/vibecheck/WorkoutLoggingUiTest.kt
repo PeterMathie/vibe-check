@@ -295,7 +295,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
-            .assertTextContains("TUT s")
+            .assertTextContains("s")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()

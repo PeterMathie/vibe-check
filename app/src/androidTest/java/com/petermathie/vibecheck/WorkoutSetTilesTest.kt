@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toPixelMap
@@ -64,6 +65,19 @@ class WorkoutSetTilesTest {
     private fun expandSet(exercise: String, ordinal: Int) {
         compose.onNodeWithContentDescription("Set $ordinal for $exercise")
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+    }
+
+    private fun showAtSize(workout: String, width: Dp, fontScale: Float) {
+        val vm = lifecycle.own(EditorViewModel(db))
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                VibeCheckTheme { Box(Modifier.width(width)) { WorkoutEditor(vm, workout, {}, {}) } }
+            }
+        }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test
@@ -141,7 +155,7 @@ class WorkoutSetTilesTest {
             }
             compose.onAllNodes(hasSetTextAction() and hasAnyAncestor(hasContentDescription("Set 1 for Handstand")))
                 .assertCountEquals(0)
-            compose.onNodeWithText("10 s TUT").assertExists()
+            compose.onNodeWithContentDescription("Time Under Tension: 10 s").assertTextEquals("10 s")
             compose.onNodeWithText("30.0 s Total").assertExists()
             compose.onNodeWithContentDescription("RPE for Handstand set 1").assertDoesNotExist()
             compose.onNodeWithContentDescription("Yellow band for Handstand set 1").assertIsNotEnabled().assertIsSelected()
@@ -220,7 +234,7 @@ class WorkoutSetTilesTest {
         })
         val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").getUnclippedBoundsInRoot()
         assertTrue("RPE must follow resistance", rpe.top > bandBounds.last().top || rpe.left >= bandBounds.last().right)
-        assertTrue("Swap must be right of the tick without overlap", swap.left >= tick.right)
+        assertTrue("Swap must be left of the tick without overlap", swap.right <= tick.left)
         assertEquals("Swap must share the tick's row", (tick.top + tick.bottom).value, (swap.top + swap.bottom).value, 1f)
         compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
         val heading = compose.onNodeWithContentDescription("Variant for Handstand set 1").getUnclippedBoundsInRoot()
@@ -300,7 +314,7 @@ class WorkoutSetTilesTest {
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("TUT total for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("TUT 36s", substring = true)
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("36s", substring = true)
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().sets().first().any { timingMillis(it.tutEntriesMillis) == List(8) { i -> (i + 1) * 1000L } && it.holdMillis == 36_000L } }
         }
@@ -370,7 +384,7 @@ class WorkoutSetTilesTest {
         expandSet("Handstand", 1)
         assertFirstRowUnchanged()
         assertTimingFlex(2f)
-        compose.onNode(hasText("TUT s") and hasAnyAncestor(hasContentDescription("Set 1 for Handstand"))).assertExists()
+        compose.onNode(hasText("s") and hasAnyAncestor(hasContentDescription("Set 1 for Handstand"))).assertExists()
         compose.onNodeWithContentDescription("TUT attempt 8 for Handstand set 1").performTextReplacement("9")
         compose.waitUntil(15_000) {
             runBlocking {
@@ -386,7 +400,7 @@ class WorkoutSetTilesTest {
         val bounds = (1..8).map {
             compose.onNodeWithContentDescription("TUT attempt $it for Handstand set 1")
                 .assertIsDisplayed().apply {
-                    if (it == 1) assertTextEquals("TUT s", it.toString()) else assertTextEquals(it.toString())
+                    if (it == 1) assertTextEquals("s", it.toString()) else assertTextEquals(it.toString())
                 }.fetchSemanticsNode().boundsInRoot
         }
         val cell = compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").getUnclippedBoundsInRoot()
@@ -458,7 +472,7 @@ class WorkoutSetTilesTest {
             }
         }
 
-        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("TUT 10s", substring = true)
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("10s", substring = true)
         compose.onNodeWithText("4s + 6s = 10s · Total 30s").assertDoesNotExist()
         compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
         compose.onNodeWithContentDescription("TUT attempt 1 for Handstand set 1").assertTextContains("4")
@@ -467,7 +481,12 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun previousResultFollowsTheActiveOrdinalAndVariantWithoutUsingDraftHistory() {
+    fun previousResultStaysAtBottomRightAcrossCollapseAndVariantChanges() = assertPreviousResultPlacement(1f)
+
+    @Test
+    fun previousResultStaysAtBottomRightAt320DpAndDoubleFontScale() = assertPreviousResultPlacement(2f)
+
+    private fun assertPreviousResultPlacement(fontScale: Float) {
         val workout = start()
         runBlocking {
             val row = db.editorDao().workoutExercises().first().first {
@@ -500,27 +519,41 @@ class WorkoutSetTilesTest {
                 }
             }
         }
-        show(workout)
-        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertDoesNotExist()
-        expandSet("Handstand", 1)
+        showAtSize(workout, if (fontScale == 1f) 411.dp else 320.dp, fontScale)
         compose.waitUntil(15_000) {
             compose.onAllNodes(
                 hasContentDescription("Previous performance for Handstand set 1") and hasText("Previous: 7s"),
             ).fetchSemanticsNodes().isNotEmpty()
         }
+        fun assertBottomRight(ordinal: Int) {
+            val note = compose.onNodeWithContentDescription("Previous performance for Handstand set $ordinal")
+                .getUnclippedBoundsInRoot()
+            val tile = compose.onNodeWithContentDescription("Set $ordinal for Handstand").getUnclippedBoundsInRoot()
+            assertEquals("Previous result must align with the tile's trailing inset", (tile.right - 8.dp).value, note.right.value, 0.5f)
+            assertEquals("Previous result must remain at the bottom inset", (tile.bottom - 8.dp).value, note.bottom.value, 0.5f)
+        }
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertIsDisplayed()
+        assertBottomRight(1)
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
+        expandSet("Handstand", 1)
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
         val note = compose.onNodeWithContentDescription("Previous performance for Handstand set 1").getUnclippedBoundsInRoot()
         val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").getUnclippedBoundsInRoot()
         assertTrue("Previous result must be a note below the entry fields", note.top >= rpe.bottom)
-        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertDoesNotExist()
+        assertBottomRight(1)
 
         compose.onNodeWithContentDescription("Set 2 for Handstand")
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
-        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
+        assertBottomRight(2)
         compose.onNodeWithContentDescription("Change variant for Handstand set 2").performScrollTo().performClick()
         compose.onNodeWithText("Freestanding handstand").performClick()
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 11s")
+        assertBottomRight(2)
+        expandSet("Handstand", 2)
+        compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 11s")
+        assertBottomRight(2)
         compose.onNodeWithText("Previous: 99s").assertDoesNotExist()
     }
 
@@ -592,7 +625,60 @@ class WorkoutSetTilesTest {
         compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set")
             .performScrollTo().assertIsEnabled().performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2").assertExists()
-        compose.onNodeWithText("10 s TUT").assertExists()
+        compose.onNodeWithText("10 s").assertExists()
+    }
+
+    @Test
+    fun plancheSecondsBandsRpeAndActionsFitTheFirstRowAtOrdinaryReviewSize() = assertPlancheCompactRow(1f)
+
+    @Test
+    fun plancheCompactInputsWrapWithoutClippingAt320DpAndDoubleFontScale() = assertPlancheCompactRow(2f)
+
+    private fun assertPlancheCompactRow(fontScale: Float) {
+        val workout = start()
+        showAtSize(workout, if (fontScale == 1f) 411.dp else 320.dp, fontScale)
+        compose.onNodeWithContentDescription("Workout exercise list")
+            .performScrollToNode(hasContentDescription("Set 1 for Planche"))
+        if (fontScale > 1f) expandSet("Planche", 1)
+        compose.onNodeWithContentDescription("Set 1 for Planche").performScrollTo()
+        val descriptions = listOf("Time Under Tension", "Yellow band", "Red band", "Black band", "Purple band", "RPE")
+        val fields = descriptions.map {
+            compose.onNodeWithContentDescription("$it for Planche set 1").assertIsDisplayed().getUnclippedBoundsInRoot()
+        }
+        val swap = compose.onNodeWithContentDescription("Change variant for Planche set 1")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        val tick = compose.onNodeWithContentDescription("Complete set 1 for Planche and open next empty set")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("Swap must sit immediately left of tick", swap.right <= tick.left)
+        assertEquals((swap.top + swap.bottom).value, (tick.top + tick.bottom).value, 1f)
+        assertTrue("Measurements must not overlap either action", fields.all { it.right <= swap.left })
+        assertTrue("Measurements must wrap in order without overlap", fields.zipWithNext().all { (left, right) ->
+            if (kotlin.math.abs((left.top + left.bottom).value - (right.top + right.bottom).value) < 1f) {
+                left.right <= right.left
+            } else left.bottom <= right.top
+        })
+        if (fontScale == 1f) {
+            assertTrue("Planche seconds, all bands and RPE must share the first row", fields.all {
+                kotlin.math.abs((it.top + it.bottom).value - (tick.top + tick.bottom).value) < 1f
+            })
+        } else {
+            assertTrue("Large text must wrap rather than squeeze", fields.last().top > fields.first().top)
+        }
+        compose.onNodeWithContentDescription("Time Under Tension for Planche set 1")
+            .assertTextContains("s").performTextInput("12")
+        compose.onNodeWithContentDescription("RPE for Planche set 1").performScrollTo().performTextInput("8")
+        compose.onNodeWithContentDescription("Yellow band for Planche set 1")
+            .performScrollTo().performTouchInput { click() }
+        compose.onNodeWithContentDescription("Yellow band for Planche set 1").assertIsSelected()
+        compose.onNodeWithContentDescription("Red band for Planche set 1").assertIsNotSelected()
+        compose.waitUntil(15_000) {
+            runBlocking {
+                val row = db.editorDao().workoutExercises().first().single {
+                    it.workoutId == workout && it.actualExerciseId == "core:planche"
+                }
+                db.editorDao().sets().first().any { it.workoutExerciseId == row.id && it.holdMillis == 12_000L && it.rpe == 8.0 }
+            }
+        }
     }
 
     @Test
@@ -620,7 +706,10 @@ class WorkoutSetTilesTest {
         assertTrue(completion.left >= fields.last().right)
         val bounds = compose.onNodeWithContentDescription("Set 1 for Back extension").getUnclippedBoundsInRoot()
         val height = bounds.bottom - bounds.top
-        assertTrue("Simple set tile should be at most 80dp, was $height", height <= 80.dp)
+        val note = compose.onNodeWithContentDescription("Previous performance for Back extension set 1")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("Simple tile should grow only to accommodate its previous-result note, was $height",
+            height <= 80.dp + (note.bottom - note.top) + 8.dp)
         for (ordinal in 2..3) {
             val empty = compose.onNodeWithContentDescription("Set $ordinal for Back extension")
                 .performScrollTo().getUnclippedBoundsInRoot()
@@ -650,7 +739,7 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun everyTileKeepsDirectFieldsAndSwapRightOfTickWithoutExpansion() {
+    fun everyTileKeepsDirectFieldsAndSwapLeftOfTickWithoutExpansion() {
         val workout = start()
         show(workout)
         val tile = compose.onNodeWithContentDescription("Set 1 for Handstand")
@@ -663,7 +752,7 @@ class WorkoutSetTilesTest {
         val swap = compose.onNodeWithContentDescription("Change variant for Handstand set 1").getUnclippedBoundsInRoot()
         val tick = compose.onNodeWithContentDescription("Complete set 1 for Handstand and open next empty set").getUnclippedBoundsInRoot()
         assertTrue(swap.left > bounds.left + (bounds.right - bounds.left) / 2)
-        assertTrue("Swap must be right of the tick without overlap", swap.left >= tick.right)
+        assertTrue("Swap must be left of the tick without overlap", swap.right <= tick.left)
         assertEquals("Swap must share the tick's row", (tick.top + tick.bottom).value, (swap.top + swap.bottom).value, 1f)
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 2")
             .performScrollTo().performTextInput("4")
@@ -796,7 +885,7 @@ class WorkoutSetTilesTest {
         val vm = lifecycle.own(EditorViewModel(db))
         compose.setContent { VibeCheckTheme { WorkoutEditor(vm, workout, {}, {}) } }
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Set 1 for Handstand").performClick()
+        expandSet("Handstand", 1)
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextReplacement("9")
         compose.waitUntil(15_000) {
             runBlocking { db.editorDao().sets().first().any { it.holdMillis == 9_000L && it.reps == 5.0 && it.weightKg == 20.0 } }

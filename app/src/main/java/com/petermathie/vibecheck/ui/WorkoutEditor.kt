@@ -578,7 +578,9 @@ private fun WorkoutExerciseCard(
             val firstInput = fields.firstOrNull {
                 it != ExerciseMeasurement.BODYWEIGHT && it != ExerciseMeasurement.BANDS
             }
-            val fieldScale = maxOf(1f, LocalDensity.current.fontScale / 1.5f)
+            val compactHoldRow = !inputConfig.manyTuts && attempts.size == 1 &&
+                fields.toSet() == setOf(ExerciseMeasurement.TUT, ExerciseMeasurement.BANDS, ExerciseMeasurement.RPE)
+            val fieldScale = maxOf(1f, LocalDensity.current.fontScale / if (compactHoldRow) 1f else 1.5f)
             val variantName = recorded?.takeIf { it.variationId == draft.variationId }
                 ?.variationNameSnapshot?.takeIf(String::isNotBlank)
                 ?: variationFor(draft.variationId)?.name.orEmpty()
@@ -675,7 +677,7 @@ private fun WorkoutExerciseCard(
                                     selected = selected,
                                     enabled = draftLoaded && !isLocked,
                                     description = "${band.name} band for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                                    modifier = Modifier.width(40.dp * fieldScale),
+                                    modifier = Modifier.width((if (compactHoldRow) 36.dp else 40.dp) * fieldScale),
                                 ) {
                                     val ids = bandIds(draft.bandIds).toMutableList()
                                     if (selected) ids.remove(band.id) else ids.add(band.id)
@@ -704,9 +706,9 @@ private fun WorkoutExerciseCard(
                                     updateDraft(draft.copy(tutEntries = encodeTimingInputs(listOf(it)), timeHeld = "", updatedAt = System.currentTimeMillis()))
                                 },
                                 enabled = draftLoaded,
-                                label = "TUT (s)",
+                                label = "s",
                                 description = "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal",
-                                modifier = Modifier.width(56.dp * fieldScale).then(focus),
+                                modifier = Modifier.width((if (compactHoldRow) 48.dp else 56.dp) * fieldScale).then(focus),
                             ) else {
                                 attempts.forEachIndexed { index, entry ->
                                     QuantitativeTextField(
@@ -718,7 +720,7 @@ private fun WorkoutExerciseCard(
                                                 updatedAt = System.currentTimeMillis(),
                                             ))
                                         },
-                                        label = if (index == 0) "TUT s" else "",
+                                        label = if (index == 0) "s" else "",
                                         description = if (attempts.size == 1) {
                                             "Time Under Tension for ${exercise?.canonicalName.orEmpty()} set $ordinal"
                                         } else "TUT attempt ${index + 1} for ${exercise?.canonicalName.orEmpty()} set $ordinal",
@@ -729,7 +731,7 @@ private fun WorkoutExerciseCard(
                                 Text("${attempts.size}/$MAX_TUT_ENTRIES", style = MaterialTheme.typography.labelMedium)
                                 val values = attempts.map { quantitativeInput(it) }
                                 if (values.none { !it.isValid } && values.any { it.value != null }) Text(
-                                    " · TUT ${formatQuantitative(values.sumOf { it.value ?: 0.0 })}s",
+                                    " · ${formatQuantitative(values.sumOf { it.value ?: 0.0 })}s",
                                     style = MaterialTheme.typography.labelMedium,
                                     modifier = Modifier.semantics {
                                         contentDescription = "TUT total for ${exercise?.canonicalName.orEmpty()} set $ordinal"
@@ -768,7 +770,7 @@ private fun WorkoutExerciseCard(
                                 label = "RPE",
                                 description = "RPE for ${exercise?.canonicalName.orEmpty()} set $ordinal",
                                 maximum = 10.0,
-                                modifier = Modifier.width(48.dp * fieldScale).then(focus),
+                                modifier = Modifier.width((if (compactHoldRow) 44.dp else 48.dp) * fieldScale).then(focus),
                                 onNext = { openNextEmpty(ordinal) },
                             )
                             ExerciseMeasurement.ADDED_WEIGHT -> QuantitativeTextField(
@@ -863,18 +865,20 @@ private fun WorkoutExerciseCard(
                     "One-entry mode. Previously recorded attempts are retained.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                previousSet?.takeIf { isExpanded }?.let {
+                inputError(draft)?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                previousSet?.let {
                     Text(
                         "Previous: ${setDescription(it, includeTimingAttempts = false)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.semantics {
-                            contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
-                        },
+                        textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                        modifier = Modifier.align(androidx.compose.ui.Alignment.End)
+                            .semantics {
+                                contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                            },
                     )
-                }
-                inputError(draft)?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 }
                 }
@@ -962,8 +966,8 @@ private fun SetMeasurementFlow(
     Layout(
         contents = listOf(measurements, {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(Modifier.size(48.dp)) { tick() }
                 if (swap != null) Box(Modifier.size(48.dp)) { swap() }
+                Box(Modifier.size(48.dp)) { tick() }
             }
         }),
         modifier = Modifier.fillMaxWidth(),
@@ -1057,14 +1061,18 @@ private fun CompletedSetMeasurement(
         ExerciseMeasurement.WEIGHT -> resistance.takeIf(String::isNotBlank)?.let { "$it ${config.weightUnit}" }
         ExerciseMeasurement.REPS -> reps.takeIf(String::isNotBlank)?.let { "$it reps" }
         ExerciseMeasurement.TUT -> attempts.filter(String::isNotBlank).takeIf { it.isNotEmpty() }?.let {
-            "${formatQuantitative(it.sumOf { entry -> quantitativeInput(entry).value ?: 0.0 })} s TUT"
+            "${formatQuantitative(it.sumOf { entry -> quantitativeInput(entry).value ?: 0.0 })} s"
         }
         ExerciseMeasurement.TOTAL_TIME -> draft.timeUnderTension.takeIf(String::isNotBlank)?.let { "$it s Total" }
         ExerciseMeasurement.ADDED_WEIGHT -> draft.addedWeight.takeIf(String::isNotBlank)?.let { "+$it $addedWeightUnit" }
         ExerciseMeasurement.RPE -> draft.rpe.takeIf(String::isNotBlank)?.let { "RPE $it" }
         else -> null
     }
-    value?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+    value?.let {
+        Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.semantics {
+            if (field == ExerciseMeasurement.TUT) contentDescription = "Time Under Tension: $it"
+        })
+    }
 }
 
 @Composable
