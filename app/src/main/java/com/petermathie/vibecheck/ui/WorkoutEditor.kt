@@ -868,20 +868,21 @@ private fun WorkoutExerciseCard(
                             style = MaterialTheme.typography.bodySmall,
                         )
                     },
-                    footer = {
+                    feedback = {
                         inputError(draft)?.let {
                             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                         }
+                    },
+                    previous = {
                         previousSet?.let {
                             Text(
                                 "Previous: ${setDescription(it, includeTimingAttempts = false)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                                modifier = Modifier.align(androidx.compose.ui.Alignment.End)
-                                    .semantics {
-                                        contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
-                                    },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Previous performance for ${exercise?.canonicalName.orEmpty()} set $ordinal"
+                                },
                             )
                         }
                     },
@@ -970,7 +971,8 @@ private fun SetMeasurementFlow(
     tick: @Composable () -> Unit,
     swap: (@Composable () -> Unit)?,
     details: @Composable () -> Unit,
-    footer: @Composable ColumnScope.() -> Unit,
+    feedback: @Composable () -> Unit,
+    previous: @Composable () -> Unit,
 ) {
     Layout(
         contents = listOf(measurements, {
@@ -981,16 +983,16 @@ private fun SetMeasurementFlow(
         }, {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { details() }
         }, {
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { feedback() }
+        }, {
+            Box { previous() }
         }),
         modifier = Modifier.fillMaxWidth(),
-    ) { (inputs, actionNodes, detailNodes, footerNodes), constraints ->
+    ) { (inputs, actionNodes, detailNodes, feedbackNodes, previousNodes), constraints ->
         val gap = 4.dp.roundToPx()
         val sectionGap = 8.dp.roundToPx()
         val bottomInset = 8.dp.roundToPx()
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
-        val details = detailNodes.single().measure(loose)
-        val footer = footerNodes.single().measure(loose)
         // Reserve the same trailing space in both states so expansion never reflows row one.
         val actions = actionNodes.single().measure(loose)
         val inputWidth = (constraints.maxWidth - actions.width - gap).coerceAtLeast(0)
@@ -1013,6 +1015,16 @@ private fun SetMeasurementFlow(
             usedWidth += placeable.width
             if (isTiming) timingCells++
         }
+        // Use spare row width for the comparison without changing which inputs fit.
+        val widestRow = rows.maxOf { row ->
+            row.sumOf { placeables[it].width } + gap * (row.size - 1).coerceAtLeast(0)
+        }
+        val previousWidth = (constraints.maxWidth - widestRow - gap).coerceAtLeast(actions.width)
+        val previous = previousNodes.single().measure(loose.copy(maxWidth = previousWidth))
+        val rightWidth = maxOf(actions.width, previous.width)
+        val leftConstraints = loose.copy(maxWidth = (constraints.maxWidth - rightWidth - gap).coerceAtLeast(0))
+        val details = detailNodes.single().measure(leftConstraints)
+        val feedback = feedbackNodes.single().measure(leftConstraints)
         val shownRows = if (expanded) rows else rows.take(1)
         val heights = shownRows.mapIndexed { index, row ->
             maxOf(
@@ -1020,28 +1032,27 @@ private fun SetMeasurementFlow(
                 if (index == 0) actions.height else 0,
             )
         }
-        // Mirror the persistent footer above row one; expanded details grow below that fixed row.
-        val rowInset = maxOf(topInset.roundToPx(), bottomInset + if (footer.height > 0) sectionGap + footer.height else 0)
-        val rowsHeight = heights.sum() + gap * (shownRows.size - 1)
+        val primaryHeight = maxOf(heights.first(), actions.height + if (previous.height > 0) sectionGap + previous.height else 0)
+        val rowInset = maxOf(topInset.roundToPx(), bottomInset + if (feedback.height > 0) sectionGap + feedback.height else 0)
+        val rowsHeight = primaryHeight + heights.drop(1).sum() + gap * (shownRows.size - 1)
         val detailsHeight = if (details.height > 0) sectionGap + details.height else 0
         val height = constraints.constrainHeight(rowsHeight + rowInset * 2 + detailsHeight)
         layout(constraints.maxWidth, height) {
             var y = rowInset
             shownRows.forEachIndexed { rowIndex, row ->
-                val height = heights[rowIndex]
+                val height = if (rowIndex == 0) primaryHeight else heights[rowIndex]
                 var x = 0
                 row.forEach { index ->
                     val field = placeables[index]
                     field.placeRelative(x, y + (height - field.height) / 2)
                     x += field.width + gap
                 }
-                if (rowIndex == 0) {
-                    actions.placeRelative(constraints.maxWidth - actions.width, y + (height - actions.height) / 2)
-                }
                 y += height + gap
             }
+            actions.placeRelative(constraints.maxWidth - actions.width, rowInset)
+            previous.placeRelative(constraints.maxWidth - previous.width, height - bottomInset - previous.height)
             if (details.height > 0) details.placeRelative(0, rowInset + rowsHeight + sectionGap)
-            footer.placeRelative(0, height - bottomInset - footer.height)
+            feedback.placeRelative(0, height - bottomInset - feedback.height)
         }
     }
 }

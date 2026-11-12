@@ -358,7 +358,7 @@ class WorkoutSetTilesTest {
             listOf("Complete set 1 for Handstand and open next empty set", "Change variant for Handstand set 1")
         val collapsed = descriptions.map { compose.onNodeWithContentDescription(it).fetchSemanticsNode().boundsInRoot }
         val collapsedTile = compose.onNodeWithContentDescription("Set 1 for Handstand").fetchSemanticsNode().boundsInRoot
-        collapsed.forEach {
+        collapsed.take(visible.size).forEach {
             assertEquals("Collapsed row must be vertically centred", collapsedTile.center.y, it.center.y, 1f)
         }
         fun tileHeight() = compose.onNodeWithContentDescription("Set 1 for Handstand")
@@ -540,30 +540,30 @@ class WorkoutSetTilesTest {
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertIsDisplayed()
         assertBottomRight(1)
         val collapsedTile = compose.onNodeWithContentDescription("Set 1 for Handstand").getUnclippedBoundsInRoot()
-        val firstRow = listOf("Time Under Tension", "Change variant", "Complete set").map { label ->
-            val description = when (label) {
-                "Change variant" -> "Change variant for Handstand set 1"
-                "Complete set" -> "Complete set 1 for Handstand and open next empty set"
-                else -> "$label for Handstand set 1"
-            }
-            compose.onNodeWithContentDescription(description).getUnclippedBoundsInRoot().also {
-                assertEquals("Collapsed fields and actions must be vertically centred",
-                    (collapsedTile.top + collapsedTile.bottom).value, (it.top + it.bottom).value, 1f)
-            }
+        val firstRowDescriptions = listOf("Time Under Tension for Handstand set 1",
+            "Change variant for Handstand set 1", "Complete set 1 for Handstand and open next empty set")
+        val firstRow = firstRowDescriptions.map {
+            compose.onNodeWithContentDescription(it).getUnclippedBoundsInRoot()
         }
+        assertEquals("Collapsed measurement fields must be vertically centred",
+            (collapsedTile.top + collapsedTile.bottom).value, (firstRow.first().top + firstRow.first().bottom).value, 1f)
         val collapsedNote = compose.onNodeWithContentDescription("Previous performance for Handstand set 1")
             .getUnclippedBoundsInRoot()
-        assertTrue("Previous result must not overlap the centred row", firstRow.all { it.bottom + 8.dp <= collapsedNote.top })
+        assertTrue("Previous result must occupy the separate right column",
+            collapsedNote.left >= firstRow.first().right + 4.dp)
+        assertTrue("Swap and tick must be above the previous result",
+            firstRow.drop(1).all { (collapsedNote.top - it.bottom).value >= 7.5f })
+        assertTrue("Actions must be at the top, not centred beside the fields",
+            firstRow.drop(1).all { it.top < firstRow.first().top })
         compose.onNodeWithContentDescription("Previous performance for Handstand set 2").assertTextEquals("Previous: 9s")
         expandSet("Handstand", 1)
-        assertEquals(firstRow, listOf("Time Under Tension for Handstand set 1",
-            "Change variant for Handstand set 1", "Complete set 1 for Handstand and open next empty set").map {
+        assertEquals(firstRow, firstRowDescriptions.map {
             compose.onNodeWithContentDescription(it).getUnclippedBoundsInRoot()
         })
         compose.onNodeWithContentDescription("Previous performance for Handstand set 1").assertTextEquals("Previous: 7s")
         val note = compose.onNodeWithContentDescription("Previous performance for Handstand set 1").getUnclippedBoundsInRoot()
         val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").getUnclippedBoundsInRoot()
-        assertTrue("Previous result must be a note below the entry fields", note.top >= rpe.bottom)
+        assertTrue("Previous result must remain beside the entry column without overlap", note.left >= rpe.right + 4.dp)
         assertBottomRight(1)
 
         compose.onNodeWithContentDescription("Set 2 for Handstand")
@@ -739,11 +739,15 @@ class WorkoutSetTilesTest {
         })
         if (fontScale == 1f) {
             assertTrue("Planche seconds, all bands and RPE must share the first row", fields.all {
-                kotlin.math.abs((it.top + it.bottom).value - (tick.top + tick.bottom).value) < 1f
+                kotlin.math.abs((it.top + it.bottom).value - (fields.first().top + fields.first().bottom).value) < 1f
             })
         } else {
             assertTrue("Large text must wrap rather than squeeze", fields.last().top > fields.first().top)
         }
+        val note = compose.onNodeWithContentDescription("Previous performance for Planche set 1")
+            .assertIsDisplayed().getUnclippedBoundsInRoot()
+        assertTrue("Previous result must stay to the right of every measurement", fields.all { it.right <= note.left })
+        assertTrue("Right-column actions must stay above the previous result", tick.bottom <= note.top && swap.bottom <= note.top)
         compose.onNodeWithContentDescription("Time Under Tension for Planche set 1")
             .assertTextContains("s").performTextInput("12")
         compose.onNodeWithContentDescription("RPE for Planche set 1").performScrollTo().performTextInput("8")
@@ -783,14 +787,14 @@ class WorkoutSetTilesTest {
         })
         val completion = compose.onNodeWithContentDescription("Complete set 1 for Back extension and open next empty set")
             .assertHasClickAction().fetchSemanticsNode().boundsInRoot
-        assertEquals("Tick must share the first measurement row", fields.first().center.y, completion.center.y, 2f)
+        assertTrue("Tick must sit at the top of the right-hand column", completion.center.y < fields.first().center.y)
         assertTrue(completion.left >= fields.last().right)
         val bounds = compose.onNodeWithContentDescription("Set 1 for Back extension").getUnclippedBoundsInRoot()
         val height = bounds.bottom - bounds.top
         val note = compose.onNodeWithContentDescription("Previous performance for Back extension set 1")
             .assertIsDisplayed().getUnclippedBoundsInRoot()
-        assertTrue("Simple tile should reserve only the space needed for a centred row and its note, was $height",
-            height <= 48.dp + ((note.bottom - note.top) + 16.dp) * 2 + 1.dp)
+        assertTrue("Simple tile should stack the note below the tick, not add a full-width footer, was $height",
+            height <= 48.dp + (note.bottom - note.top) + 24.dp + 1.dp)
         for (ordinal in 2..3) {
             val empty = compose.onNodeWithContentDescription("Set $ordinal for Back extension")
                 .performScrollTo().getUnclippedBoundsInRoot()
