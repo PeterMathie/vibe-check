@@ -4,7 +4,6 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -32,7 +31,8 @@ import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.model.TrackingType
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
-import com.petermathie.vibecheck.domain.editor.moveItem
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 
 @Composable
 fun ExerciseEditor(vm: EditorViewModel) {
@@ -339,83 +339,36 @@ internal fun ExerciseSettingsDialog(
                 defaultManyTuts,
                 defaultMeasurementOrder,
             )
-            mutableStateOf(if (decoded.weightUnit == null) decoded else decoded.copy(weightUnit = weightUnit))
+            mutableStateOf(decoded)
         }
-        val ordered = config.enabledMeasurements()
-        val order = rememberReorderState(ordered.map { it.key }) { key, from, to ->
-            moveItem(config.enabledMeasurements(), key.toString(), to - from) { it.key }?.let { reordered ->
-                config = config.copy(measurementOrder = reordered + config.orderedMeasurements.filterNot { it in reordered })
-            }
-        }
-        val listState = rememberLazyListState()
-        val scrollContext = rememberReorderScrollContext(listState)
+        var resistance by remember(exercise.id) { mutableStateOf(config.loggingResistance()) }
+        var measurement by remember(exercise.id) { mutableStateOf(config.loggingMeasurement()) }
         AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Exercise measurements") },
             text = {
-                CompositionLocalProvider(LocalReorderScrollContext provides scrollContext) {
-                    ReorderOverlayHost {
-                        LazyColumn(state = listState, modifier = Modifier.reorderScrollViewport(scrollContext)) {
+                        LazyColumn {
                             item {
                                 Text(exercise.canonicalName, style = MaterialTheme.typography.titleMedium)
                                 Text("Resistance", style = MaterialTheme.typography.titleMedium)
-                                ExerciseSettingCheckbox("Weight ($weightUnit)", config.weightUnit == weightUnit) {
-                                    config = config.copy(weightUnit = if (it) weightUnit else null)
-                                }
-                                ExerciseSettingCheckbox("Bodyweight", config.bodyweight) {
-                                    config = config.copy(bodyweight = it)
-                                }
-                                ExerciseSettingCheckbox("Added weight", config.addedWeight) {
-                                    config = config.copy(addedWeight = it)
-                                }
-                                ExerciseSettingCheckbox("Band resistance", config.bandResistance) {
-                                    config = config.copy(bandResistance = it)
-                                }
-                                ExerciseSettingCheckbox("Time Under Tension (seconds)", config.timeHeld) {
-                                    config = config.copy(timeHeld = it, manyTuts = it && config.manyTuts)
-                                }
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text("TUT entries per set")
-                                        Text(if (config.manyTuts) "Many · up to 8" else "One", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Switch(
-                                        checked = config.manyTuts,
-                                        onCheckedChange = { config = config.copy(manyTuts = it, timeHeld = true) },
-                                        modifier = Modifier.semantics { contentDescription = "Multiple TUT entries per set" },
-                                    )
-                                }
-                                Text("Recorded attempts are retained when switching to one.", style = MaterialTheme.typography.bodySmall)
-                                ExerciseSettingCheckbox("Total Time (seconds)", config.timeUnderTension) {
-                                    config = config.copy(timeUnderTension = it)
+                                ResistanceMetric.entries.forEach { option ->
+                                    MetricChoice(option.label, resistance == option) { resistance = option }
                                 }
                                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                                Text("Reps", style = MaterialTheme.typography.titleMedium)
-                                ExerciseSettingCheckbox("Track repetitions", config.reps) {
-                                    config = config.copy(reps = it)
+                                Text("Measurement", style = MaterialTheme.typography.titleMedium)
+                                MeasurementMetric.entries.forEach { option ->
+                                    MetricChoice(option.label, measurement == option) { measurement = option }
                                 }
-                                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                                Text("Logging order", style = MaterialTheme.typography.titleMedium)
-                            }
-                            items(order.ordered(ordered) { it.key }, key = { it.key }) { field ->
-                                ReorderItem(order, field.key, order.keysSnapshot().indexOf(field.key), Modifier.fillMaxWidth()) {
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        ReorderHandle(order, field.key, field.label)
-                                        Text(field.label)
-                                    }
-                                }
+                                Text("Recorded values and units are retained.", style = MaterialTheme.typography.bodySmall)
                             }
                         }
-                    }
-                }
             },
             confirmButton = {
                 TextButton(
+                    enabled = resistance != null && measurement != null,
                     onClick = {
+                        config = config.withResistance(requireNotNull(resistance), config.weightUnit ?: weightUnit)
+                            .withMeasurement(requireNotNull(measurement))
                         onSave(
                             exercise.copy(
                                 inputConfig = config.encode(),
@@ -429,15 +382,15 @@ internal fun ExerciseSettingsDialog(
     }
 
 @Composable
-private fun ExerciseSettingCheckbox(
+private fun MetricChoice(
         label: String,
         checked: Boolean,
         onCheckedChange: (Boolean) -> Unit,
     ) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Checkbox(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
+            RadioButton(
+                selected = checked,
+                onClick = { onCheckedChange(true) },
                 modifier = Modifier.semantics { contentDescription = label },
             )
             Text(label)

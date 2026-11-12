@@ -148,7 +148,7 @@ class WorkoutLoggingUiTest {
         assertHandstandQuantitativeFieldsRemainOrdered()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("12")
         compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
-        compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").performClick()
+        compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").performClick()
         compose.onNodeWithText("Total Time stopwatch").assertExists()
         compose.onNodeWithText("Reset").performClick()
         compose.onNodeWithText("Start").performClick()
@@ -158,14 +158,14 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("Stop").performClick()
         compose.onNodeWithText("Apply").performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("12")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total s")
         compose.onNodeWithText("Freestanding sec").assertDoesNotExist()
         compose.onNodeWithText("Total wall sec").assertDoesNotExist()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("99")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextClearance()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
         val (_, tensionBounds, _) = awaitHandstandQuantitativeFieldBounds(requireSameRow = false)
-        val stopwatchBounds = compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").fetchSemanticsNode().boundsInRoot
+        val stopwatchBounds = compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").fetchSemanticsNode().boundsInRoot
         assertTrue(
             "Stopwatch should occupy the right side of Total Time: Total=$tensionBounds stopwatch=$stopwatchBounds",
             stopwatchBounds.left >= tensionBounds.center.x && stopwatchBounds.right <= tensionBounds.right,
@@ -299,7 +299,7 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Total Time for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
-            .assertTextContains("Total")
+            .assertTextContains("Total s")
         compose.onNodeWithContentDescription("RPE for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
@@ -335,11 +335,12 @@ class WorkoutLoggingUiTest {
     private fun assertOrderedAndNonOverlapping(bounds: List<Rect>) {
         val (heldBounds, tensionBounds, rpeBounds) = bounds
         assertTrue(
-            "TUT, Total, and RPE should retain readable, ordered bounds: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
+            "TUT and Total stay in their measurement column; RPE stays separate: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
             bounds.all { it.width > 0f && it.height > 0f } &&
-                bounds.zipWithNext().all { (first, second) ->
-                    val sameRow = kotlin.math.abs(first.center.y - second.center.y) < 2f
-                    if (sameRow) first.right <= second.left else first.bottom <= second.top
+                heldBounds.bottom <= tensionBounds.top &&
+                listOf(heldBounds, tensionBounds).all {
+                    it.right <= rpeBounds.left || rpeBounds.right <= it.left ||
+                        it.bottom <= rpeBounds.top || rpeBounds.bottom <= it.top
                 },
         )
     }

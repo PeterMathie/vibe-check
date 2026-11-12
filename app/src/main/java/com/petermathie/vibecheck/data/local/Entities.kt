@@ -128,6 +128,9 @@ data class BandEntity(
     val colourArgb: Long,
 )
 
+fun isSeededBandId(id: String): Boolean =
+    id in setOf("band-yellow", "band-red", "band-black", "band-purple")
+
 @Entity(tableName = "programmes", primaryKeys = ["id"])
 data class ProgrammeEntity(
     val id: String,

@@ -1,6 +1,9 @@
 package com.petermathie.vibecheck
 
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.ui.emptySet
+import com.petermathie.vibecheck.ui.setDescription
 import com.petermathie.vibecheck.domain.workout.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -37,5 +40,18 @@ class TimingEntriesTest {
         assertFalse(ExerciseInputConfig.decode("manyTuts=false", "SKILL_HOLD", "core:handstand").manyTuts)
         val config = ExerciseInputConfig(timeHeld = true, manyTuts = true, reps = true, weightUnit = "kg")
         assertEquals(config, ExerciseInputConfig.decode(config.encode(), "WEIGHT_REPS"))
+    }
+
+    @Test
+    fun explicitlySelectedMetricDoesNotDescribeInactiveHistoricalValues() {
+        val recorded = emptySet("fixture", 1).copy(
+            reps = 8.0, romValue = 45.0, romUnit = "cm", holdMillis = 6_000,
+            variationInputConfigSnapshot = ExerciseInputConfig().withMeasurement(MeasurementMetric.REPETITIONS).encode(),
+        )
+        assertEquals("8 reps", setDescription(recorded))
+        assertEquals("45 cm", setDescription(recorded.copy(
+            variationInputConfigSnapshot = ExerciseInputConfig().withMeasurement(MeasurementMetric.RANGE_OF_MOTION).encode(),
+        )))
+        assertEquals("ROM 45.0 cm", setDescription(recorded.copy(variationInputConfigSnapshot = "")))
     }
 }

@@ -50,7 +50,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val measurements = dao.measurements().live()
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
-    private fun write(onSuccess: () -> Unit = {}, block: suspend () -> Unit) =
+    private fun write(onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}, block: suspend () -> Unit) =
         viewModelScope.launch {
             writes.withLock {
                 try {
@@ -60,6 +60,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                     throw e
                 } catch (e: Exception) {
                     error.value = e.message ?: "Could not save"
+                    onFailure()
                 }
             }
         }
@@ -127,6 +128,18 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun save(row: TrackerDailyValueEntity, onSaved: () -> Unit = {}) = write(onSaved) { trackerStore.saveValue(row) }
     fun save(row: BodyMeasurementEntity) = write { dao.measurement(row) }
     fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }
+    fun saveBand(row: BandEntity, onSaved: () -> Unit, onFailure: () -> Unit) = write(onSaved, onFailure) {
+        require(!isSeededBandId(row.id)) { "Built-in band definitions cannot be changed" }
+        require(row.name.isNotBlank()) { "Enter a band name" }
+        require(row.widthCentimetres.isFinite() && row.widthCentimetres > 0) { "Band width must be positive" }
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid band colour" }
+        db.withTransaction {
+            require(dao.bandById(row.id) != null || dao.bandCount() < com.petermathie.vibecheck.domain.programme.MAX_RESISTANCE_BANDS) {
+                "At most eight resistance bands can be configured"
+            }
+            dao.band(row)
+        }
+    }
     fun attachReferenceVideo(context: Context, exerciseId: String, uri: Uri, displayName: String) = write {
         val id = newId()
         val directory = File(context.filesDir, "exercise-reference-videos")
@@ -200,8 +213,13 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun saveSet(row: WorkoutSetEntity, bandIds: List<String>) = write {
         dao.saveSetWithSnapshots(row, bandIds, consumeDraft = false)
     }
-    fun submitEntryDraft(row: WorkoutSetEntity, bandIds: List<String>, onSaved: () -> Unit) = write {
-        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true)
+    fun submitEntryDraft(
+        row: WorkoutSetEntity,
+        bandIds: List<String>,
+        inputConfigOverride: String? = null,
+        onSaved: () -> Unit,
+    ) = write {
+        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true, inputConfigOverride = inputConfigOverride)
         onSaved()
     }
     fun duplicate(programme: ProgrammeEntity) = write {

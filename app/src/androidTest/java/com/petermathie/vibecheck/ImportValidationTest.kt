@@ -49,6 +49,33 @@ class ImportValidationTest {
     }
 
     @Test
+    fun customBandsAndExclusiveMetricSettingsRoundTripWhileBuiltInBandsStayProtected() = runBlocking {
+        val band = fixture("bands").put("id", "custom-band").put("name", "Custom blue")
+            .put("colourArgb", 0xFF5085D6L).put("widthCentimetres", 4.0)
+        val exercise = fixture("exercises").put(
+            "inputConfig",
+            "resistanceMetric=BANDS;measurementMetric=RANGE_OF_MOTION;reps=false",
+        )
+        DataTransfer.import(db, document(rows("bands", band).put("exercises", JSONArray().put(exercise))))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertEquals("Custom blue", db.editorDao().bandById("custom-band")!!.name)
+        assertEquals(exercise.getString("inputConfig"), db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        rejected(rows("bands", fixture("bands").put("name", "Changed built-in")), "seeded")
+        rejected(rows("exercises", fixture("exercises").put("inputConfig", "measurementMetric=UNKNOWN")), "Unknown")
+        listOf("widthCentimetres" to 0, "colourArgb" to -1, "name" to " ").forEach { (key, value) ->
+            rejected(rows("bands", fixture("bands").put("id", "invalid-custom").put(key, value)),
+                when (key) { "widthCentimetres" -> "positive"; "colourArgb" -> "colourArgb"; else -> "name" })
+        }
+        val more = JSONArray().apply {
+            (2..4).forEach { put(JSONObject(band.toString()).put("id", "custom-band-$it")) }
+        }
+        DataTransfer.import(db, document(JSONObject().put("bands", more)))
+        assertEquals(8, db.editorDao().bandCount())
+        rejected(rows("bands", JSONObject(band.toString()).put("id", "ninth-band")), "eight")
+    }
+
+    @Test
     fun legacyTimingRowsAndMutableMeasurementConfigurationRemainPortable() = runBlocking {
         val set = fixture("workout_sets").put("holdMillis", 1234)
         set.remove("tutEntriesMillis")

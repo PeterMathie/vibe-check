@@ -42,7 +42,9 @@ interface EditorDao {
     @Query("SELECT * FROM workout_set_bands ORDER BY ordinal") fun setBands(): Flow<List<WorkoutSetBandEntity>>
     @Query("SELECT b.* FROM workout_set_bands b JOIN workout_sets s ON s.id=b.setId WHERE s.workoutExerciseId=:workoutExerciseId ORDER BY b.ordinal")
     suspend fun bandsForExercise(workoutExerciseId: String): List<WorkoutSetBandEntity>
-    @Query("SELECT * FROM bands ORDER BY widthCentimetres") fun bands(): Flow<List<BandEntity>>
+    @Query("SELECT * FROM bands ORDER BY widthCentimetres,id") fun bands(): Flow<List<BandEntity>>
+    @Query("SELECT COUNT(*) FROM bands") suspend fun bandCount(): Int
+    @Upsert suspend fun band(row: BandEntity)
     @Query("SELECT * FROM bands WHERE id=:id") suspend fun bandById(id: String): BandEntity?
     @Upsert suspend fun workout(row: WorkoutEntity)
     @Upsert suspend fun workoutExercise(row: WorkoutExerciseEntity)
@@ -98,7 +100,12 @@ interface EditorDao {
         deleteEntryDraft(row.workoutExerciseId, row.ordinal)
     }
     @Transaction
-    suspend fun saveSetWithSnapshots(row: WorkoutSetEntity, bandIds: List<String>, consumeDraft: Boolean) {
+    suspend fun saveSetWithSnapshots(
+        row: WorkoutSetEntity,
+        bandIds: List<String>,
+        consumeDraft: Boolean,
+        inputConfigOverride: String? = null,
+    ) {
         val variation = row.variationId?.let { variationById(it) }
         val workoutExercise = requireNotNull(workoutExerciseById(row.workoutExerciseId)) {
             "Unknown workout exercise: ${row.workoutExerciseId}"
@@ -107,11 +114,13 @@ interface EditorDao {
             workoutExercise.inputConfig, workoutExercise.trackingType, workoutExercise.actualExerciseId,
         )
         val original = setById(row.id)?.takeIf { it.variationId == row.variationId }
+            ?: row.takeIf { inputConfigOverride != null }
         val saved = row.copy(
             variationRankSnapshot = original?.variationRankSnapshot ?: variation?.progressionRank,
             variationNameSnapshot = original?.variationNameSnapshot?.takeIf { it.isNotBlank() } ?: variation?.name.orEmpty(),
             variationTrackingTypeSnapshot = original?.variationTrackingTypeSnapshot?.takeIf { it.isNotBlank() } ?: variation?.trackingType.orEmpty(),
-            variationInputConfigSnapshot = original?.variationInputConfigSnapshot?.takeIf { it.isNotBlank() } ?: variation?.let {
+            variationInputConfigSnapshot = inputConfigOverride
+                ?: original?.variationInputConfigSnapshot?.takeIf { it.isNotBlank() } ?: variation?.let {
                 ExerciseInputConfig.decode(
                     it.inputConfig.ifBlank { workoutExercise.inputConfig }, it.trackingType, it.exerciseId,
                     defaultManyTuts = exerciseConfig.manyTuts,

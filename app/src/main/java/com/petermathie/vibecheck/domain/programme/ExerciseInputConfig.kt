@@ -1,5 +1,20 @@
 package com.petermathie.vibecheck.domain.programme
 
+const val MAX_RESISTANCE_BANDS = 8
+
+enum class ResistanceMetric(val label: String) {
+    BODYWEIGHT("Bodyweight"),
+    KILOGRAMS("Kilograms"),
+    BANDS("Resistance bands"),
+}
+
+enum class MeasurementMetric(val label: String) {
+    REPETITIONS("Repetitions"),
+    HOLD("Hold duration"),
+    SKILL_HOLD("Skill hold"),
+    RANGE_OF_MOTION("Range of motion"),
+}
+
 enum class ExerciseMeasurement(val key: String, val label: String, val placeholder: String) {
     BODYWEIGHT("bodyweight", "Bodyweight", "Bodyweight"),
     WEIGHT("weight", "Weight", "— kg"),
@@ -9,6 +24,7 @@ enum class ExerciseMeasurement(val key: String, val label: String, val placehold
     RPE("rpe", "RPE", "RPE —"),
     ADDED_WEIGHT("addedWeight", "Added weight", "+— kg"),
     BANDS("bands", "Band resistance", "Bands —"),
+    ROM("rom", "Range of motion", "— °"),
 }
 
 data class ExerciseInputConfig(
@@ -21,7 +37,50 @@ data class ExerciseInputConfig(
     val addedWeight: Boolean = false,
     val manyTuts: Boolean = false,
     val measurementOrder: List<ExerciseMeasurement> = emptyList(),
+    val resistanceMetric: ResistanceMetric? = null,
+    val measurementMetric: MeasurementMetric? = null,
 ) {
+    fun loggingResistance(): ResistanceMetric? = resistanceMetric ?: when {
+        weightUnit != null && addedWeight -> null
+        bandResistance && (weightUnit != null || addedWeight) -> null
+        bandResistance -> ResistanceMetric.BANDS
+        weightUnit != null || addedWeight -> ResistanceMetric.KILOGRAMS
+        else -> ResistanceMetric.BODYWEIGHT
+    }
+
+    fun loggingMeasurement(): MeasurementMetric? = measurementMetric ?: when {
+        reps && (timeHeld || manyTuts || timeUnderTension) -> null
+        manyTuts || timeHeld && timeUnderTension -> MeasurementMetric.SKILL_HOLD
+        timeHeld || timeUnderTension -> MeasurementMetric.HOLD
+        reps -> MeasurementMetric.REPETITIONS
+        else -> null
+    }
+
+    val loggingWeightUnit: String?
+        get() = if (loggingResistance() == ResistanceMetric.KILOGRAMS && !addedWeight) weightUnit ?: "kg" else null
+
+    fun withResistance(metric: ResistanceMetric, unit: String = "kg"): ExerciseInputConfig {
+        val useAddedWeight = metric == ResistanceMetric.KILOGRAMS &&
+            (addedWeight || weightUnit == null && bodyweight)
+        return copy(
+            resistanceMetric = metric,
+            weightUnit = unit.takeIf { metric == ResistanceMetric.KILOGRAMS && !useAddedWeight },
+            addedWeight = useAddedWeight,
+            bandResistance = metric == ResistanceMetric.BANDS,
+        )
+    }
+
+    fun withMeasurement(metric: MeasurementMetric): ExerciseInputConfig {
+        val totalOnly = metric == MeasurementMetric.HOLD && !timeHeld && timeUnderTension && !manyTuts
+        return copy(
+            measurementMetric = metric,
+            reps = metric == MeasurementMetric.REPETITIONS,
+            timeHeld = metric == MeasurementMetric.HOLD && !totalOnly || metric == MeasurementMetric.SKILL_HOLD,
+            manyTuts = metric == MeasurementMetric.SKILL_HOLD,
+            timeUnderTension = totalOnly || metric == MeasurementMetric.SKILL_HOLD,
+        )
+    }
+
     val orderedMeasurements: List<ExerciseMeasurement>
         get() = (measurementOrder + ExerciseMeasurement.entries).distinct()
 
@@ -35,6 +94,7 @@ data class ExerciseInputConfig(
             ExerciseMeasurement.RPE -> true
             ExerciseMeasurement.ADDED_WEIGHT -> addedWeight
             ExerciseMeasurement.BANDS -> bandResistance
+            ExerciseMeasurement.ROM -> measurementMetric == MeasurementMetric.RANGE_OF_MOTION
         }
     }
 
@@ -47,6 +107,9 @@ data class ExerciseInputConfig(
         "bodyweight=$bodyweight",
         "addedWeight=$addedWeight",
         "manyTuts=$manyTuts",
+    ) + listOfNotNull(
+        resistanceMetric?.let { "resistanceMetric=${it.name}" },
+        measurementMetric?.let { "measurementMetric=${it.name}" },
     ) + if (measurementOrder.isEmpty()) emptyList() else listOf(
         "measurementOrder=${measurementOrder.joinToString(",") { it.key }}",
     )).joinToString(";")
@@ -67,6 +130,13 @@ data class ExerciseInputConfig(
                 val parts = it.split("=", limit = 2)
                 parts.takeIf { pair -> pair.size == 2 }?.let { pair -> pair[0] to pair[1] }
             }.toMap()
+            fun <T : Enum<T>> metric(key: String, choices: List<T>): T? {
+                val entries = value.split(";").filter { it.startsWith("$key=") }
+                require(entries.size <= 1) { "Duplicate $key" }
+                return entries.singleOrNull()?.substringAfter("=")?.let { name ->
+                    requireNotNull(choices.find { it.name == name }) { "Unknown $key: $name" }
+                }
+            }
             val orders = value.split(";").filter { it.startsWith("measurementOrder=") }
             require(orders.size <= 1) { "Duplicate measurement order" }
             val order = orders.singleOrNull()?.substringAfter("=")?.let { encoded ->
@@ -91,6 +161,11 @@ data class ExerciseInputConfig(
                 addedWeight = fields["addedWeight"]?.toBooleanStrictOrNull() ?: defaults.addedWeight,
                 manyTuts = fields["manyTuts"]?.toBooleanStrictOrNull() ?: defaultManyTuts,
                 measurementOrder = order,
+                resistanceMetric = metric("resistanceMetric", ResistanceMetric.entries),
+                measurementMetric = metric("measurementMetric", MeasurementMetric.entries)
+                    ?: defaults.measurementMetric?.takeIf {
+                        fields.keys.none { key -> key in setOf("reps", "timeHeld", "timeUnderTension", "manyTuts") }
+                    },
             )
         }
 
@@ -99,6 +174,7 @@ data class ExerciseInputConfig(
             "BODYWEIGHT_REPS" -> ExerciseInputConfig(reps = true, bodyweight = true)
             "ASSISTED_REPS" -> ExerciseInputConfig(reps = true, bodyweight = true, bandResistance = true)
             "HOLD", "SKILL_HOLD" -> ExerciseInputConfig(timeHeld = true)
+            "ROM_MEASUREMENT" -> ExerciseInputConfig(measurementMetric = MeasurementMetric.RANGE_OF_MOTION)
             else -> ExerciseInputConfig(reps = true)
         }
     }
