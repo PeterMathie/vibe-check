@@ -8,9 +8,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -21,12 +26,69 @@ import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.petermathie.vibecheck.data.local.BandEntity
+import com.petermathie.vibecheck.data.local.ExerciseVariationEntity
 import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.*
+
+@Composable
+internal fun WorkoutSetVariantPicker(
+    identity: String,
+    ordinal: Int,
+    variantName: String,
+    currentVariantId: String?,
+    variations: List<ExerciseVariationEntity>,
+    enabled: Boolean,
+    onSelect: (ExerciseVariationEntity) -> Unit,
+    onConfigureMetrics: () -> Unit,
+    onConfigureBands: () -> Unit,
+) {
+    var expanded by remember(ordinal) { mutableStateOf(false) }
+    Box {
+        TextButton(
+            enabled = enabled,
+            onClick = { expanded = true },
+            contentPadding = PaddingValues(horizontal = 4.dp),
+            modifier = Modifier.heightIn(min = 40.dp).semantics {
+                contentDescription = "Change variant for $identity"
+            },
+        ) {
+            Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(
+                variantName,
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.semantics { contentDescription = "Variant for $identity" },
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            variations.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.name) },
+                    modifier = Modifier.semantics { selected = option.id == currentVariantId },
+                    leadingIcon = if (option.id == currentVariantId) {
+                        { Icon(Icons.Outlined.Check, null) }
+                    } else null,
+                    onClick = {
+                        if (option.id != currentVariantId) onSelect(option)
+                        expanded = false
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("Configure metrics") },
+                onClick = { expanded = false; onConfigureMetrics() },
+            )
+            DropdownMenuItem(
+                text = { Text("Configure bands") },
+                onClick = { expanded = false; onConfigureBands() },
+            )
+        }
+    }
+}
 
 @Composable
 internal fun WorkoutSetTile(

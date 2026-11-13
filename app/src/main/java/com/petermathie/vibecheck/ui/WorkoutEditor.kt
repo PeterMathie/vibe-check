@@ -12,7 +12,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.components.VibeSurface
@@ -48,29 +47,11 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.*
-import org.json.JSONArray
-import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 import android.os.SystemClock
 import androidx.compose.ui.text.input.VisualTransformation
 import kotlinx.coroutines.launch
-
-fun emptySet(id: String, ordinal: Int) = WorkoutSetEntity(newId(), id, ordinal, "WORKING", "COMPLETED", null, null, null, null, null, null, null, null, null, null, null, null, null, "", System.currentTimeMillis(), System.currentTimeMillis())
-fun emptyEntryDraft(id: String, ordinal: Int) = WorkoutEntryDraftEntity(id, newId(), ordinal, "", "", false, false, false, "[]", null, "", "", "", "", "", "degrees", System.currentTimeMillis())
-
-internal fun newSetEntryDraft(
-    workoutExerciseId: String,
-    ordinal: Int,
-    previous: WorkoutEntryDraftEntity?,
-    defaultVariationId: String?,
-    validVariationIds: Set<String>,
-): WorkoutEntryDraftEntity {
-    val variationId = previous?.variationId
-        ?.takeIf { it in validVariationIds }
-        ?: defaultVariationId?.takeIf { it in validVariationIds }
-    return emptyEntryDraft(workoutExerciseId, ordinal).copy(variationId = variationId)
-}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -325,7 +306,6 @@ fun WorkoutEditor(
     }
     if (add) ExercisePicker(vm, { add = false }) { e -> vm.save(WorkoutExerciseEntity(newId(), workout.id, e.id, e.id, rows.size, "", 120, null)); add = false }
 }
-
 private fun Modifier.panelToggle(label: String, expanded: Boolean, toggle: () -> Unit): Modifier =
     pointerInput(label, expanded) { detectTapGestures { toggle() } }
         .semantics {
@@ -384,28 +364,13 @@ private fun WorkoutExerciseCard(
     val validVariationIds = variationIds.toSet()
     fun variationFor(id: String?) = exerciseVariations.find { it.id == id }
     fun cachedVariant(setId: String?, variantId: String?) =
-        setId?.let { variantDrafts[variantDraftKey(it, variantId)] }?.let(::JSONObject)
+        setId?.let { variantDrafts[variantDraftKey(it, variantId)] }?.let(::variantDraftMetadata)
     fun configFor(id: String?, ordinal: Int? = null): ExerciseInputConfig {
         val snapshot = ordinal?.let { value -> sets.find { it.ordinal == value && it.variationId == id } }
-        val cached = cachedVariant(ordinal?.let { drafts[it]?.setId }, id)
-        val variation = variationFor(id)
-        return ExerciseInputConfig.decode(
-            ordinal?.let { drafts[it]?.setId }?.let { configOverrides[variantDraftKey(it, id)] }
-                ?: snapshot?.variationInputConfigSnapshot?.takeIf { it.isNotBlank() }
-                ?: cached?.getString("inputConfig")
-                ?: variation?.inputConfig?.ifBlank { row.inputConfig }
-                ?: row.inputConfig,
-            snapshot?.variationTrackingTypeSnapshot?.takeIf { it.isNotBlank() }
-                ?: cached?.getString("trackingType")
-                ?: variation?.trackingType?.ifBlank { exercise?.trackingType.orEmpty() }
-                ?: exercise?.trackingType.orEmpty(),
-            exerciseId = if (snapshot == null) row.actualExerciseId else null,
-            defaultManyTuts = if (snapshot != null) false else ExerciseInputConfig.decode(
-                row.inputConfig, row.trackingType, row.actualExerciseId,
-            ).manyTuts,
-            defaultMeasurementOrder = if (snapshot != null) emptyList() else ExerciseInputConfig.decode(
-                row.inputConfig, row.trackingType, row.actualExerciseId,
-            ).measurementOrder,
+        return resolveSetInputConfig(
+            row, exercise?.trackingType.orEmpty(), variationFor(id), snapshot,
+            cachedVariant(ordinal?.let { drafts[it]?.setId }, id),
+            ordinal?.let { drafts[it]?.setId }?.let { configOverrides[variantDraftKey(it, id)] },
         )
     }
     var stopwatchOrdinal by remember { mutableStateOf<Int?>(null) }
@@ -453,111 +418,30 @@ private fun WorkoutExerciseCard(
         validVariationIds = validVariationIds,
     )
         .also { drafts[ordinal] = it }
-    fun performanceParts(draft: WorkoutEntryDraftEntity): Pair<String,String> {
-        val inputConfig = configFor(draft.variationId, draft.ordinal)
-        val weighted = inputConfig.loggingWeightUnit != null
-        if (!weighted) return "" to if (inputConfig.loggingMeasurement() == MeasurementMetric.REPETITIONS) draft.performance else ""
-        val parts = draft.performance.split(Regex("\\s*[x×]\\s*"), limit = 2)
-        return parts.getOrElse(0) { "" } to parts.getOrElse(1) { "" }
-    }
-    fun attemptsFor(draft: WorkoutEntryDraftEntity): List<String> =
-        timingInputs(draft.tutEntries).ifEmpty { listOf(draft.timeHeld) }
-    fun inputError(draft: WorkoutEntryDraftEntity): String? {
-        val inputConfig = configFor(draft.variationId, draft.ordinal)
-        val resistanceMetric = inputConfig.loggingResistance()
-        val measurementMetric = inputConfig.loggingMeasurement()
-        if (resistanceMetric == null || measurementMetric == null) return "Choose logging metrics before entering this set"
-        val (resistance, reps) = performanceParts(draft)
-        val values = buildList {
-            if (resistanceMetric == ResistanceMetric.KILOGRAMS) add(if (inputConfig.addedWeight) draft.addedWeight else resistance)
-            when (measurementMetric) {
-                MeasurementMetric.REPETITIONS -> add(reps)
-                MeasurementMetric.RANGE_OF_MOTION -> add(draft.romValue)
-                MeasurementMetric.HOLD -> if (!inputConfig.timeHeld && inputConfig.timeUnderTension) add(draft.timeUnderTension)
-                    else addAll(attemptsFor(draft))
-                MeasurementMetric.SKILL_HOLD -> {
-                    addAll(attemptsFor(draft))
-                    add(draft.timeUnderTension)
-                }
-            }
-        }
-        if (values.any { it.isNotEmpty() && !quantitativeInput(it).isValid }) {
-            return "Complete or correct the highlighted number"
-        }
-        if (draft.rpe.isNotEmpty() && !quantitativeInput(draft.rpe, 10.0).isValid) {
-            return "RPE must be a decimal from 0 to 10"
-        }
-        return null
-    }
-    fun parsedSet(pending: WorkoutEntryDraftEntity): WorkoutSetEntity? {
-        if (inputError(pending) != null) return null
-        val inputConfig = configFor(pending.variationId, pending.ordinal)
-        val measurementMetric = inputConfig.loggingMeasurement()
-        val (resistance, reps) = performanceParts(pending)
-        val hasMeasurement = when (measurementMetric) {
-            MeasurementMetric.REPETITIONS -> quantitativeInput(reps).value != null
-            MeasurementMetric.RANGE_OF_MOTION -> quantitativeInput(pending.romValue).value != null
-            MeasurementMetric.HOLD -> if (!inputConfig.timeHeld && inputConfig.timeUnderTension) {
-                quantitativeInput(pending.timeUnderTension).value != null
-            } else attemptsFor(pending).any { quantitativeInput(it).value != null }
-            MeasurementMetric.SKILL_HOLD -> attemptsFor(pending).any { quantitativeInput(it).value != null } ||
-                quantitativeInput(pending.timeUnderTension).value != null
-            null -> false
-        }
-        if (!hasMeasurement) return null
-        val base = sets.find { it.ordinal == pending.ordinal }
-            ?: emptySet(row.id, pending.ordinal).copy(id = pending.setId)
-        val cached = cachedVariant(pending.setId, pending.variationId)
-        val variant = variationFor(pending.variationId)
-        val sameVariant = base.variationId == pending.variationId
-        val parsed = base.copy(
-            weightKg = if (inputConfig.loggingWeightUnit == null) base.weightKg else quantitativeInput(resistance).value?.let {
-                if (inputConfig.loggingWeightUnit == "lb") it / 2.2046226218 else it
-            },
-            reps = if (measurementMetric == MeasurementMetric.REPETITIONS) quantitativeInput(reps).value else base.reps,
-            variationId = pending.variationId,
-            variationNameSnapshot = if (sameVariant) base.variationNameSnapshot else
-                cached?.getString("variantName") ?: variant?.name.orEmpty(),
-            variationTrackingTypeSnapshot = if (sameVariant) base.variationTrackingTypeSnapshot else
-                cached?.getString("trackingType") ?: variant?.trackingType.orEmpty(),
-            variationRankSnapshot = if (sameVariant) base.variationRankSnapshot else
-                cached?.takeUnless { it.isNull("rank") }?.getInt("rank") ?: variant?.progressionRank,
-            holdMillis = attemptsFor(pending).mapNotNull { quantitativeInput(it).value?.times(1000)?.toLong() }
-                .takeIf { it.isNotEmpty() }?.sum(),
-            tutEntriesMillis = encodeTimingMillis(
-                attemptsFor(pending).mapNotNull { quantitativeInput(it).value?.times(1000)?.toLong() },
-            ),
-            timeUnderTensionMillis = quantitativeInput(pending.timeUnderTension).value?.times(1000)?.toLong(),
-            bandResistance = inputConfig.bandResistance,
-            addedWeightKg = quantitativeInput(pending.addedWeight).value?.let {
-                if (preferredWeightUnit == "lb") it / 2.2046226218 else it
-            },
-            rpe = quantitativeInput(pending.rpe, 10.0).value,
-            romValue = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) quantitativeInput(pending.romValue).value else base.romValue,
-            romUnit = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) pending.romUnit else base.romUnit,
-            updatedAt = System.currentTimeMillis(),
-        )
-        return parsed
-    }
-    fun snapshotConfig(draft: WorkoutEntryDraftEntity): String {
-        val config = configFor(draft.variationId, draft.ordinal)
-        return config.copy(
-            resistanceMetric = config.loggingResistance(),
-            measurementMetric = config.loggingMeasurement(),
-        ).encode()
-    }
+    fun logicFor(draft: WorkoutEntryDraftEntity) = WorkoutSetDraftLogic(
+        configFor(draft.variationId, draft.ordinal),
+        sets.find { it.ordinal == draft.ordinal },
+        variationFor(draft.variationId),
+        cachedVariant(draft.setId, draft.variationId),
+        preferredWeightUnit,
+    )
+    fun performanceParts(draft: WorkoutEntryDraftEntity) = logicFor(draft).performanceParts(draft)
+    fun inputError(draft: WorkoutEntryDraftEntity) = logicFor(draft).inputError(draft)
+    fun parsedSet(draft: WorkoutEntryDraftEntity) = logicFor(draft).parsedSet(draft)
+    fun snapshotConfig(draft: WorkoutEntryDraftEntity) = logicFor(draft).snapshotConfig()
     fun updateDraft(next: WorkoutEntryDraftEntity) {
         val updated = next.copy(updatedAt = System.currentTimeMillis())
         editedSetIds.add(updated.setId)
         activeOrdinal = updated.ordinal
         drafts[updated.ordinal] = updated
-        val parsed = parsedSet(updated)
+        val logic = logicFor(updated)
+        val parsed = logic.parsedSet(updated)
         if (parsed == null) {
             vm.saveEntryDraft(updated)
         } else {
             vm.submitEntryDraft(
                 parsed, bandIds(updated.bandIds),
-                inputConfigOverride = snapshotConfig(updated),
+                inputConfigOverride = logic.snapshotConfig(),
             ) {}
         }
     }
@@ -604,7 +488,7 @@ private fun WorkoutExerciseCard(
             val identity = "${exercise?.canonicalName.orEmpty()} set $ordinal"
             val variantName = recorded?.takeIf { it.variationId == draft.variationId }
                 ?.variationNameSnapshot?.takeIf(String::isNotBlank)
-                ?: cachedVariant(draft.setId, draft.variationId)?.getString("variantName")
+                ?: cachedVariant(draft.setId, draft.variationId)?.variantName
                 ?: variationFor(draft.variationId)?.name.orEmpty()
             key(draft.setId) {
             var confirming by remember { mutableStateOf(false) }
@@ -763,78 +647,34 @@ private fun WorkoutExerciseCard(
                     )
                     },
                     header = {
-                        var variationMenu by remember(ordinal) { mutableStateOf(false) }
-                            Box {
-                                TextButton(
-                                    enabled = draftLoaded,
-                                    onClick = { variationMenu = true },
-                                    contentPadding = PaddingValues(horizontal = 4.dp),
-                                    modifier = Modifier.heightIn(min = 40.dp).semantics {
-                                        contentDescription = "Change variant for $identity"
-                                    },
-                                ) {
-                                    Icon(Icons.Outlined.ExpandMore, null, Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text(variantName.ifBlank { exercise?.canonicalName.orEmpty() },
-                                        style = MaterialTheme.typography.labelMedium,
-                                        modifier = Modifier.semantics { contentDescription = "Variant for $identity" })
-                                }
-                                DropdownMenu(expanded = variationMenu, onDismissRequest = { variationMenu = false }) {
-                                    exerciseVariations.forEach { option ->
-                                        DropdownMenuItem(
-                                            text = { Text(option.name) },
-                                            modifier = Modifier.semantics { selected = option.id == draft.variationId },
-                                            leadingIcon = if (option.id == draft.variationId) {
-                                                { Icon(Icons.Outlined.Check, null) }
-                                            } else null,
-                                            onClick = {
-                                                if (option.id == draft.variationId) {
-                                                    variationMenu = false
-                                                    return@DropdownMenuItem
-                                                }
-                                                variantDrafts = variantDrafts + (
-                                                    variantDraftKey(draft.setId, draft.variationId) to encodeVariantDraft(
-                                                        draft, inputConfig.encode(), variantName,
-                                                        recorded?.takeIf { it.variationId == draft.variationId }
-                                                            ?.variationTrackingTypeSnapshot?.takeIf(String::isNotBlank)
-                                                            ?: variationFor(draft.variationId)?.trackingType.orEmpty(),
-                                                        recorded?.takeIf { it.variationId == draft.variationId }?.variationRankSnapshot
-                                                            ?: variationFor(draft.variationId)?.progressionRank,
-                                                    )
-                                                )
-                                                val nextConfig = configFor(option.id, ordinal)
-                                                val previousWeight = quantitativeInput(resistance).value?.let {
-                                                    if (inputConfig.loggingWeightUnit == "lb") it / 2.2046226218 else it
-                                                } ?: recorded?.weightKg
-                                                val nextWeight = previousWeight?.let {
-                                                    formatQuantitative(if (nextConfig.loggingWeightUnit == "lb") it * 2.2046226218 else it)
-                                                }.orEmpty()
-                                                val nextReps = result.ifBlank { recorded?.reps?.let(::formatQuantitative).orEmpty() }
-                                                val nextPerformance = if (nextConfig.loggingWeightUnit == null) nextReps else {
-                                                    if (nextWeight.isBlank() && nextReps.isBlank()) "" else "$nextWeight x $nextReps"
-                                                }
-                                                val nextDraft = draft.copy(
-                                                    variationId = option.id,
-                                                    performance = nextPerformance,
-                                                    updatedAt = System.currentTimeMillis(),
-                                                )
-                                                val cached = variantDrafts[variantDraftKey(draft.setId, option.id)]
-                                                updateDraft(if (cached == null) nextDraft else restoreVariantDraft(nextDraft, cached))
-                                                activeOrdinal = ordinal
-                                                variationMenu = false
-                                            },
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text("Configure metrics") },
-                                        onClick = { variationMenu = false; configuringOrdinal = ordinal },
+                        WorkoutSetVariantPicker(
+                            identity = identity,
+                            ordinal = ordinal,
+                            variantName = variantName.ifBlank { exercise?.canonicalName.orEmpty() },
+                            currentVariantId = draft.variationId,
+                            variations = exerciseVariations,
+                            enabled = draftLoaded,
+                            onSelect = { option ->
+                                variantDrafts = variantDrafts + (
+                                    variantDraftKey(draft.setId, draft.variationId) to encodeVariantDraft(
+                                        draft, inputConfig.encode(), variantName,
+                                        recorded?.takeIf { it.variationId == draft.variationId }
+                                            ?.variationTrackingTypeSnapshot?.takeIf(String::isNotBlank)
+                                            ?: variationFor(draft.variationId)?.trackingType.orEmpty(),
+                                        recorded?.takeIf { it.variationId == draft.variationId }?.variationRankSnapshot
+                                            ?: variationFor(draft.variationId)?.progressionRank,
                                     )
-                                    DropdownMenuItem(
-                                        text = { Text("Configure bands") },
-                                        onClick = { variationMenu = false; configuringBands = true },
-                                    )
-                                }
-                            }
+                                )
+                                val nextDraft = WorkoutSetDraftLogic(inputConfig, recorded).changeVariant(
+                                    draft, option.id, configFor(option.id, ordinal),
+                                )
+                                val cached = variantDrafts[variantDraftKey(draft.setId, option.id)]
+                                updateDraft(if (cached == null) nextDraft else restoreVariantDraft(nextDraft, cached))
+                                activeOrdinal = ordinal
+                            },
+                            onConfigureMetrics = { configuringOrdinal = ordinal },
+                            onConfigureBands = { configuringBands = true },
+                        )
                     },
                     feedback = {
                         if (resistanceMetric == null || measurementMetric == null) TextButton(
@@ -1107,79 +947,6 @@ private fun StopwatchDialog(initialMillis: Long, onDismiss: () -> Unit, onApply:
     )
 }
 
-private fun variantDraftKey(setId: String, variantId: String?): String =
-    JSONArray().put(setId).put(variantId).toString()
-
-private fun encodeVariantDraft(
-    draft: WorkoutEntryDraftEntity,
-    inputConfig: String,
-    variantName: String,
-    trackingType: String,
-    rank: Int?,
-): String = JSONObject().apply {
-    put("inputConfig", inputConfig)
-    put("variantName", variantName)
-    put("trackingType", trackingType)
-    put("rank", rank ?: JSONObject.NULL)
-    put("performance", draft.performance)
-    put("rpe", draft.rpe)
-    put("bands", draft.bandIds)
-    put("left", draft.leftValue)
-    put("right", draft.rightValue)
-    put("addedWeight", draft.addedWeight)
-    put("assistance", draft.assistance)
-    put("rom", draft.romValue)
-    put("romUnit", draft.romUnit)
-    put("held", draft.timeHeld)
-    put("total", draft.timeUnderTension)
-    put("attempts", draft.tutEntries)
-}.toString()
-
-private fun restoreVariantDraft(draft: WorkoutEntryDraftEntity, encoded: String): WorkoutEntryDraftEntity {
-    val values = JSONObject(encoded)
-    return draft.copy(
-        performance = values.getString("performance"),
-        rpe = values.getString("rpe"),
-        bandIds = values.getString("bands"),
-        leftValue = values.getString("left"),
-        rightValue = values.getString("right"),
-        addedWeight = values.getString("addedWeight"),
-        assistance = values.getString("assistance"),
-        romValue = values.getString("rom"),
-        romUnit = values.getString("romUnit"),
-        timeHeld = values.getString("held"),
-        timeUnderTension = values.getString("total"),
-        tutEntries = values.getString("attempts"),
-    )
-}
-
-private fun draftFromSet(set:WorkoutSetEntity,hold:Boolean,weightUnit:String?,bands:List<String> = emptyList(), addedWeightUnit: String = "kg"):WorkoutEntryDraftEntity {
-    val reps=set.reps ?: listOfNotNull(set.leftReps,set.rightReps).minOrNull()
-    val performance=when {
-        weightUnit != null -> "${set.weightKg?.let { if (weightUnit == "lb") it * 2.2046226218 else it }?.let(::formatQuantitative) ?: ""} x ${reps?.let(::formatQuantitative) ?: ""}"
-        else -> reps?.let(::formatQuantitative).orEmpty()
-    }
-    return emptyEntryDraft(set.workoutExerciseId,set.ordinal).copy(
-        setId=set.id,
-        performance=performance,
-        rpe=set.rpe?.toString().orEmpty(),
-        warmUp=set.setType=="WARM_UP",
-        failed=set.result=="FAILED",
-        bandIds=encodeBandIds(bands),
-        variationId=set.variationId,
-        leftValue=(if(hold)set.leftHoldMillis?.div(1000.0) else set.leftReps)?.toString().orEmpty(),
-        rightValue=(if(hold)set.rightHoldMillis?.div(1000.0) else set.rightReps)?.toString().orEmpty(),
-        addedWeight=set.addedWeightKg?.let { if (addedWeightUnit == "lb") it * 2.2046226218 else it }?.let(::formatQuantitative).orEmpty(),
-        assistance=set.assistanceKg?.toString().orEmpty(),
-        romValue=set.romValue?.toString().orEmpty(),
-        romUnit=set.romUnit ?: "cm",
-        timeHeld=set.holdMillis?.div(1000.0)?.toString().orEmpty(),
-        timeUnderTension=set.timeUnderTensionMillis?.div(1000.0)?.toString().orEmpty(),
-        tutEntries = timingMillis(set.tutEntriesMillis).takeIf { it.isNotEmpty() }
-            ?.map { formatQuantitative(it / 1000.0) }?.let(::encodeTimingInputs).orEmpty(),
-    )
-}
-
 fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true, labelTimingTotal: Boolean = false): String {
     val config = ExerciseInputConfig.decode(s.variationInputConfigSnapshot, s.variationTrackingTypeSnapshot)
     if ("measurementMetric=" in s.variationInputConfigSnapshot) {
@@ -1215,11 +982,3 @@ fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true, l
 } + (if (s.holdMillis != null && s.timeUnderTensionMillis != null) " · Total ${formatQuantitative(s.timeUnderTensionMillis / 1000.0)}s" else "") +
     (if (s.setType == "WARM_UP") " · warm-up" else "") + s.addedWeightKg?.let { " +${it}kg" }.orEmpty() + s.assistanceKg?.let { " −${it}kg" }.orEmpty()
 }
-
-private fun bandIds(value: String): List<String> {
-    val values = JSONArray(value)
-    return (0 until values.length()).map(values::getString)
-}
-
-private fun encodeBandIds(values: List<String>): String =
-    JSONArray().apply { values.forEach { put(it) } }.toString()
