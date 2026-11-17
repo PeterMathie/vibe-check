@@ -53,16 +53,11 @@ class ProgrammeUiTest {
     fun visibleEditOpensCoherentProgrammeEditorAndStartStillWorks() {
         seedProgramme()
         var startedDay: String? = null
-        var selectedMode: TrainingMode? = null
-        setProgrammeContent(onModeChange = { selectedMode = it }) { day, _ -> startedDay = day }
+        setProgrammeContent { day, _ -> startedDay = day }
 
         compose.onNodeWithText("Alpha").assertIsDisplayed()
-        val titleBounds = compose.onNodeWithText("Programmes").fetchSemanticsNode().boundsInRoot
-        val modeBounds = compose.onNodeWithText("Strength").fetchSemanticsNode().boundsInRoot
-        assertTrue(modeBounds.left > titleBounds.left)
-        assertTrue(kotlin.math.abs(modeBounds.center.y - titleBounds.center.y) < titleBounds.height)
-        compose.onNodeWithText("Stretch").performClick()
-        assertEquals(TrainingMode.STRETCHING, selectedMode)
+        compose.onNodeWithText("Strength").assertDoesNotExist()
+        compose.onNodeWithText("Stretch").assertDoesNotExist()
         compose.onNodeWithText("Rename programme").assertDoesNotExist()
         compose.onNodeWithText("Duplicate").assertDoesNotExist()
         compose.onNodeWithText("Archive").assertDoesNotExist()
@@ -97,8 +92,8 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Edit workout Morning").assertDoesNotExist()
         compose.onNodeWithText("Rename workout").assertDoesNotExist()
         compose.onNodeWithText("Delete workout").assertDoesNotExist()
-        compose.onNodeWithText("Add exercise").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Add exercise or stretch").assertIsDisplayed()
+        compose.onNodeWithText("Add exercise").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add exercise or stretch").assertDoesNotExist()
         compose.onNodeWithContentDescription("Edit targets for Bench press").assertDoesNotExist()
         compose.onNodeWithContentDescription("Edit prescription for Bench press").assertIsDisplayed()
         compose.onNodeWithContentDescription("Reorder Bench press").assertDoesNotExist()
@@ -124,7 +119,7 @@ class ProgrammeUiTest {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale.value)) {
                 VibeCheckTheme {
-                    ProgrammeEditor(viewModel, TrainingMode.STRENGTH, {}, { _, _ -> })
+                    ProgrammeEditor(viewModel, TrainingMode.STRENGTH, { _, _ -> })
                 }
             }
         }
@@ -246,6 +241,60 @@ class ProgrammeUiTest {
     }
 
     @Test
+    fun strengthAndStretchProgrammesExpandIndependentlyWithoutChangingTheirData() {
+        seedProgramme(includeSecondRows = true)
+        runBlocking {
+            val dao = database.editorDao()
+            dao.programme(activeProgrammes().single { it.id == "programme-b" }.copy(mode = "STRETCHING"))
+            dao.exercise(ExerciseEntity("stretch", "Forward fold", "STRETCHING", "ROM_MEASUREMENT", null, null, "custom", true))
+            dao.day(ProgrammeDayEntity("stretch-day", "programme-b", "Mobility", 0))
+            dao.entry(ProgrammeExerciseEntity("stretch-entry", "stretch-day", "stretch", 0, 3, null, null, null, 60, null, "", null))
+        }
+        val before = runBlocking {
+            val dao = database.editorDao()
+            Triple(dao.programmes().first(), dao.days().first(), dao.entries().first())
+        }
+        setProgrammeContent { _, _ -> }
+
+        compose.onNodeWithText("Alpha").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Beta").assertIsDisplayed().performClick()
+        compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Read-only exercises for Beta").assertIsDisplayed()
+        compose.onNodeWithText("Bench press").assertIsDisplayed()
+        compose.onNodeWithText("Forward fold").assertIsDisplayed()
+        compose.onNodeWithText("Alpha").performClick()
+        compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Read-only exercises for Beta").assertIsDisplayed()
+        assertEquals(before, runBlocking {
+            val dao = database.editorDao()
+            Triple(dao.programmes().first(), dao.days().first(), dao.entries().first())
+        })
+    }
+
+    @Test
+    fun newProgrammeActionIsOnlyAtTheScrollingEndOfTheList() {
+        createDatabase()
+        runBlocking {
+            repeat(12) { index ->
+                database.editorDao().programme(
+                    ProgrammeEntity("programme-$index", "Plan $index", "STRENGTH", false, position = index),
+                )
+            }
+        }
+        setProgrammeContent { _, _ -> }
+
+        compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
+        compose.onNodeWithText("New programme").assertIsNotDisplayed()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("New programme"))
+        compose.onNodeWithText("New programme").assertIsDisplayed()
+        val finalCard = compose.onNodeWithText("Plan 11").fetchSemanticsNode().boundsInRoot
+        val add = compose.onNodeWithText("New programme").fetchSemanticsNode().boundsInRoot
+        assertTrue(add.top > finalCard.bottom)
+        compose.onNode(hasScrollAction()).performScrollToIndex(0)
+        compose.onNodeWithText("New programme").assertIsNotDisplayed()
+    }
+
+    @Test
     fun createRenameDuplicateArchiveAndDeleteRemainInEditContext() {
         createDatabase()
         runBlocking {
@@ -255,31 +304,19 @@ class ProgrammeUiTest {
         }
         setProgrammeContent { _, _ -> }
 
-        compose.onNodeWithContentDescription("Create new programme").performClick()
+        compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
+        compose.onNodeWithText("New programme").assertIsDisplayed().performClick()
         compose.onNode(hasSetTextAction()).performTextInput("My gym plan")
         compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("No exercises yet").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Add exercise").performScrollTo().performClick()
+        compose.onNodeWithText("New exercise").performClick()
         compose.waitUntil(15_000) { activeProgrammes().any { it.name == "My gym plan" } }
 
         val programmeId = activeProgrammes().single().id
         val dayId = runBlocking { database.editorDao().days().first().single { it.programmeId == programmeId }.id }
-        runBlocking {
-            database.editorDao().entry(
-                ProgrammeExerciseEntity(
-                    "new-entry",
-                    dayId,
-                    "new-exercise",
-                    0,
-                    3,
-                    null,
-                    null,
-                    null,
-                    60,
-                    null,
-                    "",
-                    null,
-                ),
-            )
-        }
         compose.waitUntil(30_000) {
             runBlocking {
                 database.editorDao().entries().first().any {
@@ -310,7 +347,7 @@ class ProgrammeUiTest {
     }
 
     @Test
-    fun emptyProgrammeCreatesDayThenAddsExerciseAndStretchThroughSharedAction() {
+    fun emptyProgrammeCreatesDayThenAddsExerciseAndStretchInline() {
         createDatabase()
         runBlocking {
             val dao = database.editorDao()
@@ -322,10 +359,10 @@ class ProgrammeUiTest {
 
         compose.onNodeWithContentDescription("Edit programme Empty plan").performClick()
         compose.onNodeWithText("No exercises yet").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Add exercise or stretch").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Add exercise").assertIsDisplayed()
+        compose.onNodeWithText("Add exercise").assertIsDisplayed().performClick()
+        compose.onNode(hasText("Add exercise") and hasAnyAncestor(isDialog())).assertIsDisplayed()
         compose.onNodeWithText("Add stretch").assertIsDisplayed()
-        compose.onNodeWithText("Add exercise").performClick()
+        compose.onNode(hasText("Add exercise") and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithText("Bench press").performClick()
         compose.waitUntil(15_000) {
             runBlocking {
@@ -334,7 +371,7 @@ class ProgrammeUiTest {
         }
 
         val dayId = runBlocking { database.editorDao().days().first().single().id }
-        compose.onNodeWithContentDescription("Add exercise or stretch").performClick()
+        compose.onNodeWithText("Add exercise").performClick()
         compose.onNodeWithText("Add stretch").performClick()
         compose.onNodeWithText("Forward fold").performClick()
         compose.waitUntil(15_000) {
@@ -405,7 +442,6 @@ class ProgrammeUiTest {
 
     private fun setProgrammeContent(
         mode: TrainingMode = TrainingMode.STRENGTH,
-        onModeChange: (TrainingMode) -> Unit = {},
         onStart: (String, Boolean) -> Unit,
     ) {
         val viewModel = lifecycle.own(EditorViewModel(database))
@@ -414,10 +450,10 @@ class ProgrammeUiTest {
                 val host = remember { AppFabHostState() }
                 CompositionLocalProvider(
                     LocalAppFabHost provides host,
-                    LocalAppFabClearance provides 88.dp,
+                    LocalAppFabClearance provides 0.dp,
                 ) {
                     Box(Modifier.fillMaxSize()) {
-                        ProgrammeEditor(viewModel, mode, onModeChange, onStart)
+                        ProgrammeEditor(viewModel, mode, onStart)
                         host.action?.takeIf { it.visible }?.let {
                             AppFloatingAction(
                                 action = it,
@@ -432,8 +468,8 @@ class ProgrammeUiTest {
             }
         }
         compose.waitUntil(15_000) {
-            val activeForMode = activeProgrammes().filter { it.mode == mode.name }
-            activeForMode.isEmpty() || activeForMode.any { programme ->
+            val active = activeProgrammes()
+            active.isEmpty() || active.any { programme ->
                 compose.onAllNodesWithText(programme.name).fetchSemanticsNodes().isNotEmpty()
             }
         }

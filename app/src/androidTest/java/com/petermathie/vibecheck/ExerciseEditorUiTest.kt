@@ -167,10 +167,10 @@ class ExerciseEditorUiTest {
         val vm = lifecycle.own(EditorViewModel(database))
         compose.setContent {
             VibeCheckTheme {
-                BandSettingsDialog(vm.bands.collectAsState().value, {},
-                    onSave = { band, saved, failed -> vm.saveBand(band, saved, failed) })
+                ExerciseEditor(vm)
             }
         }
+        compose.onNodeWithText("Configure bands").performScrollTo().performClick()
         compose.onNodeWithText("Add band").performClick()
         compose.onNodeWithText("Save band").assertIsNotEnabled()
         compose.onNodeWithContentDescription("Band name").performTextInput("Custom blue")

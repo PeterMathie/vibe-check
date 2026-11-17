@@ -41,12 +41,14 @@ fun ExerciseEditor(vm: EditorViewModel) {
     val mappings by vm.mappings.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val variations by vm.variations.collectAsStateWithLifecycle()
+    val bands by vm.bands.collectAsStateWithLifecycle()
     val videos by vm.referenceVideos.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<ExerciseEntity?>(null) }
     var configuring by remember { mutableStateOf<ExerciseEntity?>(null) }
     var configuringVariation by remember { mutableStateOf<ExerciseVariationEntity?>(null) }
+    var configuringBands by remember { mutableStateOf(false) }
     var videoExerciseId by remember { mutableStateOf<String?>(null) }
     var playingVideo by remember { mutableStateOf<ExerciseReferenceVideoEntity?>(null) }
     var deletingVideo by remember { mutableStateOf<ExerciseReferenceVideoEntity?>(null) }
@@ -74,6 +76,7 @@ fun ExerciseEditor(vm: EditorViewModel) {
         visible = selected == null &&
             configuring == null &&
             configuringVariation == null &&
+            !configuringBands &&
             videoExerciseId == null &&
             playingVideo == null &&
             deletingVideo == null &&
@@ -96,6 +99,12 @@ fun ExerciseEditor(vm: EditorViewModel) {
                 }
             }
             EditField("Name, alias or muscle", query) { query = it }
+            VibeActionButton(
+                "Configure bands",
+                { configuringBands = true },
+                Modifier.fillMaxWidth(),
+                ActionImportance.SECONDARY,
+            )
         }
         items(visibleExercises,key={it.id}) { e ->
             VibeCard {
@@ -202,6 +211,11 @@ fun ExerciseEditor(vm: EditorViewModel) {
             }
         }
     }
+    if (configuringBands) BandSettingsDialog(
+        bands,
+        onDismiss = { configuringBands = false },
+        onSave = { band, saved, failed -> vm.saveBand(band, saved, failed) },
+    )
     variation?.let { id ->
         val parent = exercises.find { it.id == id }
         NameDialog("Variation name","",{variation=null}) {

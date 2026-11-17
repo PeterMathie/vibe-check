@@ -53,6 +53,13 @@ internal fun resolveSetInputConfig(
     )
 }
 
+internal fun acceptsRpeEdit(current: String, proposed: String): Boolean {
+    if (!quantitativeInput(current, 10.0).isValid && proposed.length < current.length) return true
+    val parsed = quantitativeInput(proposed, 10.0)
+    return parsed.error == null &&
+        (!parsed.isTransient || quantitativeInput(proposed.dropLast(1), 10.0).error == null)
+}
+
 /** Resolves draft values without owning Compose state, persistence or completion effects. */
 internal class WorkoutSetDraftLogic(
     private val config: ExerciseInputConfig,
@@ -90,7 +97,7 @@ internal class WorkoutSetDraftLogic(
             return "Complete or correct the highlighted number"
         }
         if (draft.rpe.isNotEmpty() && !quantitativeInput(draft.rpe, 10.0).isValid) {
-            return "RPE must be a decimal from 0 to 10"
+            return "RPE: 0 to 10"
         }
         return null
     }
@@ -168,6 +175,40 @@ internal class WorkoutSetDraftLogic(
 fun emptySet(id: String, ordinal: Int) = WorkoutSetEntity(newId(), id, ordinal, "WORKING", "COMPLETED", null, null, null, null, null, null, null, null, null, null, null, null, null, "", System.currentTimeMillis(), System.currentTimeMillis())
 fun emptyEntryDraft(id: String, ordinal: Int) = WorkoutEntryDraftEntity(id, newId(), ordinal, "", "", false, false, false, "[]", null, "", "", "", "", "", "degrees", System.currentTimeMillis())
 
+internal fun WorkoutExerciseEntity.configuredSetCount(): Int =
+    targetSets ?: targets.substringBefore(" sets").toIntOrNull()?.coerceAtLeast(1) ?: 3
+
+internal data class WorkoutSetSelection(val workoutExerciseId: String, val ordinal: Int, val setId: String?) {
+    fun reconcile(rowId: String, drafts: List<WorkoutEntryDraftEntity>): WorkoutSetSelection? {
+        if (rowId != workoutExerciseId) return this
+        val draft = drafts.firstOrNull { it.setId == setId } ?: drafts.firstOrNull { it.ordinal == ordinal }
+        return draft?.let { copy(ordinal = it.ordinal, setId = it.setId) }
+    }
+}
+
+internal fun firstUntickedWorkoutSet(
+    rows: List<WorkoutExerciseEntity>,
+    sets: List<WorkoutSetEntity>,
+    drafts: List<WorkoutEntryDraftEntity>,
+    lockedSetIds: Set<String>,
+): WorkoutSetSelection? {
+    rows.forEach { row ->
+        val saved = sets.filter { it.workoutExerciseId == row.id }
+        val recovered = drafts.filter { it.workoutExerciseId == row.id }
+        val count = maxOf(
+            row.configuredSetCount(),
+            saved.maxOfOrNull { it.ordinal } ?: 0,
+            recovered.maxOfOrNull { it.ordinal } ?: 0,
+        )
+        for (ordinal in 1..count) {
+            val id = recovered.firstOrNull { it.ordinal == ordinal }?.setId
+                ?: saved.firstOrNull { it.ordinal == ordinal }?.id
+            if (id !in lockedSetIds) return WorkoutSetSelection(row.id, ordinal, id)
+        }
+    }
+    return null
+}
+
 internal fun newSetEntryDraft(
     workoutExerciseId: String,
     ordinal: Int,
@@ -183,6 +224,14 @@ internal fun newSetEntryDraft(
 
 internal fun attemptsFor(draft: WorkoutEntryDraftEntity): List<String> =
     timingInputs(draft.tutEntries).ifEmpty { listOf(draft.timeHeld) }
+
+internal fun visibleTimingInputs(attempts: List<String>, locked: Boolean): List<String> {
+    require(attempts.size <= MAX_TUT_ENTRIES)
+    val last = attempts.indexOfLast(String::isNotEmpty)
+    val offerNext = !locked && last >= 0 && quantitativeInput(attempts[last]).value != null
+    val count = maxOf(1, last + 1 + if (offerNext) 1 else 0).coerceAtMost(MAX_TUT_ENTRIES)
+    return List(count) { attempts.getOrElse(it) { "" } }
+}
 
 internal fun variantDraftKey(setId: String, variantId: String?): String =
     JSONArray().put(setId).put(variantId).toString()
@@ -257,7 +306,7 @@ internal fun draftFromSet(
         romValue = set.romValue?.toString().orEmpty(),
         romUnit = set.romUnit ?: "cm",
         timeHeld = set.holdMillis?.div(1000.0)?.toString().orEmpty(),
-        timeUnderTension = set.timeUnderTensionMillis?.div(1000.0)?.toString().orEmpty(),
+        timeUnderTension = set.timeUnderTensionMillis?.div(1000.0)?.let(::formatQuantitative).orEmpty(),
         tutEntries = timingMillis(set.tutEntriesMillis).takeIf { it.isNotEmpty() }
             ?.map { formatQuantitative(it / 1000.0) }?.let(::encodeTimingInputs).orEmpty(),
     )

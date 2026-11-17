@@ -3,6 +3,8 @@ package com.petermathie.vibecheck
 import com.petermathie.vibecheck.data.local.ExerciseVariationEntity
 import com.petermathie.vibecheck.data.local.WorkoutExerciseEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
+import com.petermathie.vibecheck.data.local.WorkoutSetBandEntity
+import com.petermathie.vibecheck.data.local.BandEntity
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
@@ -15,6 +17,95 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WorkoutSetDraftLogicTest {
+    @Test
+    fun entrySelectionIncludesUntickedSavedAndPartialSetsAndSkipsExplicitLocks() {
+        val first = row().copy(targetSets = 2)
+        val second = first.copy(id = "second", position = 1)
+        val completed = emptySet(first.id, 1)
+        val autosaved = emptySet(first.id, 2).copy(holdMillis = 5_000)
+        val partial = emptyEntryDraft(second.id, 1).copy(timeHeld = ".")
+        val saved = listOf(completed, autosaved)
+
+        assertEquals(WorkoutSetSelection(first.id, 2, autosaved.id),
+            firstUntickedWorkoutSet(listOf(first, second), saved, listOf(partial), setOf(completed.id)))
+        assertEquals(WorkoutSetSelection(second.id, 1, partial.setId),
+            firstUntickedWorkoutSet(listOf(first, second), saved, listOf(partial), saved.map { it.id }.toSet()))
+        assertEquals(".", partial.timeHeld)
+        assertEquals(5_000L, autosaved.holdMillis)
+    }
+
+    @Test
+    fun entrySelectionKeepsEmptyTargetUntilItsDraftExistsAndDoesNotInventExtraSets() {
+        val first = row().copy(targetSets = 1)
+        val second = first.copy(id = "second", position = 1)
+        val completed = emptySet(first.id, 1)
+        val target = firstUntickedWorkoutSet(listOf(first, second), listOf(completed), emptyList(), setOf(completed.id))
+        assertEquals(WorkoutSetSelection(second.id, 1, null), target)
+        val draft = emptyEntryDraft(second.id, 1)
+        assertEquals(WorkoutSetSelection(second.id, 1, draft.setId), target?.reconcile(second.id, listOf(draft)))
+        assertNull(firstUntickedWorkoutSet(listOf(first), listOf(completed), emptyList(), setOf(completed.id)))
+        assertNull(firstUntickedWorkoutSet(emptyList(), emptyList(), emptyList(), emptySet()))
+    }
+
+    @Test
+    fun selectionSurvivesIdentityHydrationAndPreservesExplicitActivationAndDeletionShifts() {
+        val generated = emptyEntryDraft("row", 2)
+        val restored = generated.copy(setId = "saved-id")
+        val selected = WorkoutSetSelection("row", 2, generated.setId)
+        assertEquals(WorkoutSetSelection("row", 2, restored.setId), selected.reconcile("row", listOf(restored)))
+
+        val manuallySelected = WorkoutSetSelection("other", 3, "manual-id")
+        assertEquals(manuallySelected, manuallySelected.reconcile("row", listOf(restored)))
+        val shifted = emptyEntryDraft("other", 2).copy(setId = "manual-id")
+        assertEquals(WorkoutSetSelection("other", 2, "manual-id"),
+            manuallySelected.reconcile("other", listOf(shifted)))
+    }
+
+    @Test
+    fun rpeEditingRejectsOutOfRangeInputButAllowsDecimalsAndExistingInvalidValueCorrection() {
+        listOf("", ".", ",", "0", "7.5", "9,5", "10", "10.0", "10.", "10,").forEach {
+            assertTrue("Accept $it", acceptsRpeEdit("8", it))
+        }
+        listOf("11", "99", "10.1", "11.", "11,", "-1", "bad", "NaN", "1e1").forEach {
+            assertFalse("Reject $it", acceptsRpeEdit("8", it))
+        }
+        assertTrue(acceptsRpeEdit("366", "36"))
+        assertTrue(acceptsRpeEdit("36", "3"))
+        assertTrue(acceptsRpeEdit("366", "8"))
+        assertFalse(acceptsRpeEdit("366", "3666"))
+    }
+
+    @Test
+    fun automaticTimingFieldsOfferOnlyOneNextInputWithoutRewritingRawBuffers() {
+        val emptyBuffer = List(8) { "" }
+        assertEquals(listOf(""), visibleTimingInputs(emptyBuffer, false))
+        assertEquals(List(8) { "" }, emptyBuffer)
+        assertEquals(listOf("0", ""), visibleTimingInputs(listOf("0"), false))
+        listOf(".", "1.", "bad", "1000000001").forEach {
+            assertEquals(listOf(it), visibleTimingInputs(listOf(it), false))
+        }
+        assertEquals(listOf("4", "", "6", ""), visibleTimingInputs(listOf("4", "", "6", "", ""), false))
+        assertEquals(listOf("4", ""), visibleTimingInputs(listOf("4", "", ""), false))
+        assertEquals(listOf("4", "6"), visibleTimingInputs(listOf("4", "6", ""), true))
+        val eight = List(8) { (it + 1).toString() }
+        assertEquals(eight, visibleTimingInputs(eight, false))
+    }
+
+    @Test
+    fun offeredBlankTimingFieldsDoNotBecomeRecordedAttemptsOrEraseRetainedTotal() {
+        val draft = emptyEntryDraft("row", 1).copy(
+            tutEntries = encodeTimingInputs(listOf("0", "", "4", "", "")),
+            timeUnderTension = "30",
+        )
+        val logic = WorkoutSetDraftLogic(config(MeasurementMetric.SKILL_HOLD))
+        visibleTimingInputs(attemptsFor(draft), false)
+        val set = requireNotNull(logic.parsedSet(draft))
+        assertEquals(listOf(0L, 4_000L), timingMillis(set.tutEntriesMillis))
+        assertEquals(4_000L, set.holdMillis)
+        assertEquals(30_000L, set.timeUnderTensionMillis)
+        assertEquals(listOf("0", "", "4", "", ""), attemptsFor(draft))
+    }
+
     private fun config(metric: MeasurementMetric) = ExerciseInputConfig()
         .withResistance(ResistanceMetric.BODYWEIGHT)
         .withMeasurement(metric)
@@ -31,6 +122,56 @@ class WorkoutSetDraftLogicTest {
         "row", "workout", "core:handstand", "core:handstand", 0, "", 120, null,
         trackingType = "SKILL_HOLD", inputConfig = config,
     )
+
+    @Test
+    fun previousSummaryFormatsResistanceAndRepsInTheirDisplayedUnits() {
+        val config = config(MeasurementMetric.REPETITIONS).withResistance(ResistanceMetric.KILOGRAMS)
+            .copy(weightUnit = "lb")
+        val set = emptySet("previous", 1).copy(weightKg = 25 / 2.2046226218, reps = 7.0)
+        assertEquals("Prev: 25lb, 7",
+            previousSetSummary(set, config, "kg", emptyList(), emptyList()))
+    }
+
+    @Test
+    fun previousSummaryUsesKnownBandAbbreviationsAndDoesNotInventMissingColours() {
+        val config = config(MeasurementMetric.REPETITIONS).withResistance(ResistanceMetric.BANDS)
+        val set = emptySet("previous", 1).copy(reps = 4.0)
+        val snapshots = listOf(
+            WorkoutSetBandEntity(set.id, "band-yellow", 0, "Recorded yellow"),
+            WorkoutSetBandEntity(set.id, "custom", 1, "Recorded custom"),
+            WorkoutSetBandEntity(set.id, "missing", 2, "Archived band"),
+        )
+        val bands = listOf(BandEntity("custom", "Current custom", 1.0, 0xFF5085D6L))
+        assertEquals("Prev: Yw+#5085D6+Archived band, 4",
+            previousSetSummary(set, config, "kg", snapshots, bands))
+    }
+
+    @Test
+    fun previousAddedWeightUsesTheSamePreferredUnitAsItsCurrentInput() {
+        val config = config(MeasurementMetric.REPETITIONS).withResistance(ResistanceMetric.KILOGRAMS)
+            .copy(addedWeight = true, weightUnit = "kg")
+        val set = emptySet("previous", 1).copy(addedWeightKg = 25 / 2.2046226218, reps = 7.0)
+        assertEquals("Prev: 25lb, 7",
+            previousSetSummary(set, config, "lb", emptyList(), emptyList()))
+    }
+
+    @Test
+    fun previousSummaryKeepsAttemptSumIndependentAndDoesNotFabricateAbsentTimes() {
+        val config = config(MeasurementMetric.SKILL_HOLD)
+        val set = emptySet("previous", 1).copy(
+            tutEntriesMillis = "[1000,2000]", holdMillis = 999_000, timeUnderTensionMillis = 9_000,
+        )
+        assertEquals("Prev: 3s / 9s", previousSetSummary(set, config, "kg", emptyList(), emptyList()))
+        assertEquals("Prev: 3s", previousSetSummary(set.copy(timeUnderTensionMillis = null), config, "kg", emptyList(), emptyList()))
+        assertNull(previousSetSummary(emptySet("previous", 1).copy(rpe = 7.5), config, "kg", emptyList(), emptyList()))
+    }
+
+    @Test
+    fun previousSummaryRetainsRecordedRomUnitsButOmitsRpe() {
+        val set = emptySet("previous", 1).copy(romValue = 12.0, romUnit = "cm", rpe = 7.5)
+        assertEquals("Prev: ROM: 12cm",
+            previousSetSummary(set, config(MeasurementMetric.RANGE_OF_MOTION), "kg", emptyList(), emptyList()))
+    }
 
     @Test
     fun configurationUsesOverrideThenRecordedThenCachedThenCatalogueThenRow() {

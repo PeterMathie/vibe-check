@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -216,7 +217,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                 },
             ) { padding ->
             BackHandler(destination in moreDestinations) { destination = Destination.MORE }
-            Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 if(error != null) TextButton(onClick = { editor.error.value = null }) { Text(error.orEmpty(),color=MaterialTheme.colorScheme.error) }
                 AnimatedContent(
                     targetState = destination,
@@ -241,7 +242,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         completionEvent,
                         viewModel::consumeCompletionEvent,
                     )
-                    Destination.PROGRAMMES -> ProgrammeEditor(editor, state.mode, viewModel::setMode) { dayId, replace ->
+                    Destination.PROGRAMMES -> ProgrammeEditor(editor, state.mode) { dayId, replace ->
                         viewModel.startWorkout(dayId, replace) {
                             haptics.perform(VibeHapticEvent.PLAY)
                             destination = Destination.ACTIVE_WORKOUT

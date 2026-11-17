@@ -67,7 +67,6 @@ class NavigationUiTest {
                                 Destination.PROGRAMMES -> ProgrammeEditor(
                                     viewModel,
                                     com.petermathie.vibecheck.domain.model.TrainingMode.STRENGTH,
-                                    {},
                                     { _, _ -> },
                                 )
                                 Destination.HABITS -> TrackerScreen(viewModel)
@@ -95,7 +94,8 @@ class NavigationUiTest {
         compose.onNodeWithText("Workout").assertDoesNotExist()
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("Plans").performClick()
-        compose.onNodeWithContentDescription("Create new programme").assertIsDisplayed()
+        compose.onNodeWithText("New programme").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("Habits").performClick()
         compose.onNodeWithContentDescription("Create new habit").assertIsDisplayed()
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()

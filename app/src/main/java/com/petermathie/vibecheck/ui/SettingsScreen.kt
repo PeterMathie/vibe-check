@@ -63,6 +63,7 @@ fun SettingsScreen(
     var confirmRemoveDemo by remember { mutableStateOf(false) }
     var lb by remember { mutableStateOf(prefs.getBoolean("lb",false)) };var female by remember { mutableStateOf(prefs.getBoolean("female",false)) }
     var auto by remember { mutableStateOf(prefs.getBoolean("autoRest",false)) };var haptic by remember { mutableStateOf(prefs.getBoolean("haptic",true)) };var reduced by remember { mutableStateOf(prefs.getBoolean("reducedMotion",false)) }
+    var scrollToNext by remember { mutableStateOf(prefs.getBoolean(SCROLL_TO_NEXT_EMPTY_SET, false)) }
     var notificationsEnabled by remember { mutableStateOf(timerNotificationsEnabled(context)) }
     var preciseTimersEnabled by remember { mutableStateOf(arePreciseTimersEnabled(context)) }
     val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> if(uri!=null)scope.launch { try { val text=BackupPreferences.attach(vm.exportJson(),prefs);withContext(Dispatchers.IO){requireNotNull(context.contentResolver.openOutputStream(uri)){"Cannot open backup destination"}.bufferedWriter().use{it.write(text)}};last=System.currentTimeMillis();prefs.edit().putLong("backup",last).apply();message="Backup saved" }catch(e:Exception){message=e.message.orEmpty()} } }
@@ -87,6 +88,10 @@ fun SettingsScreen(
             SettingToggle("Female anatomy",female){female=it;prefs.edit().putBoolean("female",it).apply()}
             SettingToggle("Start rest automatically",auto){auto=it;prefs.edit().putBoolean("autoRest",it).apply()}
             SettingToggle("Haptics",haptic){haptic=it;prefs.edit().putBoolean("haptic",it).apply()}
+            SettingToggle("Scroll to next empty set", scrollToNext) {
+                scrollToNext = it
+                prefs.edit().putBoolean(SCROLL_TO_NEXT_EMPTY_SET, it).apply()
+            }
             SettingToggle(
                 "Reduced motion",
                 reduced,

@@ -43,8 +43,7 @@ import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 @Composable
 fun ProgrammeEditor(
     vm: EditorViewModel,
-    mode: TrainingMode,
-    onModeChange: (TrainingMode) -> Unit,
+    defaultMode: TrainingMode,
     onStart: (String, Boolean) -> Unit,
 ) {
     val programmes by vm.programmes.collectAsStateWithLifecycle()
@@ -52,7 +51,7 @@ fun ProgrammeEditor(
     val entries by vm.entries.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
-    var expandedProgrammeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedProgrammeIds by rememberSaveable { mutableStateOf(listOf<String>()) }
     var rename by remember { mutableStateOf<ProgrammeEntity?>(null) }
     var addExerciseDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var addExerciseActivityTag by rememberSaveable { mutableStateOf<String?>(null) }
@@ -60,7 +59,7 @@ fun ProgrammeEditor(
     var pendingAddTypeDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var editPrescription by remember { mutableStateOf<ProgrammeExerciseEntity?>(null) }
     var pendingStartDayId by rememberSaveable { mutableStateOf<String?>(null) }
-    val programmeRows = programmes.filter { it.mode == mode.name }.sortedBy { it.position }
+    val programmeRows = programmes.sortedBy { it.position }
     val selectedProgramme = programmes.find { it.id == selected }
     var generatedEmptyDayId by rememberSaveable(selectedProgramme?.id) { mutableStateOf<String?>(null) }
     var programmeName by rememberSaveable(selectedProgramme?.id, selectedProgramme?.name) {
@@ -110,29 +109,6 @@ fun ProgrammeEditor(
             else -> pendingAddDayChoice = true
         }
     }
-    val programmeModalOpen = rename != null ||
-        addExerciseDayId != null ||
-        pendingAddDayChoice ||
-        pendingAddTypeDayId != null ||
-        editPrescription != null ||
-        pendingStartDayId != null
-    if (selected == null) {
-        RegisterAppFabAction(
-            owner = Destination.PROGRAMMES,
-            destination = AppFabDestination.NewProgramme,
-            visible = !programmeModalOpen,
-        ) {
-            rename = ProgrammeEntity(newId(), "", mode.name, false)
-        }
-    } else {
-        RegisterAppFabAction(
-            owner = Destination.PROGRAMMES,
-            destination = AppFabDestination.AddProgrammeItem,
-            enabled = availableAddTypes.isNotEmpty(),
-            visible = !programmeModalOpen && availableAddTypes.isNotEmpty(),
-            onClick = ::requestAddProgrammeItem,
-        )
-    }
     BackHandler(selected != null) { selected = null }
     ScreenList {
         item {
@@ -151,15 +127,14 @@ fun ProgrammeEditor(
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.headlineSmall,
                 )
-                if (selected == null) ModeSelector(mode, onModeChange, Modifier.weight(1.45f))
             }
         }
         if (selected == null) {
             if (programmeRows.isEmpty()) {
-                item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize strength or stretch sessions.") }
+                item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize your sessions.") }
             }
             itemsIndexed(programmeOrder.ordered(programmeRows) { it.id }, key = { _, row -> row.id }) { index, p ->
-                val expanded = expandedProgrammeId == p.id
+                val expanded = p.id in expandedProgrammeIds
                 val previewDays = days.filter { it.programmeId == p.id }.sortedBy { it.position }
                 ReorderItem(
                     state = programmeOrder,
@@ -176,7 +151,11 @@ fun ProgrammeEditor(
                                 Modifier
                                     .weight(1f)
                                     .clickable {
-                                        expandedProgrammeId = if (expanded) null else p.id
+                                        expandedProgrammeIds = if (expanded) {
+                                            expandedProgrammeIds - p.id
+                                        } else {
+                                            expandedProgrammeIds + p.id
+                                        }
                                     }
                                     .semantics {
                                         stateDescription = if (expanded) "Exercises shown" else "Exercises hidden"
@@ -210,6 +189,9 @@ fun ProgrammeEditor(
                                         .semantics { contentDescription = "Read-only exercises for ${p.name}" },
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
+                                    if (previewDays.isEmpty()) {
+                                        Text("No exercises yet", style = MaterialTheme.typography.bodyMedium)
+                                    }
                                     previewDays.forEach { day ->
                                         if (previewDays.size > 1) {
                                             Text(day.name, style = MaterialTheme.typography.titleMedium)
@@ -238,6 +220,14 @@ fun ProgrammeEditor(
                         }
                     }
                 }
+            }
+            item(key = "add-programme") {
+                VibeActionButton(
+                    "New programme",
+                    { rename = ProgrammeEntity(newId(), "", defaultMode.name, false) },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = Icons.Outlined.Add,
+                )
             }
         } else {
             item {
@@ -336,6 +326,15 @@ fun ProgrammeEditor(
                 }
             }
             }
+                item(key = "add-programme-exercise") {
+                    VibeActionButton(
+                        "Add exercise",
+                        { requestAddProgrammeItem() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = selectedProgramme != null && availableAddTypes.isNotEmpty(),
+                        icon = Icons.Outlined.Add,
+                    )
+                }
                 item {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -364,7 +363,7 @@ fun ProgrammeEditor(
             val day = ProgrammeDayEntity(
                 id = newId(),
                 programmeId = programme.id,
-                name = if (mode == TrainingMode.STRENGTH) "Workout" else "Stretching",
+                name = if (programme.mode == TrainingMode.STRENGTH.name) "Workout" else "Stretching",
                 position = 0,
             )
             vm.createProgramme(programme, day) {

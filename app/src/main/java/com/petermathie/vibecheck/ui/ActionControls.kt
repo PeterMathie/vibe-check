@@ -134,7 +134,13 @@ class ReorderState internal constructor(
     private val itemBounds = mutableMapOf<Any, ItemBounds>()
     private var geometryRevision by mutableIntStateOf(0)
 
-    private data class ItemBounds(val left: Float, val top: Float, val right: Float, val bottom: Float) {
+    private data class ItemBounds(
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float,
+        val index: Int?,
+    ) {
         val height get() = bottom - top
         val center get() = (top + bottom) / 2f
     }
@@ -294,14 +300,14 @@ class ReorderState internal constructor(
 
     fun isDragging(key: Any): Boolean = draggingKey == key
 
-    fun registerItemBounds(key: Any, left: Float, top: Float, right: Float, bottom: Float): Float {
-        val updated = ItemBounds(left, top, right, bottom)
-        val previousTop = itemBounds[key]?.top
+    fun registerItemBounds(key: Any, left: Float, top: Float, right: Float, bottom: Float, index: Int? = null): Float {
+        val updated = ItemBounds(left, top, right, bottom, index)
+        val previous = itemBounds[key]
         if (itemBounds[key] != updated) {
             itemBounds[key] = updated
             geometryRevision++
         }
-        return previousTop?.minus(top) ?: 0f
+        return if (index != null && previous?.index != null && previous.index != index) previous.top - top else 0f
     }
 
     fun registerItemBounds(key: Any, top: Float, bottom: Float): Float =
@@ -614,10 +620,11 @@ fun Modifier.reorderItemFeedback(
     val palette = LocalVibePalette.current
     val hasOverlay = LocalReorderOverlayRegistry.current != null
     val placementOffset = remember(itemKey) { Animatable(0f) }
-    var placementRequest by remember(itemKey) { mutableFloatStateOf(0f) }
+    var placementRequest by remember(itemKey) { mutableStateOf<Pair<Int, Float>?>(null) }
     LaunchedEffect(placementRequest, reducedMotion) {
-        if (placementRequest != 0f && !state.isDragging(itemKey) && !reducedMotion) {
-            placementOffset.snapTo(placementRequest)
+        val displacement = placementRequest?.second ?: 0f
+        if (displacement != 0f && !state.isDragging(itemKey) && !reducedMotion) {
+            placementOffset.snapTo(displacement)
             placementOffset.animateTo(0f, tween(180, easing = FastOutSlowInEasing))
         } else {
             placementOffset.snapTo(0f)
@@ -632,8 +639,8 @@ fun Modifier.reorderItemFeedback(
     return this
         .onGloballyPositioned {
             val bounds = it.boundsInRoot()
-            val displacement = state.registerItemBounds(itemKey, bounds.left, bounds.top, bounds.right, bounds.bottom)
-            if (displacement != 0f && !state.isDragging(itemKey)) placementRequest = displacement
+            val displacement = state.registerItemBounds(itemKey, bounds.left, bounds.top, bounds.right, bounds.bottom, index)
+            if (displacement != 0f && !state.isDragging(itemKey)) placementRequest = index to displacement
         }
         .zIndex(if (dragging) 1f else 0f)
         .graphicsLayer {

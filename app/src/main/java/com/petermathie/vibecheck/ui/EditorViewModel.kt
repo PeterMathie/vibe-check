@@ -20,6 +20,15 @@ import java.io.File
 
 fun newId(): String = UUID.randomUUID().toString()
 
+internal data class WorkoutLoggingData(
+    val exercises: List<WorkoutExerciseEntity>,
+    val sets: List<WorkoutSetEntity>,
+    val drafts: List<WorkoutEntryDraftEntity>,
+    val variations: List<ExerciseVariationEntity>,
+    val bands: List<BandEntity>,
+    val definitions: List<ExerciseEntity> = emptyList(),
+)
+
 @HiltViewModel
 class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewModel() {
     suspend fun exportJson() = com.petermathie.vibecheck.data.DataTransfer.export(db)
@@ -44,6 +53,13 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val bands = dao.bands().live()
     val setBands = dao.setBands().live()
     val entryDrafts = dao.observeEntryDrafts().live()
+    internal val workoutLoggingData: StateFlow<WorkoutLoggingData?> = combine(
+        dao.workoutExercises(), dao.sets(), dao.observeEntryDrafts(), dao.variations(), dao.bands(),
+    ) { exercises, sets, drafts, variations, bands ->
+        WorkoutLoggingData(exercises, sets, drafts, variations, bands)
+    }.combine(dao.exercises()) { data, definitions ->
+        data.copy(definitions = definitions)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val trackers = dao.trackers().live()
     val fields = dao.fields().live()
     val values = dao.values().live()
@@ -90,6 +106,14 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             db.withTransaction { rows.forEachIndexed { i,e -> dao.entry(e.copy(position=i)) } }
         }
     }
+    fun moveWorkoutExercise(id: String, delta: Int, onFailure: () -> Unit = {}) = write(onFailure = onFailure) {
+        db.withTransaction {
+            val selected = requireNotNull(dao.workoutExerciseById(id)) { "Workout exercise no longer exists" }
+            moveItem(dao.workoutExercisesForWorkout(selected.workoutId), id, delta) { it.id }?.let { rows ->
+                rows.forEachIndexed { index, row -> dao.updateWorkoutExercisePosition(row.id, index) }
+            }
+        }
+    }
     fun save(row: ProgrammeDayEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.day(row) }
     fun save(row: ProgrammeExerciseEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.entry(row) }
     fun save(row: WorkoutEntity) = write { dao.workout(row) }
@@ -106,12 +130,16 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         db.withTransaction {
             val definition=dao.exerciseById(row.actualExerciseId)
             val changed=row.exerciseName.isBlank()
+            val current = dao.workoutExerciseById(row.id)
             dao.workoutExercise(
-                if(changed) row.copy(
+                (if(changed) row.copy(
                     exerciseName=definition?.canonicalName.orEmpty(),
                     trackingType=definition?.trackingType.orEmpty(),
                     inputConfig=definition?.inputConfig.orEmpty(),
-                ) else row,
+                ) else row).copy(
+                    position = current?.position ?: row.position,
+                    targetSets = if (current == null) row.targetSets else current.targetSets,
+                ),
             )
             if(changed) {
                 dao.clearWorkoutMuscles(row.id)

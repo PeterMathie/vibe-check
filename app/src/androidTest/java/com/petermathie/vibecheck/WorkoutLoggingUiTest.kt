@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -50,6 +51,37 @@ class WorkoutLoggingUiTest {
     private val compose get() = lifecycle.compose
 
     @Test
+    fun rpeRejectsValuesAboveTenAndExplainsRepsInReserve() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("RPE for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
+        }
+        val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").performScrollTo()
+        rpe.performTextInput("9")
+        rpe.performTextInput("9")
+        rpe.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("9")))
+        rpe.performTextReplacement("10")
+        rpe.performTextInput("1")
+        rpe.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("10")))
+        compose.onNodeWithText("Value is too large").assertDoesNotExist()
+        rpe.performTextReplacement("8.5")
+        rpe.assertTextContains("8.5")
+        rpe.performTextClearance()
+        compose.onNodeWithContentDescription("About RPE for Handstand set 1").performScrollTo().performTouchInput { click() }
+        compose.onNodeWithText("RIR").assertIsDisplayed()
+        compose.onNodeWithText("~2").assertIsDisplayed()
+        compose.onNodeWithText("0-4").assertIsDisplayed()
+        compose.onNodeWithText("Many").assertIsDisplayed()
+        compose.onNodeWithText("Got it").performClick()
+        compose.onNodeWithText("RIR").assertDoesNotExist()
+        rpe.performScrollTo().assertExists()
+    }
+
+    @Test
     fun workoutLoggerHidesSetConfigurationAndPersistsExerciseNotes() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
@@ -77,11 +109,12 @@ class WorkoutLoggingUiTest {
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Bodyweight:", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add exercise to workout").performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithText("Choose exercise").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Add exercise to workout").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add exercise to workout").assertIsNotEnabled()
         compose.onNodeWithText("Close").performClick()
-        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add exercise to workout").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()
@@ -119,7 +152,7 @@ class WorkoutLoggingUiTest {
     }
 
     @Test
-    fun handstandCanTrackFreestandingAndTotalTensionTime() {
+    fun handstandTimingRatioRetainsEditableDurationWithoutStopwatch() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         runBlocking {
@@ -139,6 +172,14 @@ class WorkoutLoggingUiTest {
             TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context)
                 .startWorkout("demo-day-push")
         }
+        runBlocking {
+            val row = database.editorDao().workoutExercises().first().first {
+                it.workoutId == workoutId && it.actualExerciseId == "core:handstand"
+            }
+            database.editorDao().set(emptySet(row.id, 1).copy(
+                variationId = "handstand-wall", timeUnderTensionMillis = 30_000L,
+            ))
+        }
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
 
@@ -147,29 +188,17 @@ class WorkoutLoggingUiTest {
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         assertHandstandQuantitativeFieldsRemainOrdered()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("12")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
-        compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").performClick()
-        compose.onNodeWithText("Total Time stopwatch").assertExists()
-        compose.onNodeWithText("Reset").performClick()
-        compose.onNodeWithText("Start").performClick()
-        compose.waitUntil("Stopwatch did not reach 100 ms", 5_000) {
-            compose.onAllNodes(stopwatchElapsedAtLeast(100)).fetchSemanticsNodes().isNotEmpty()
-        }
-        compose.onNodeWithText("Stop").performClick()
-        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("30")
+        compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithText("Total Time stopwatch").assertDoesNotExist()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("12")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total s")
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("12 s", substring = true)
         compose.onNodeWithText("Freestanding sec").assertDoesNotExist()
         compose.onNodeWithText("Total wall sec").assertDoesNotExist()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("99")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextClearance()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
-        val (_, tensionBounds, _) = awaitHandstandQuantitativeFieldBounds(requireSameRow = false)
-        val stopwatchBounds = compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "Stopwatch should occupy the right side of Total Time: Total=$tensionBounds stopwatch=$stopwatchBounds",
-            stopwatchBounds.left >= tensionBounds.center.x && stopwatchBounds.right <= tensionBounds.right,
-        )
+        awaitHandstandQuantitativeFieldBounds(requireSameRow = false)
 
         val handstandId = runBlocking {
             database.editorDao().workoutExercises().first()
@@ -180,8 +209,7 @@ class WorkoutLoggingUiTest {
                 database.editorDao().sets().first().any {
                     it.workoutExerciseId == handstandId &&
                         it.holdMillis == 12_000L &&
-                        it.timeUnderTensionMillis != null &&
-                        it.timeUnderTensionMillis!! >= 100L &&
+                        it.timeUnderTensionMillis == 30_000L &&
                         it.rpe == 8.0
                 }
             }
@@ -211,13 +239,14 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertExists()
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("15")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertExists()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("15")
 
         compose.waitUntil(15_000) {
             runBlocking {
                 database.editorDao().sets().first().singleOrNull {
                     it.variationId == "handstand-free" &&
-                        it.timeUnderTensionMillis == 15_000L &&
+                        it.holdMillis == 15_000L &&
                         it.variationNameSnapshot == "Freestanding handstand" &&
                         it.variationInputConfigSnapshot.contains("timeHeld=false")
                 } != null
@@ -296,10 +325,7 @@ class WorkoutLoggingUiTest {
             .performScrollTo()
             .assertIsDisplayed()
             .assertTextContains("s")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .assertTextContains("Total s")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertExists()
         compose.onNodeWithContentDescription("RPE for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
@@ -333,12 +359,11 @@ class WorkoutLoggingUiTest {
     }
 
     private fun assertOrderedAndNonOverlapping(bounds: List<Rect>) {
-        val (heldBounds, tensionBounds, rpeBounds) = bounds
+        val (heldBounds, rpeBounds) = bounds
         assertTrue(
-            "TUT and Total stay in their measurement column; RPE stays separate: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
+            "Timing and RPE remain ordered without overlap: TUT=$heldBounds RPE=$rpeBounds",
             bounds.all { it.width > 0f && it.height > 0f } &&
-                heldBounds.bottom <= tensionBounds.top &&
-                listOf(heldBounds, tensionBounds).all {
+                listOf(heldBounds).all {
                     it.right <= rpeBounds.left || rpeBounds.right <= it.left ||
                         it.bottom <= rpeBounds.top || rpeBounds.bottom <= it.top
                 },
@@ -348,7 +373,6 @@ class WorkoutLoggingUiTest {
     private fun handstandQuantitativeFieldBounds(): List<Rect>? {
         return listOf(
             "Time Under Tension for Handstand set 1",
-            "Total Time for Handstand set 1",
             "RPE for Handstand set 1",
         ).map { description ->
             compose.onAllNodesWithContentDescription(description)
@@ -358,22 +382,6 @@ class WorkoutLoggingUiTest {
                 ?: return null
         }
     }
-
-    private fun stopwatchElapsedAtLeast(minimumMillis: Long) =
-        SemanticsMatcher("stopwatch elapsed at least $minimumMillis ms") { node ->
-            if (!node.config.contains(SemanticsProperties.Text)) {
-                false
-            } else {
-                node.config[SemanticsProperties.Text]
-                    .asSequence()
-                    .mapNotNull { text ->
-                        val match = STOPWATCH_TIME.matchEntire(text.text) ?: return@mapNotNull null
-                        match.groupValues[1].toLong() * 60_000L +
-                            (match.groupValues[2].toDouble() * 1_000L).toLong()
-                    }
-                    .any { it >= minimumMillis }
-            }
-        }
 
     @Test
     fun programmedRowsUseSeparateFieldsAndPlusAddsAnExtraSet() {
@@ -480,7 +488,4 @@ class WorkoutLoggingUiTest {
         repository.startWorkout(repository.observeProgrammeDays().first().first { it.id == "demo-day-push" }.id)
     }
 
-    private companion object {
-        private val STOPWATCH_TIME = Regex("""(\d{2}):(\d{2}\.\d{2})""")
-    }
 }

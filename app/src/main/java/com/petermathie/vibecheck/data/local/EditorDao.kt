@@ -37,6 +37,10 @@ interface EditorDao {
     @Query("SELECT * FROM workouts ORDER BY startedAt DESC") fun workouts(): Flow<List<WorkoutEntity>>
     @Query("SELECT * FROM workout_exercises ORDER BY position") fun workoutExercises(): Flow<List<WorkoutExerciseEntity>>
     @Query("SELECT * FROM workout_exercises WHERE id=:id") suspend fun workoutExerciseById(id: String): WorkoutExerciseEntity?
+    @Query("SELECT * FROM workout_exercises WHERE workoutId=:workoutId ORDER BY position")
+    suspend fun workoutExercisesForWorkout(workoutId: String): List<WorkoutExerciseEntity>
+    @Query("UPDATE workout_exercises SET position=:position WHERE id=:id")
+    suspend fun updateWorkoutExercisePosition(id: String, position: Int)
     @Query("SELECT * FROM workout_sets ORDER BY ordinal") fun sets(): Flow<List<WorkoutSetEntity>>
     @Query("SELECT * FROM workout_sets WHERE id=:id") suspend fun setById(id: String): WorkoutSetEntity?
     @Query("SELECT * FROM workout_set_bands ORDER BY ordinal") fun setBands(): Flow<List<WorkoutSetBandEntity>>

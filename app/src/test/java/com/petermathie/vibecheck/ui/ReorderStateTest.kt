@@ -6,6 +6,28 @@ import org.junit.Test
 
 class ReorderStateTest {
     @Test
+    fun viewportMovementDoesNotAnimatePlacementButStillUpdatesDragGeometry() {
+        val state = ReorderState(listOf("first", "second")) { _, _, _ -> }
+        assertEquals(0f, state.registerItemBounds("first", 0f, 100f, 100f, 180f, 0), 0f)
+        assertEquals(0f, state.registerItemBounds("first", 0f, 60f, 100f, 140f, 0), 0f)
+        assertEquals(0f, state.registerItemBounds("first", 0f, 120f, 100f, 200f, 0), 0f)
+
+        state.begin("first", 144f)
+        state.dragBy(10f, 48f)
+        assertEquals(10f, state.dragOffset("first"), 0f)
+        assertEquals(120f, state.dragStartBounds()!!.top, 0f)
+    }
+
+    @Test
+    fun indexChangesAnimateNeighbourPlacementButNotTheFollowingScroll() {
+        val state = ReorderState(listOf("first", "second", "third")) { _, _, _ -> }
+        state.registerItemBounds("second", 0f, 180f, 100f, 260f, 1)
+        assertEquals(80f, state.registerItemBounds("second", 0f, 100f, 100f, 180f, 0), 0f)
+        assertEquals(0f, state.registerItemBounds("second", 0f, 60f, 100f, 140f, 0), 0f)
+        assertEquals(-160f, state.registerItemBounds("second", 0f, 220f, 100f, 300f, 2), 0f)
+    }
+
+    @Test
     fun reverseMovementNearBoundaryDoesNotOscillateOrder() {
         var persistedMove: Triple<Any, Int, Int>? = null
         val state = ReorderState(listOf("first", "second")) { key, from, to ->
