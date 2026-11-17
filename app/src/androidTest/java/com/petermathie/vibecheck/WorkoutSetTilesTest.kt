@@ -453,6 +453,11 @@ class WorkoutSetTilesTest {
         show(workout)
         val row = runBlocking { db.editorDao().workoutExercises().first().first { it.workoutId == workout && it.actualExerciseId == "core:handstand" } }
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("5")
+        compose.waitUntil("Handstand set must be autosaved before testing its deletion", 15_000) {
+            runBlocking { db.editorDao().sets().first().any {
+                it.workoutExerciseId == row.id && it.ordinal == 1 && it.holdMillis == 5_000L
+            } }
+        }
         val savedId = runBlocking { db.editorDao().sets().first().single { it.workoutExerciseId == row.id }.id }
         compose.onNodeWithContentDescription("Set 3 for Handstand").performScrollTo()
         val empty = compose.onNodeWithContentDescription("Swipe actions for set 3 for Handstand")
