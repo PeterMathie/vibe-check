@@ -44,7 +44,9 @@ import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 fun ProgrammeEditor(
     vm: EditorViewModel,
     defaultMode: TrainingMode,
-    onStart: (String, Boolean) -> Unit,
+    onResume: () -> Unit,
+    isStartingWorkout: Boolean = false,
+    onStart: (dayId: String, activeWorkoutId: String?, finishCurrent: Boolean) -> Unit,
 ) {
     val programmes by vm.programmes.collectAsStateWithLifecycle()
     val days by vm.days.collectAsStateWithLifecycle()
@@ -59,6 +61,7 @@ fun ProgrammeEditor(
     var pendingAddTypeDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var editPrescription by remember { mutableStateOf<ProgrammeExerciseEntity?>(null) }
     var pendingStartDayId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingStartWorkoutId by rememberSaveable { mutableStateOf<String?>(null) }
     val programmeRows = programmes.sortedBy { it.position }
     val selectedProgramme = programmes.find { it.id == selected }
     var generatedEmptyDayId by rememberSaveable(selectedProgramme?.id) { mutableStateOf<String?>(null) }
@@ -76,9 +79,24 @@ fun ProgrammeEditor(
     val haptics = rememberVibeHaptics()
     val activeWorkout = vm.workouts.collectAsStateWithLifecycle().value.find { it.status == "DRAFT" }
     fun requestStart(dayId: String) {
-        if (activeWorkout != null && activeWorkout.programmeDayId != dayId) pendingStartDayId = dayId
-        else onStart(dayId, false)
+        when {
+            isStartingWorkout -> Unit
+            activeWorkout == null -> onStart(dayId, null, false)
+            activeWorkout.programmeDayId == dayId -> onResume()
+            else -> {
+                pendingStartWorkoutId = activeWorkout.id
+                pendingStartDayId = dayId
+            }
+        }
     }
+    RegisterAppFabAction(
+        owner = Destination.PROGRAMMES,
+        destination = AppFabDestination.ResumeWorkout,
+        visible = activeWorkout != null && !isStartingWorkout && rename == null &&
+            addExerciseDayId == null && !pendingAddDayChoice && pendingAddTypeDayId == null &&
+            editPrescription == null && pendingStartDayId == null,
+        onClick = onResume,
+    )
     val availableAddTypes = exercises
         .filterNot { it.isArchived }
         .map { it.tag }
@@ -170,7 +188,7 @@ fun ProgrammeEditor(
                             }
                             IconButton(
                                 onClick = { previewDays.firstOrNull()?.let { requestStart(it.id) } },
-                                enabled = previewDays.isNotEmpty(),
+                                enabled = previewDays.isNotEmpty() && !isStartingWorkout,
                             ) {
                                 Icon(Icons.Outlined.PlayArrow, contentDescription = "Start ${p.name}")
                             }
@@ -265,29 +283,10 @@ fun ProgrammeEditor(
                             modifier = Modifier.fillMaxWidth(),
                             importance = ActionImportance.PRIMARY,
                             icon = Icons.Outlined.PlayArrow,
+                            enabled = !isStartingWorkout,
                         )
                         if (dayEntries.isEmpty()) {
                             Text("No exercises yet", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        pendingStartDayId?.let { dayId ->
-                            val target = days.find { it.id == dayId }
-                            AlertDialog(
-                                onDismissRequest = { pendingStartDayId = null },
-                                title = { Text("Workout in progress") },
-                                text = { Text("${activeWorkout?.name.orEmpty()} is still in progress. Resume it, or discard it and start ${target?.name.orEmpty()}.") },
-                                confirmButton = {
-                                    TextButton(onClick = {
-                                        pendingStartDayId = null
-                                        onStart(dayId, true)
-                                    }) { Text("Discard and start") }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = {
-                                        pendingStartDayId = null
-                                        activeWorkout?.programmeDayId?.let { onStart(it, false) }
-                                    }) { Text("Resume workout") }
-                                },
-                            )
                         }
                         entryOrder.ordered(dayEntries) { it.id }.forEachIndexed { index, entry ->
                             key(entry.id) {
@@ -357,6 +356,50 @@ fun ProgrammeEditor(
                 }
             }
         }
+    pendingStartDayId?.let { dayId ->
+        val target = days.find { it.id == dayId }
+        val programme = programmes.find { it.id == target?.programmeId }
+        fun switchWorkout(finishCurrent: Boolean) {
+            val workoutId = pendingStartWorkoutId
+            pendingStartDayId = null
+            pendingStartWorkoutId = null
+            if (workoutId == null) {
+                vm.error.value = "The active workout changed. Choose the workout again."
+            } else {
+                onStart(dayId, workoutId, finishCurrent)
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { pendingStartDayId = null },
+            title = { Text("Workout in progress") },
+            text = {
+                Text(
+                    "${activeWorkout?.name.orEmpty()} is still in progress. " +
+                        "Save it to History or discard it before starting ${programme?.name ?: target?.name.orEmpty()}.",
+                )
+            },
+            confirmButton = {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = { switchWorkout(true) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Save") }
+                    TextButton(
+                        onClick = { switchWorkout(false) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Discard") }
+                    TextButton(
+                        onClick = { pendingStartDayId = null },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Cancel") }
+                }
+            },
+        )
+    }
     rename?.let { p ->
         NameDialog("Programme name", p.name, { rename = null }) { name ->
             val programme = p.copy(name = name)

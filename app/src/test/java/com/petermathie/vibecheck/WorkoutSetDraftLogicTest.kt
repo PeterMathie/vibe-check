@@ -11,12 +11,34 @@ import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.encodeTimingInputs
 import com.petermathie.vibecheck.domain.workout.quantitativeInput
+import com.petermathie.vibecheck.domain.workout.VariantDraftMetadata
+import com.petermathie.vibecheck.domain.workout.resolveSetInputConfig
+import com.petermathie.vibecheck.domain.workout.restoredWorkoutVariationIds
 import com.petermathie.vibecheck.domain.workout.timingMillis
 import com.petermathie.vibecheck.ui.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class WorkoutSetDraftLogicTest {
+    @Test
+    fun restoredVariantFallbackPreservesOrdinalGapsAndPendingChoices() {
+        val first = ExerciseVariationEntity("first", "exercise", "First", 0, false, trackingType = "HOLD")
+        val second = first.copy(id = "second", name = "Second", progressionRank = 1)
+        val sets = listOf(
+            emptySet("row", 1).copy(variationId = second.id),
+            emptySet("row", 3),
+        )
+        assertEquals(
+            mapOf(1 to second.id, 3 to first.id),
+            restoredWorkoutVariationIds(sets, emptyList(), listOf(first, second)),
+        )
+        val pending = emptyEntryDraft("row", 2).copy(variationId = second.id)
+        assertEquals(
+            mapOf(1 to second.id, 2 to second.id, 3 to second.id),
+            restoredWorkoutVariationIds(sets, listOf(pending), listOf(first, second)),
+        )
+    }
+
     @Test
     fun entrySelectionIncludesUntickedSavedAndPartialSetsAndSkipsExplicitLocks() {
         val first = row().copy(targetSets = 2)

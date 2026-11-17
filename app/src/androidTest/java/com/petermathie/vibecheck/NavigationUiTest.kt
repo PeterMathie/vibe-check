@@ -67,7 +67,8 @@ class NavigationUiTest {
                                 Destination.PROGRAMMES -> ProgrammeEditor(
                                     viewModel,
                                     com.petermathie.vibecheck.domain.model.TrainingMode.STRENGTH,
-                                    { _, _ -> },
+                                    onResume = {},
+                                    onStart = { _, _, _ -> },
                                 )
                                 Destination.HABITS -> TrackerScreen(viewModel)
                                 Destination.MEASUREMENTS -> MeasurementsScreen(viewModel)

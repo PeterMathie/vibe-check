@@ -25,6 +25,11 @@ import com.petermathie.vibecheck.domain.programme.prescriptionSummary
 import com.petermathie.vibecheck.domain.model.WorkoutSetLog
 import com.petermathie.vibecheck.domain.model.WorkoutStatus
 import com.petermathie.vibecheck.domain.recency.RecencyCalculator
+import com.petermathie.vibecheck.domain.workout.hasInvalidQuantitativeInput
+import com.petermathie.vibecheck.domain.workout.configuredSetCount
+import com.petermathie.vibecheck.domain.workout.loggingMetricsError
+import com.petermathie.vibecheck.domain.workout.resolveSetInputConfig
+import com.petermathie.vibecheck.domain.workout.restoredWorkoutVariationIds
 import com.petermathie.vibecheck.data.seed.DemoProgressPhotos
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
@@ -142,6 +147,62 @@ class TrainingRepository @Inject constructor(
             database.editorDao().workoutMuscles(database.editorDao().muscleMappings(row.exerciseId).map { com.petermathie.vibecheck.data.local.WorkoutMuscleEntity(snapshot.id,it.muscleId,it.role) })
         }
         workoutId
+    }
+
+    suspend fun startProgrammeWorkout(
+        dayId: String,
+        activeWorkoutId: String?,
+        finishCurrent: Boolean,
+    ): WorkoutCompletion? = database.withTransaction {
+        val existing = workoutDao.draft()
+        check(existing?.id == activeWorkoutId) {
+            "The active workout changed. Choose the workout again."
+        }
+        if (existing != null && existing.programmeDayId == dayId) return@withTransaction null
+        val completion = if (existing != null && finishCurrent) {
+            validateWorkoutInputs(existing.id)
+            requireNotNull(finishWorkout(existing.id)) {
+                "Log at least one completed working set before finishing."
+            }
+        } else null
+        // A failed new snapshot must also roll back finishing or discarding the current workout.
+        startWorkout(dayId, replaceExisting = existing != null && !finishCurrent)
+        completion
+    }
+
+    private suspend fun validateWorkoutInputs(workoutId: String) {
+        val dao = database.editorDao()
+        val variations = dao.variations().first()
+        dao.workoutExercisesForWorkout(workoutId).forEach { row ->
+            val drafts = dao.entryDrafts(row.id)
+            require(drafts.none(::hasInvalidQuantitativeInput)) {
+                "Complete or correct the current workout's highlighted numbers before finishing."
+            }
+            val sets = workoutDao.sets(row.id)
+            val exerciseVariations = variations.filter { it.exerciseId == row.actualExerciseId }
+            val restoredVariations = restoredWorkoutVariationIds(sets, drafts, exerciseVariations)
+            val trackingType = dao.exerciseById(row.actualExerciseId)?.trackingType.orEmpty()
+            val count = maxOf(
+                row.configuredSetCount(),
+                sets.maxOfOrNull { it.ordinal } ?: 0,
+                drafts.maxOfOrNull { it.ordinal } ?: 0,
+            )
+            var previousVariationId: String? = null
+            for (ordinal in 1..count) {
+                val set = sets.find { it.ordinal == ordinal }
+                val variationId = if (ordinal in restoredVariations) restoredVariations[ordinal]
+                    else previousVariationId ?: exerciseVariations.firstOrNull()?.id
+                val config = resolveSetInputConfig(
+                    row, trackingType,
+                    exerciseVariations.find { it.id == variationId },
+                    set?.takeIf { it.variationId == variationId },
+                    cached = null, configOverride = null,
+                )
+                val error = config.loggingMetricsError()
+                require(error == null) { "Current workout: $error" }
+                previousVariationId = variationId
+            }
+        }
     }
 
     suspend fun addSet(workoutExerciseId: String, draft: SetDraft) {

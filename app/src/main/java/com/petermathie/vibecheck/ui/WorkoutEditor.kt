@@ -594,6 +594,7 @@ private fun WorkoutExerciseCard(
     val targetSets = row.configuredSetCount()
     LaunchedEffect(row.id, row.actualExerciseId) {
         val recovered = recoveredDrafts
+        val restoredVariations = restoredWorkoutVariationIds(sets, recovered, exerciseVariations)
         val savedBands = vm.bandsForExercise(row.id)
         sets.forEach { set ->
             val config = configFor(set.variationId, set.ordinal)
@@ -607,16 +608,11 @@ private fun WorkoutExerciseCard(
         }
         recovered.sortedBy { it.ordinal }.forEach { draft ->
             if (draft.setId in persistedDraftIds) editedSetIds.add(draft.setId)
-            val variationId = draft.variationId?.takeIf { it in validVariationIds }
-                ?: drafts[draft.ordinal - 1]?.variationId
-                ?: defaultVariation?.id
-            drafts[draft.ordinal] = draft.copy(detailsOpen = false, variationId = variationId)
+            drafts[draft.ordinal] = draft.copy(detailsOpen = false)
         }
         drafts.keys.sorted().forEach { ordinal ->
             val draft = drafts[ordinal] ?: return@forEach
-            val variationId = draft.variationId?.takeIf { it in validVariationIds }
-                ?: drafts[ordinal - 1]?.variationId?.takeIf { it in validVariationIds }
-                ?: defaultVariation?.id
+            val variationId = restoredVariations[ordinal]
             if (variationId != draft.variationId) {
                 drafts[ordinal] = draft.copy(variationId = variationId)
             }

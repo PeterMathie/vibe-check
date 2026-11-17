@@ -3,6 +3,7 @@ package com.petermathie.vibecheck.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.petermathie.vibecheck.data.TrainingRepository
+import com.petermathie.vibecheck.data.WorkoutCompletion
 import com.petermathie.vibecheck.data.local.CatalogueDao
 import com.petermathie.vibecheck.domain.model.ActiveWorkout
 import com.petermathie.vibecheck.domain.model.ActivityDay
@@ -21,6 +22,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
@@ -29,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 
 data class MainUiState(
     val mode: TrainingMode = TrainingMode.STRENGTH,
@@ -74,6 +77,8 @@ class MainViewModel @Inject constructor(
     private val searchQuery = MutableStateFlow("")
     private val completionEvent = OneShotEventState<WorkoutCompletionEvent>()
     val completionEvents: StateFlow<WorkoutCompletionEvent?> = completionEvent.state
+    private val startingWorkout = MutableStateFlow(false)
+    val isStartingWorkout: StateFlow<Boolean> = startingWorkout.asStateFlow()
 
     private val clock = MutableStateFlow(System.currentTimeMillis())
     init { viewModelScope.launch { while (true) { delay(30_000); clock.value=System.currentTimeMillis() } } }
@@ -150,9 +155,26 @@ class MainViewModel @Inject constructor(
     }
     fun selectHistoryDay(epochDay: Long?) { selectedHistoryDay.value = epochDay }
 
-    fun startWorkout(dayId: String, replaceExisting: Boolean = false, onStarted: () -> Unit = {}) = viewModelScope.launch {
-        repository.startWorkout(dayId, replaceExisting)
-        onStarted()
+    fun startWorkout(
+        dayId: String,
+        activeWorkoutId: String?,
+        finishCurrent: Boolean,
+        onStarted: () -> Unit,
+        onRejected: (String) -> Unit,
+    ) = viewModelScope.launch {
+        if (startingWorkout.value) return@launch
+        startingWorkout.value = true
+        try {
+            repository.startProgrammeWorkout(dayId, activeWorkoutId, finishCurrent)
+                ?.let(::recordCompletion)
+            onStarted()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            onRejected("Workout could not be started: ${failure.message.orEmpty()}")
+        } finally {
+            startingWorkout.value = false
+        }
     }
 
     fun addSet(workoutExerciseId: String, draft: SetDraft) = viewModelScope.launch {
@@ -173,17 +195,21 @@ class MainViewModel @Inject constructor(
                 if (completion == null) {
                     onRejected("Log at least one completed working set before finishing.")
                 } else {
-                    mode.value = completion.mode
-                    completionEvent.emit(WorkoutCompletionEvent(
-                        id = UUID.randomUUID().toString(),
-                        mode = completion.mode,
-                        affectedMuscleIds = completion.affectedMuscleIds.distinct().sorted(),
-                    ))
-                    clock.value = System.currentTimeMillis()
+                    recordCompletion(completion)
                     onFinished()
                 }
             }
             .onFailure { onRejected("Workout could not be finished: ${it.message.orEmpty()}") }
+    }
+
+    private fun recordCompletion(completion: WorkoutCompletion) {
+        mode.value = completion.mode
+        completionEvent.emit(WorkoutCompletionEvent(
+            id = UUID.randomUUID().toString(),
+            mode = completion.mode,
+            affectedMuscleIds = completion.affectedMuscleIds.distinct().sorted(),
+        ))
+        clock.value = System.currentTimeMillis()
     }
 
     fun consumeCompletionEvent(id: String) {
