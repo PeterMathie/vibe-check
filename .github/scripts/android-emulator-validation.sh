@@ -11,8 +11,12 @@ capture_diagnostics() {
   adb shell dumpsys window > "$output_dir/instrumentation-window.txt" || true
 }
 
+gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+
+# Exclude compilation from the runtime watchdog. In CI, 155 of 175 tests took
+# 11 minutes while still progressing; allow the full suite to finish and report.
 set +e
-timeout --signal=TERM --kill-after=30s 12m \
+timeout --signal=TERM --kill-after=30s 16m \
   gradle :app:connectedDebugAndroidTest --stacktrace
 test_status=$?
 set -e

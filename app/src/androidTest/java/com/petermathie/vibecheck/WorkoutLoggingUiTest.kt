@@ -110,7 +110,9 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Bodyweight:", substring = true).assertDoesNotExist()
-        compose.onNodeWithContentDescription("Add exercise to workout").performScrollTo().assertIsDisplayed().performClick()
+        val list = compose.onNodeWithContentDescription("Workout exercise list")
+        list.performScrollToNode(hasContentDescription("Add exercise to workout"))
+        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed().performClick()
         compose.onNodeWithText("Choose exercise").assertIsDisplayed()
         compose.onNodeWithContentDescription("Add exercise to workout").assertIsNotEnabled()
         compose.onNodeWithText("Close").performClick()
@@ -118,13 +120,14 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Show notes for Handstand").performScrollTo().performClick()
+        list.performScrollToNode(hasContentDescription("Show notes for Handstand"))
+        compose.onNodeWithContentDescription("Show notes for Handstand").performClick()
         compose.onAllNodes(hasText("Exercise notes") and hasSetTextAction())[0].performTextInput("Shoulders stable")
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().workoutExercises().first().any { it.notes == "Shoulders stable" } }
         }
 
-        compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 1 for Bench press"))
+        list.performScrollToNode(hasContentDescription("Set 1 for Bench press"))
         compose.onNodeWithContentDescription("Set details for Bench press set 1").assertDoesNotExist()
         compose.onNodeWithText("Set details").assertDoesNotExist()
         assertTrue(compose.onAllNodesWithText("kg").fetchSemanticsNodes().isNotEmpty())
@@ -270,7 +273,7 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil("Workout and Bench row were not ready", 15_000) {
             viewModel.workouts.value.any { it.id == workoutId } &&
-                viewModel.workoutExercises.value.any { it.id == bench.id } &&
+                viewModel.workoutLoggingData.value?.exercises?.any { it.id == bench.id } == true &&
                 compose.onAllNodesWithContentDescription("Workout exercise list").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithContentDescription("Workout exercise list")

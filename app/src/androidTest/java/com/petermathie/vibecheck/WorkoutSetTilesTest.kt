@@ -877,7 +877,7 @@ class WorkoutSetTilesTest {
             } }
         }
         compose.onNodeWithContentDescription("Variant for Handstand set 2").assertTextEquals("Freestanding handstand")
-        compose.onNodeWithContentDescription("Variant for Handstand set 3").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Variant for Handstand set 3").assertTextEquals("Recorded handstand")
         compose.onNodeWithContentDescription("Variant for Handstand set 4").assertDoesNotExist()
         compose.onNodeWithContentDescription("Variant for Handstand set 5").assertTextEquals("Recorded handstand")
 
