@@ -1,5 +1,6 @@
 package com.petermathie.vibecheck
 
+import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +37,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.action.ViewActions.pressKey
+import androidx.test.espresso.matcher.RootMatchers.isDialog
+import androidx.test.espresso.matcher.ViewMatchers.isRoot
 import com.petermathie.vibecheck.domain.model.ActiveWorkout
 import com.petermathie.vibecheck.domain.model.ActivityDay
 import com.petermathie.vibecheck.domain.model.AnatomySex
@@ -302,7 +307,12 @@ class EndUserControlsTest {
         val inspect = map.fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label.startsWith("Inspect CHEST") }
         compose.runOnIdle { assertTrue(inspect.action()) }
         modal.assertIsDisplayed()
-        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        onView(isRoot()).inRoot(isDialog())
+            .check { view, error ->
+                if (error != null) throw error
+                assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
+            }
+            .perform(pressKey(KeyEvent.KEYCODE_BACK))
         modal.assertDoesNotExist()
     }
 
@@ -502,7 +512,7 @@ class EndUserControlsTest {
     }
 
     @Test
-    fun muscleDetailsSheetPreservesMapGeometryAndDismissesWithClose() {
+    fun homeMuscleDialogPreservesMapGeometryAndDismissesWithClose() {
         compose.setContent {
             VibeCheckTheme {
                 HomeScreen(
@@ -519,16 +529,19 @@ class EndUserControlsTest {
             .first { it.label.startsWith("Inspect CHEST") }
 
         compose.runOnIdle { inspectChest.action() }
-        compose.onNodeWithText("Chest Freshness details").assertIsDisplayed()
+        val modal = compose.onNodeWithTag("Home muscle activity")
+        modal.assertIsDisplayed()
+        compose.onNodeWithText("Chest").assertIsDisplayed()
         val during = map.fetchSemanticsNode().boundsInRoot
         assertEquals(before.left, during.left, 0.5f)
         assertEquals(before.top, during.top, 0.5f)
         assertEquals(before.right, during.right, 0.5f)
         assertEquals(before.bottom, during.bottom, 0.5f)
 
-        compose.onNodeWithContentDescription("Close muscle details").performClick()
+        compose.onNodeWithContentDescription("Close muscle activity").performClick()
         compose.waitForIdle()
-        compose.onNodeWithText("Chest Freshness details").assertDoesNotExist()
+        modal.assertDoesNotExist()
+        compose.onNodeWithText("Chest").assertDoesNotExist()
         val after = map.fetchSemanticsNode().boundsInRoot
         assertEquals(before.left, after.left, 0.5f)
         assertEquals(before.top, after.top, 0.5f)
@@ -817,8 +830,12 @@ class EndUserControlsTest {
         assertEquals(day, state.homeRecencyDay)
         compose.runOnIdle { state = state.copy(selectedHistoryDay = day, historyDay = HistoryDayDetail(day, emptyList())) }
         compose.onNodeWithText("No logged activity").assertIsDisplayed()
-        androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()
-            .sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        onView(isRoot()).inRoot(isDialog())
+            .check { view, error ->
+                if (error != null) throw error
+                assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
+            }
+            .perform(pressKey(KeyEvent.KEYCODE_BACK))
         modal.assertDoesNotExist()
         compose.runOnIdle { state = state.copy(selectedHistoryDay = day) }
         compose.onNodeWithTag("Home day activity overlay").performTouchInput { click(Offset(5f, 5f)) }
