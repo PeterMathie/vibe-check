@@ -1,0 +1,101 @@
+name: Android startup diagnostics (one disposable boot)
+
+'on':
+  push:
+    branches: [diagnostic/home-startup-a421e438]
+
+permissions:
+  contents: read
+
+jobs:
+  startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STARTUP_OUTPUT_DIR: ${{ github.workspace }}/startup-diagnostics
+    steps:
+      - name: Checkout diagnostic commit
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify isolated diagnostic parent
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(git rev-parse HEAD^)" = 95dc606b24b538e58bed51f756b79324f5d35abe
+          mkdir -p "$STARTUP_OUTPUT_DIR"
+          git rev-parse HEAD HEAD^ HEAD^{tree} > "$STARTUP_OUTPUT_DIR/diagnostic-commit.txt"
+          git show HEAD^:.github/workflows/android-debug.yml > "$STARTUP_OUTPUT_DIR/original-app-workflow.yml"
+
+      - name: Checkout exact original runner, including its existing dependencies
+        uses: actions/checkout@v5
+        with:
+          repository: ReactiveCircus/android-emulator-runner
+          ref: a421e43855164a8197daf9d8d40fe71c6996bb0d
+          path: .ci-startup-runner
+          persist-credentials: false
+
+      - name: Archive and instrument only the original MENU boundary
+        run: python3 .github/scripts/prepare-startup-runner.py .ci-startup-runner "$STARTUP_OUTPUT_DIR"
+
+      - name: Set up original JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up original Android platform tools
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Enable original emulator hardware acceleration
+        run: |
+          sudo chown "$USER":kvm /dev/kvm
+          sudo chmod 660 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+
+      - name: One original startup and unlock, with read-only boundary probes
+        id: startup
+        uses: ./.ci-startup-runner
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          emulator-build: '16740729'
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-boot-timeout: 600
+          disable-animations: true
+          disable-linux-hw-accel: false
+          script: node -e 'console.log("Startup-only diagnostic; no application build or tests.")'
+
+      - name: Record whether original runner shutdown removed its sole serial
+        id: cleanup
+        if: always()
+        run: |
+          mkdir -p "$STARTUP_OUTPUT_DIR"
+          set +e
+          timeout --signal=KILL 2s adb -s emulator-5554 get-state > "$STARTUP_OUTPUT_DIR/cleanup.stdout" 2> "$STARTUP_OUTPUT_DIR/cleanup.stderr"
+          result=$?
+          set -e
+          printf '%s\n' "$result" > "$STARTUP_OUTPUT_DIR/cleanup.status"
+          test "$result" -eq 1
+          grep -F "device 'emulator-5554' not found" "$STARTUP_OUTPUT_DIR/cleanup.stderr"
+
+      - name: Finalize available evidence even when startup fails
+        if: always()
+        env:
+          STARTUP_RUNNER_OUTCOME: ${{ steps.startup.outcome }}
+          STARTUP_CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: node .github/scripts/startup-probe.cjs finalize
+
+      - name: Upload available startup diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-startup-a421e438
+          path: startup-diagnostics/
+          if-no-files-found: error
+          retention-days: 3
