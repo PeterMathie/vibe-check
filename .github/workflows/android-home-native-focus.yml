@@ -1,0 +1,116 @@
+name: Home native focus diagnostic (two original cases)
+
+'on':
+  push:
+    branches: [diagnostic/home-native-focus-82d37]
+
+permissions:
+  contents: read
+
+jobs:
+  focus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Guard one attempt, exact parent and unchanged application
+        run: |
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(git show -s --format=%P HEAD)" = 82d37ad34ad3efee7e4368b05ada3f4ecfc52dc2
+          git diff --exit-code 82d37ad34ad3efee7e4368b05ada3f4ecfc52dc2 HEAD -- . \
+            ':!.github/scripts/home-native-focus.py' ':!.github/workflows/android-home-native-focus.yml'
+          mkdir -p app/build/home-native-focus
+          git rev-parse HEAD HEAD^ HEAD^{tree} HEAD:app > app/build/home-native-focus/source.txt
+
+      - name: Checkout exact unmodified runner
+        uses: actions/checkout@v5
+        with:
+          repository: ReactiveCircus/android-emulator-runner
+          ref: a421e43855164a8197daf9d8d40fe71c6996bb0d
+          path: .ci-home-focus-runner
+          persist-credentials: false
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install original compile SDK and build exact APK pair outside runtime watchdog
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
+          sha256sum app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk > app/build/home-native-focus/apks.sha256
+
+      - name: Preserve original runner and acceleration
+        run: |
+          test "$(git -C .ci-home-focus-runner rev-parse HEAD)" = a421e43855164a8197daf9d8d40fe71c6996bb0d
+          test -z "$(git -C .ci-home-focus-runner status --porcelain)"
+          echo 'a63db8fe9ffb4fb3651e9a2c97f8bac5ca4ce0078a7bbe61ef2e02019082c577  .ci-home-focus-runner/lib/emulator-manager.js' | sha256sum --check
+          sudo chown "$USER":kvm /dev/kvm
+          sudo chmod 660 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+
+      - name: Original startup then one healthy preflight and two original cases
+        uses: ./.ci-home-focus-runner
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          emulator-build: '16740729'
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          emulator-boot-timeout: 600
+          disable-animations: true
+          disable-linux-hw-accel: false
+          script: python3 .github/scripts/home-native-focus.py
+
+      - name: Record identities and verify APK/source preservation even on failure
+        if: always()
+        run: |
+          mkdir -p app/build/home-native-focus
+          status=0
+          git diff --exit-code HEAD -- app > app/build/home-native-focus/tracked-app-diff.txt || status=$?
+          git -C .ci-home-focus-runner rev-parse HEAD HEAD^{tree} HEAD:node_modules > app/build/home-native-focus/runner-after.txt || status=$?
+          test -z "$(git -C .ci-home-focus-runner status --porcelain)" || status=1
+          echo 'a63db8fe9ffb4fb3651e9a2c97f8bac5ca4ce0078a7bbe61ef2e02019082c577  .ci-home-focus-runner/lib/emulator-manager.js' | sha256sum --check > app/build/home-native-focus/runner-module-check.txt || status=$?
+          sha256sum --check app/build/home-native-focus/apks.sha256 > app/build/home-native-focus/apk-check.txt 2>&1 || status=$?
+          for file in platform-tools/adb platform-tools/source.properties emulator/source.properties system-images/android-35/default/x86_64/source.properties; do
+            if test -f "$ANDROID_HOME/$file"; then
+              sha256sum "$ANDROID_HOME/$file" >> app/build/home-native-focus/sdk-sha256.txt
+              if test "$file" != platform-tools/adb; then
+                cat "$ANDROID_HOME/$file" >> app/build/home-native-focus/sdk-properties.txt
+              fi
+            else
+              echo "Missing SDK identity: $file" >> app/build/home-native-focus/sdk-properties.txt
+              status=1
+            fi
+          done
+          exit "$status"
+
+      - name: Upload available native/case evidence and exact APK pair
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: home-native-focus-82d37
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            app/build/home-native-focus/
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+            app/build/outputs/connected_android_test_additional_output/
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
