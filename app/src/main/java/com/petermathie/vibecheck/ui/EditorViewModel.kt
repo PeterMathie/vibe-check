@@ -196,6 +196,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         db.withTransaction {
             if (!dao.belongsToDraftWorkout(row.workoutExerciseId)) return@withTransaction
             if (
+                !dao.hasSet(row.setId) &&
                 !row.detailsOpen &&
                 row.variationId == null &&
                 row.performance.isBlank() &&

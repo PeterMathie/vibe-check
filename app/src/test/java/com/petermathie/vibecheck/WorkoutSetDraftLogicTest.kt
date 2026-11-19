@@ -128,6 +128,67 @@ class WorkoutSetDraftLogicTest {
         assertEquals(listOf("0", "", "4", "", ""), attemptsFor(draft))
     }
 
+    @Test
+    fun deliberateBlankClearsOnlyRecordedPrimaryMeasurementWithoutBecomingCompletable() {
+        val saved = emptySet("row", 1).copy(
+            holdMillis = 30_000L, timeUnderTensionMillis = 60_000L, rpe = 7.0,
+            notes = "Keep metadata", variationNameSnapshot = "Recorded hold",
+        )
+        val draft = emptyEntryDraft("row", 1).copy(
+            setId = saved.id, tutEntries = "[\"\"]", timeUnderTension = "60", rpe = "7",
+        )
+        val logic = WorkoutSetDraftLogic(config(MeasurementMetric.HOLD), recorded = saved)
+        val cleared = requireNotNull(logic.editedSet(draft))
+        assertEquals(saved.copy(holdMillis = null, updatedAt = cleared.updatedAt), cleared)
+        assertNull(logic.parsedSet(draft))
+        assertEquals(8.0, logic.editedSet(draft.copy(rpe = "8"))?.rpe)
+
+        val reps = saved.copy(holdMillis = null, reps = 5.0, leftReps = 5.0, rightReps = 5.0)
+        val repsLogic = WorkoutSetDraftLogic(config(MeasurementMetric.REPETITIONS), recorded = reps)
+        val blankReps = draft.copy(setId = reps.id)
+        val clearedReps = requireNotNull(repsLogic.editedSet(blankReps))
+        assertEquals(
+            reps.copy(reps = null, leftReps = null, rightReps = null, updatedAt = clearedReps.updatedAt),
+            clearedReps,
+        )
+        assertNull(repsLogic.parsedSet(blankReps))
+    }
+
+    @Test
+    fun invalidEditingBuffersAndVariantSwitchAreNotMeasurementDeletion() {
+        val saved = emptySet("row", 1).copy(holdMillis = 30_000L)
+        val blank = emptyEntryDraft("row", 1).copy(setId = saved.id, tutEntries = "[\"\"]")
+        val logic = WorkoutSetDraftLogic(config(MeasurementMetric.HOLD), recorded = saved)
+        listOf(".", "1.", "bad").forEach {
+            assertNull(logic.editedSet(blank.copy(tutEntries = encodeTimingInputs(listOf(it)))))
+        }
+        assertNull(logic.editedSet(blank.copy(rpe = ".")))
+        assertNull(logic.editedSet(blank.copy(variationId = "different")))
+        assertNull(WorkoutSetDraftLogic(config(MeasurementMetric.HOLD)).editedSet(blank))
+    }
+
+    @Test
+    fun clearingOneAttemptPreservesSurvivorsIndependentTotalAndRpe() {
+        val saved = emptySet("row", 1).copy(
+            holdMillis = 9_000, tutEntriesMillis = "[4000,5000]",
+            timeUnderTensionMillis = 60_000L, rpe = 8.0,
+        )
+        val draft = emptyEntryDraft("row", 1).copy(
+            setId = saved.id, tutEntries = "[\"\",\"5\"]", timeUnderTension = "60", rpe = "8",
+        )
+        val logic = WorkoutSetDraftLogic(config(MeasurementMetric.SKILL_HOLD), recorded = saved)
+        val remaining = requireNotNull(logic.editedSet(draft))
+        assertEquals(listOf(5_000L), timingMillis(remaining.tutEntriesMillis))
+        assertEquals(5_000L, remaining.holdMillis)
+        assertEquals(60_000L, remaining.timeUnderTensionMillis)
+        assertEquals(8.0, remaining.rpe)
+        val noAttempts = requireNotNull(logic.editedSet(draft.copy(tutEntries = "[\"\"]")))
+        assertNull(noAttempts.holdMillis)
+        assertEquals("[]", noAttempts.tutEntriesMillis)
+        assertEquals(60_000L, noAttempts.timeUnderTensionMillis)
+        assertEquals(8.0, noAttempts.rpe)
+    }
+
     private fun config(metric: MeasurementMetric) = ExerciseInputConfig()
         .withResistance(ResistanceMetric.BODYWEIGHT)
         .withMeasurement(metric)

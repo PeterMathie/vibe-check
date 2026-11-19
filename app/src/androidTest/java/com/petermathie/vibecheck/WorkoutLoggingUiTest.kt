@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,10 +29,14 @@ import com.petermathie.vibecheck.ui.AppFloatingAction
 import com.petermathie.vibecheck.ui.Destination
 import com.petermathie.vibecheck.ui.LocalAppFabClearance
 import com.petermathie.vibecheck.ui.LocalAppFabHost
+import com.petermathie.vibecheck.ui.MainViewModel
 import com.petermathie.vibecheck.ui.WorkoutEditor
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.domain.programme.ResistanceMetric
+import com.petermathie.vibecheck.domain.workout.encodeTimingInputs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -39,6 +44,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class WorkoutLoggingUiTest {
@@ -152,6 +158,143 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil(15_000) { runBlocking { database.editorDao().sets().first().any { it.workoutExerciseId == handstandId && it.holdMillis == 10_000L } } }
         assertEquals(0, runBlocking { database.editorDao().sets().first().count { it.workoutExerciseId == handstandId && it.holdMillis == 8_000L } })
+    }
+
+    @Test
+    fun keyboardClearedSavedHoldCannotFinishWithHiddenMeasurement() =
+        assertKeyboardClearedSavedHoldCannotFinish(viaProgramme = false)
+
+    @Test
+    fun keyboardClearedSavedHoldCannotSaveAndStartWithHiddenMeasurement() =
+        assertKeyboardClearedSavedHoldCannotFinish(viaProgramme = true)
+
+    private fun assertKeyboardClearedSavedHoldCannotFinish(viaProgramme: Boolean) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val saved = runBlocking {
+            val dao = database.editorDao()
+            val row = dao.workoutExercises().first().single {
+                it.workoutId == workoutId && it.actualExerciseId == "core:handstand"
+            }
+            dao.workoutExercise(row.copy(targetSets = 1, restSeconds = 0))
+            val config = ExerciseInputConfig()
+                .withResistance(ResistanceMetric.BODYWEIGHT)
+                .withMeasurement(MeasurementMetric.HOLD)
+                .encode()
+            emptySet(row.id, 1).copy(
+                variationId = "handstand-wall",
+                variationNameSnapshot = "Wall handstand",
+                variationTrackingTypeSnapshot = "HOLD",
+                variationInputConfigSnapshot = config,
+                holdMillis = 30_000L,
+            ).also { dao.set(it) }
+        }
+        val preferences = context.getSharedPreferences("workout_logging", 0)
+        try {
+            val locks = preferences.getStringSet("locked_sets", emptySet()).orEmpty()
+            assertTrue(preferences.edit().putStringSet("locked_sets", locks + saved.id).commit())
+            val editor = lifecycle.own(EditorViewModel(database))
+            val repository = TrainingRepository(
+                database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context,
+            )
+            val main = lifecycle.own(MainViewModel(repository, database.catalogueDao()))
+            val beforeWorkouts = runBlocking { database.editorDao().workouts().first() }
+            var finishHandled = false
+            compose.setContent {
+                VibeCheckTheme {
+                    WorkoutEditor(
+                        editor, workoutId, onChoose = {},
+                        onFinish = { id ->
+                            main.finishWorkout(
+                                id,
+                                onFinished = { finishHandled = true },
+                                onRejected = { finishHandled = true },
+                            )
+                        },
+                    )
+                }
+            }
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithContentDescription("Edit completed set 1 for Handstand")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription("Edit completed set 1 for Handstand").performClick()
+            val hold = compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
+            hold.assertTextContains("30", substring = true).performTextClearance()
+            hold.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+            compose.waitUntil(15_000) {
+                runBlocking {
+                    database.editorDao().setById(saved.id)?.holdMillis == null ||
+                        database.editorDao().entryDrafts(saved.workoutExerciseId).any {
+                            it.setId == saved.id && it.tutEntries == encodeTimingInputs(listOf(""))
+                        }
+                }
+            }
+            if (!viaProgramme) {
+                val image = compose.onRoot().captureToImage().asAndroidBitmap()
+                File(context.cacheDir, "review-repair-cleared-hold-fixture.png").outputStream().use {
+                    assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+                }
+            }
+            if (viaProgramme) {
+                compose.runOnIdle {
+                    main.startWorkout(
+                        "demo-day-legs", workoutId, finishCurrent = true,
+                        onStarted = { finishHandled = true },
+                        onRejected = { finishHandled = true },
+                    )
+                }
+                compose.waitUntil(15_000) { finishHandled }
+            } else {
+                compose.onNodeWithContentDescription("Workout exercise list")
+                    .performScrollToNode(hasText("Finish workout"))
+                val finish = compose.onNodeWithText("Finish workout")
+                if (!finish.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)) {
+                    finish.performClick()
+                    compose.waitUntil(15_000) { finishHandled }
+                }
+            }
+            val workout = runBlocking { requireNotNull(database.workoutDao().workout(workoutId)) }
+            val retained = runBlocking { database.editorDao().setById(saved.id) }
+            assertEquals(
+                "The only completed hold was keyboard-cleared; Finish must not put its hidden " +
+                    "${retained?.holdMillis}ms saved value into History",
+                "DRAFT",
+                workout.status,
+            )
+            assertEquals(workoutId, runBlocking { database.workoutDao().draft()?.id })
+            assertEquals(beforeWorkouts.map { it.id }, runBlocking {
+                database.editorDao().workouts().first().map { it.id }
+            })
+            org.junit.Assert.assertNull(main.completionEvents.value)
+            org.junit.Assert.assertNull(retained?.holdMillis)
+            runBlocking {
+                database.editorDao().set(emptySet(saved.workoutExerciseId, 2).copy(holdMillis = 5_000L))
+            }
+            finishHandled = false
+            compose.runOnIdle {
+                if (viaProgramme) {
+                    main.startWorkout(
+                        "demo-day-legs", workoutId, finishCurrent = true,
+                        onStarted = { finishHandled = true },
+                        onRejected = { error(it) },
+                    )
+                } else {
+                    main.finishWorkout(
+                        workoutId,
+                        onFinished = { finishHandled = true },
+                        onRejected = { error(it) },
+                    )
+                }
+            }
+            compose.waitUntil(15_000) { finishHandled }
+            assertEquals("FINISHED", runBlocking { database.workoutDao().workout(workoutId)?.status })
+            org.junit.Assert.assertNull(runBlocking { database.editorDao().setById(saved.id)?.holdMillis })
+        } finally {
+            val locks = preferences.getStringSet("locked_sets", emptySet()).orEmpty() - saved.id
+            assertTrue(preferences.edit().putStringSet("locked_sets", locks).commit())
+        }
     }
 
     @Test

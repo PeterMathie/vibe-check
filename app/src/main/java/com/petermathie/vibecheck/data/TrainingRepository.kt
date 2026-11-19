@@ -26,6 +26,7 @@ import com.petermathie.vibecheck.domain.model.WorkoutSetLog
 import com.petermathie.vibecheck.domain.model.WorkoutStatus
 import com.petermathie.vibecheck.domain.recency.RecencyCalculator
 import com.petermathie.vibecheck.domain.workout.hasInvalidQuantitativeInput
+import com.petermathie.vibecheck.domain.workout.clearedRecordedMeasurement
 import com.petermathie.vibecheck.domain.workout.configuredSetCount
 import com.petermathie.vibecheck.domain.workout.loggingMetricsError
 import com.petermathie.vibecheck.domain.workout.resolveSetInputConfig
@@ -238,6 +239,21 @@ class TrainingRepository @Inject constructor(
         workoutDao.updateExerciseNotes(workoutExerciseId, notes)
 
     suspend fun finishWorkout(workoutId: String): WorkoutCompletion? = database.withTransaction {
+        val dao = database.editorDao()
+        dao.workoutExercisesForWorkout(workoutId).forEach { row ->
+            dao.entryDrafts(row.id).forEach draft@ { draft ->
+                val recorded = dao.setById(draft.setId) ?: return@draft
+                val config = resolveSetInputConfig(
+                    row, dao.exerciseById(row.actualExerciseId)?.trackingType.orEmpty(),
+                    draft.variationId?.let { dao.variationById(it) },
+                    recorded.takeIf { it.variationId == draft.variationId },
+                    cached = null, configOverride = null,
+                )
+                require(config.clearedRecordedMeasurement(draft, recorded) == null) {
+                    "Save or correct the cleared measurement before finishing."
+                }
+            }
+        }
         if (workoutDao.qualifyingSetCount(workoutId) == 0) return@withTransaction null
         val mode = workoutDao.workoutMode(workoutId)?.let(TrainingMode::valueOf)
             ?: error("Workout $workoutId does not exist")

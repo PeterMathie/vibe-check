@@ -21,6 +21,48 @@ class EditorWorkflowTest {
         DatabaseSeeder(ApplicationProvider.getApplicationContext(),db).seedIfNeeded()
     }
     @After fun close(){db.close()}
+    @Test(timeout = 120_000)
+    fun historicalSetEditsPreserveUnchangedBandSnapshotsAndSnapshotNewSelections() = runBlocking {
+        val dao = db.editorDao()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repository = com.petermathie.vibecheck.data.TrainingRepository(
+            db, db.programmeDao(), db.workoutDao(), db.trackerDao(), context,
+        )
+        val workout = repository.startWorkout("demo-day-push")
+        val exercise = dao.workoutExercisesForWorkout(workout).first()
+        val old = BandEntity("custom-old", "Original band", 2.0, 0xFF5085D6L)
+        val added = BandEntity("custom-added", "New band", 3.0, 0xFF5085D6L)
+        dao.band(old)
+        dao.band(added)
+        val saved = com.petermathie.vibecheck.ui.emptySet(exercise.id, 1).copy(
+            reps = 5.0, bandResistance = true,
+        )
+        dao.saveSetWithSnapshots(saved, listOf(old.id), consumeDraft = false)
+        assertNotNull(repository.finishWorkout(workout))
+        val originalLink = dao.bandsForExercise(exercise.id).single()
+        dao.band(old.copy(name = "Renamed band", widthCentimetres = 8.0))
+
+        val historical = requireNotNull(dao.setById(saved.id))
+        dao.saveSetWithSnapshots(historical.copy(rpe = 7.0), listOf(old.id), consumeDraft = false)
+        assertEquals(
+            "An RPE-only historical edit must not resnapshot the current band catalogue",
+            listOf(originalLink),
+            dao.bandsForExercise(exercise.id),
+        )
+        dao.saveSetWithSnapshots(
+            requireNotNull(dao.setById(saved.id)),
+            listOf(added.id, old.id),
+            consumeDraft = true,
+        )
+        assertEquals(
+            listOf(
+                WorkoutSetBandEntity(saved.id, added.id, 0, added.name, added.widthCentimetres),
+                originalLink.copy(ordinal = 1),
+            ),
+            dao.bandsForExercise(exercise.id),
+        )
+    }
+
     @Test(timeout=120000) fun programmeUpdatePreservesDaysAndBackupRoundTrips()=runBlocking {
         val dao=db.editorDao()
         dao.programme(ProgrammeEntity("custom-p","Test","STRENGTH",false))

@@ -648,7 +648,7 @@ private fun WorkoutExerciseCard(
         activateSet(updated)
         drafts[updated.ordinal] = updated
         val logic = logicFor(updated)
-        val parsed = logic.parsedSet(updated)
+        val parsed = logic.editedSet(updated)
         if (parsed == null) {
             vm.saveEntryDraft(updated)
         } else {
@@ -811,19 +811,7 @@ private fun WorkoutExerciseCard(
                                 isLocked, draftLoaded, identity, Modifier.focusRequester(focusRequester),
                                 onRepsChange = { updatePerformance(ordinal, resistance, it) },
                                 onDraftChange = ::updateDraft,
-                                onTimingDelete = { next ->
-                                    // An empty draft alone must not leave the deleted last time in its saved set.
-                                    if (attemptsFor(next).all(String::isEmpty) && parsedSet(next) == null) {
-                                        recorded?.let {
-                                            vm.saveSet(it.copy(
-                                                holdMillis = null, tutEntriesMillis = "[]",
-                                                updatedAt = System.currentTimeMillis(),
-                                            ), recordedBands.filter { band -> band.setId == it.id }
-                                                .sortedBy { band -> band.ordinal }.map { band -> band.bandId })
-                                        }
-                                    }
-                                    updateDraft(next)
-                                },
+                                onTimingDelete = ::updateDraft,
                             )
                         }
                     },

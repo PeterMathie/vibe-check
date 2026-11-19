@@ -132,10 +132,13 @@ interface EditorDao {
                 ).encode()
             }.orEmpty(),
         )
+        val originalBands = bandsForExercise(saved.workoutExerciseId)
+            .filter { it.setId == saved.id }.associateBy { it.bandId }
         set(saved)
         clearBands(saved.id)
         setBands(bandIds.mapIndexedNotNull { index, id ->
-            bandById(id)?.let { WorkoutSetBandEntity(saved.id, id, index, it.name, it.widthCentimetres) }
+            originalBands[id]?.copy(ordinal = index)
+                ?: bandById(id)?.let { WorkoutSetBandEntity(saved.id, id, index, it.name, it.widthCentimetres) }
         })
         if (consumeDraft) deleteEntryDraft(saved.workoutExerciseId, saved.ordinal)
     }

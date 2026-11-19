@@ -109,6 +109,25 @@ internal class WorkoutSetDraftLogic(
         )
     }
 
+    fun editedSet(draft: WorkoutEntryDraftEntity): WorkoutSetEntity? {
+        parsedSet(draft)?.let { return it }
+        if (inputError(draft) != null) return null
+        val cleared = recorded?.let { config.clearedRecordedMeasurement(draft, it) } ?: return null
+        val (resistance, _) = performanceParts(draft)
+        return cleared.copy(
+            weightKg = if (config.loggingWeightUnit == null) cleared.weightKg else
+                quantitativeInput(resistance).value?.let {
+                    if (config.loggingWeightUnit == "lb") it / 2.2046226218 else it
+                },
+            addedWeightKg = if (!config.addedWeight) cleared.addedWeightKg else
+                quantitativeInput(draft.addedWeight).value?.let {
+                    if (preferredWeightUnit == "lb") it / 2.2046226218 else it
+                },
+            rpe = quantitativeInput(draft.rpe, 10.0).value,
+            updatedAt = System.currentTimeMillis(),
+        )
+    }
+
     fun snapshotConfig(): String = config.copy(
         resistanceMetric = config.loggingResistance(),
         measurementMetric = config.loggingMeasurement(),

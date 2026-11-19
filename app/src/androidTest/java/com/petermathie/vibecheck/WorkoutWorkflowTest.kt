@@ -268,6 +268,41 @@ class WorkoutWorkflowTest {
     }
 
     @Test(timeout = 120_000)
+    fun persistedClearedHoldCannotHideInHistoryThroughFinishOrProgrammeSwitch() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val dao = database.editorDao()
+        val row = dao.workoutExercisesForWorkout(id).first { it.actualExerciseId == "core:handstand" }
+        val config = ExerciseInputConfig(timeHeld = true, reps = false).encode()
+        val saved = emptySet(row.id, 1).copy(
+            variationId = "handstand-wall", holdMillis = 30_000L,
+            variationInputConfigSnapshot = config, variationTrackingTypeSnapshot = "HOLD",
+        )
+        dao.set(saved)
+        dao.set(emptySet(row.id, 2).copy(holdMillis = 5_000L))
+        val cleared = emptyEntryDraft(row.id, 1).copy(
+            setId = saved.id, variationId = saved.variationId, tutEntries = "[\"\"]",
+        )
+        dao.entryDraft(cleared)
+        val workouts = dao.workouts().first()
+        val history = database.workoutDao().observeFinishedWorkouts().first()
+
+        listOf(false, true).forEach { viaProgramme ->
+            val result = runCatching {
+                if (viaProgramme) repository.startProgrammeWorkout("demo-day-legs", id, true)
+                else repository.finishWorkout(id)
+            }
+            assertTrue(
+                "A pending cleared saved measurement must not be discarded into History",
+                result.exceptionOrNull()?.message.orEmpty().contains("cleared measurement"),
+            )
+            assertEquals(workouts, dao.workouts().first())
+            assertEquals(saved, dao.setById(saved.id))
+            assertEquals(listOf(cleared), dao.entryDrafts(row.id))
+            assertEquals(history, database.workoutDao().observeFinishedWorkouts().first())
+        }
+    }
+
+    @Test(timeout = 120_000)
     fun programmeSwitchPreservesMetricGuardsAndRecordedConfigurationPrecedence() = runBlocking {
         val id = repository.startWorkout("demo-day-push")
         val dao = database.editorDao()
