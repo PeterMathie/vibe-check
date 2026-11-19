@@ -20,7 +20,7 @@ jobs:
       - name: Guard one attempt, exact parent and unchanged application
         run: |
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$(git show -s --format=%P HEAD)" = 82d37ad34ad3efee7e4368b05ada3f4ecfc52dc2
+          test "$(git show -s --format=%P HEAD)" = f2bec132c6091e20b7e6ac1da49faf8589e0a8c2
           git diff --exit-code 82d37ad34ad3efee7e4368b05ada3f4ecfc52dc2 HEAD -- . \
             ':!.github/scripts/home-native-focus.py' ':!.github/workflows/android-home-native-focus.yml'
           mkdir -p app/build/home-native-focus
