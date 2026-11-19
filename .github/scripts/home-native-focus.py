@@ -254,8 +254,9 @@ class Observation:
                 raise DiagnosticError("Native stream has not demonstrated attachment at preflight; no readiness retry")
             args = ["timeout", "--signal=TERM", "--kill-after=30s", "16m", "gradle",
                     ":app:connectedDebugAndroidTest", "--stacktrace",
-                    "-Pandroid.testInstrumentationRunnerArguments.class=" +
-                    ",".join(CLASS + "#" + method for method in CASES)]
+                    "-Pandroid.testInstrumentationRunnerArguments.class=" + CLASS,
+                    "-Pandroid.testInstrumentationRunnerArguments.tests_regex='^" + CLASS.replace(".", "[.]") +
+                    "#(" + "|".join(CASES) + ")$'"]
             (self.output / "test-command.json").write_text(json.dumps({"utc": utc(), "argv": args}, indent=2) + "\n")
             with self.lock:
                 if self.errors:

@@ -14,13 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 4
+          fetch-depth: 5
           persist-credentials: false
 
       - name: Guard one attempt, exact parent and unchanged application
         run: |
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$(git show -s --format=%P HEAD)" = a6957c0f1f9952c87e99236f17650917ab3614a7
+          test "$(git show -s --format=%P HEAD)" = 7f20be659fed17b0e0228aafae3f7732cebd479d
           git diff --exit-code 82d37ad34ad3efee7e4368b05ada3f4ecfc52dc2 HEAD -- . \
             ':!.github/scripts/home-native-focus.py' ':!.github/workflows/android-home-native-focus.yml'
           mkdir -p app/build/home-native-focus
