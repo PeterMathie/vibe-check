@@ -16,6 +16,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_11_12
 import com.petermathie.vibecheck.data.local.MIGRATION_12_13
 import com.petermathie.vibecheck.data.local.MIGRATION_13_14
 import com.petermathie.vibecheck.data.local.MIGRATION_14_15
+import com.petermathie.vibecheck.data.local.MIGRATION_15_16
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -32,6 +33,29 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate15To16PreservesLegacyTimingAndSnapshots() {
+        helper.createDatabase(databaseName, 15).apply {
+            execSQL("INSERT INTO exercises (id,canonicalName,tag,trackingType,equipment,instructions,source,isCustom,isArchived,inputConfig,targetSets,targetRepsMin,targetRepsMax,targetRpe,restSeconds) VALUES ('e','Hold','STRENGTH','HOLD',NULL,NULL,'user',1,0,'',NULL,NULL,NULL,NULL,120)")
+            execSQL("INSERT INTO workouts (id,programmeDayId,name,mode,status,startedAt,finishedAt,notes,bodyweightKg,isDemo) VALUES ('w',NULL,'Hold','STRENGTH','FINISHED',1,2,'',NULL,0)")
+            execSQL("INSERT INTO workout_exercises (id,workoutId,plannedExerciseId,actualExerciseId,position,notes,restSeconds,supersetGroup,exerciseName,trackingType,targets,inputConfig) VALUES ('we','w','e','e',0,'',120,NULL,'Historical hold','HOLD','','timeHeld=true')")
+            execSQL("INSERT INTO workout_sets (id,workoutExerciseId,ordinal,setType,result,variationId,weightKg,reps,holdMillis,leftReps,rightReps,leftHoldMillis,rightHoldMillis,addedWeightKg,assistanceKg,rpe,romValue,romUnit,notes,loggedAt,updatedAt,timeUnderTensionMillis,variationInputConfigSnapshot) VALUES ('s','we',1,'WORKING','COMPLETED',NULL,10,5,1234,NULL,NULL,NULL,NULL,3,NULL,8,NULL,NULL,'kept',1,1,9876,'timeHeld=true')")
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 16, true, MIGRATION_15_16).use { migrated ->
+            migrated.query("SELECT holdMillis,timeUnderTensionMillis,reps,weightKg,tutEntriesMillis,variationInputConfigSnapshot,notes FROM workout_sets WHERE id='s'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(1234L, it.getLong(0))
+                assertEquals(9876L, it.getLong(1))
+                assertEquals(5.0, it.getDouble(2), 0.0)
+                assertEquals(10.0, it.getDouble(3), 0.0)
+                assertEquals("[]", it.getString(4))
+                assertEquals("timeHeld=true", it.getString(5))
+                assertEquals("kept", it.getString(6))
+            }
+        }
+    }
 
     @Test
     fun migrate14To15UsesRealColumnsForFractionalRepetitions() {

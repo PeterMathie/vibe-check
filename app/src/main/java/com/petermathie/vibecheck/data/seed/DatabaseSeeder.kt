@@ -82,6 +82,10 @@ class DatabaseSeeder @Inject constructor(
                 if(database.workoutDao().demoCount() > 0) seedProgressDemo()
                 database.metadataDao().put(SeedMetadataEntity(PROGRESS_DEMO_KEY,PROGRESS_DEMO_VERSION))
             }
+            if ((database.metadataDao().version(PLANCHE_BANDS_KEY) ?: 0) < 1) {
+                enablePlancheBands()
+                database.metadataDao().put(SeedMetadataEntity(PLANCHE_BANDS_KEY, 1))
+            }
             // Demo records use the same historical snapshots as real workouts.
             val sql=database.openHelper.writableDatabase
             sql.execSQL("INSERT OR IGNORE INTO workout_muscles SELECT we.id,em.muscleId,em.role FROM workout_exercises we JOIN exercise_muscles em ON em.exerciseId=we.actualExerciseId")
@@ -101,6 +105,29 @@ class DatabaseSeeder @Inject constructor(
         )
         database.catalogueDao().insertExerciseMuscles(CURATED_MAPPINGS)
         database.catalogueDao().insertVariations(SKILL_VARIATIONS)
+    }
+
+    private fun enablePlancheBands() {
+        val sql = database.openHelper.writableDatabase
+        val corrections = listOf(
+            Triple("exercises", "inputConfig", "id='core:planche'"),
+            Triple("exercise_variations", "inputConfig", "exerciseId='core:planche'"),
+            Triple("programme_exercises", "inputConfig", "exerciseId='core:planche'"),
+            Triple("workout_exercises", "inputConfig",
+                "actualExerciseId='core:planche' AND workoutId IN (SELECT id FROM workouts WHERE status='DRAFT')"),
+            Triple("workout_sets", "variationInputConfigSnapshot",
+                "workoutExerciseId IN (SELECT id FROM workout_exercises WHERE actualExerciseId='core:planche' AND workoutId IN (SELECT id FROM workouts WHERE status='DRAFT'))"),
+        )
+        corrections.forEach { (table, column, predicate) ->
+            sql.query("SELECT id,$column FROM $table WHERE $predicate").use { rows ->
+                while (rows.moveToNext()) {
+                    val config = (rows.getString(1).split(";")
+                        .filter { it.isNotBlank() && !it.startsWith("bandResistance=") } + "bandResistance=true")
+                        .joinToString(";")
+                    sql.execSQL("UPDATE $table SET $column=? WHERE id=?", arrayOf(config, rows.getString(0)))
+                }
+            }
+        }
     }
 
     private suspend fun seedDemo() {
@@ -513,6 +540,7 @@ class DatabaseSeeder @Inject constructor(
     companion object {
         private const val CATALOGUE_KEY = "exercise-catalogue"
         private const val CATALOGUE_VERSION = 2
+        private const val PLANCHE_BANDS_KEY = "planche-band-measurement"
         private const val CURATED_ONLY_KEY = "curated-exercise-catalogue"
         private const val CURATED_ONLY_VERSION = 1
         private const val DEMO_KEY = "debug-demo"
@@ -562,6 +590,8 @@ class DatabaseSeeder @Inject constructor(
                 false,
                 inputConfig = if (id == "core:handstand") {
                     "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=true;reps=false"
+                } else if (id == "core:planche") {
+                    "weightUnit=;bandResistance=true;timeHeld=true;timeUnderTension=false;reps=false"
                 } else {
                     ""
                 },
@@ -627,10 +657,10 @@ class DatabaseSeeder @Inject constructor(
                 TrackingType.SKILL_HOLD.name,
                 "weightUnit=;bandResistance=false;timeHeld=false;timeUnderTension=true;reps=false;bodyweight=false;addedWeight=false",
             ),
-            ExerciseVariationEntity("planche-tuck", "core:planche", "Tuck planche", 10, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
-            ExerciseVariationEntity("planche-advanced-tuck", "core:planche", "Advanced tuck planche", 20, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
-            ExerciseVariationEntity("planche-straddle", "core:planche", "Straddle planche", 30, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
-            ExerciseVariationEntity("planche-full", "core:planche", "Full planche", 40, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=false;timeHeld=true;timeUnderTension=false;reps=false"),
+            ExerciseVariationEntity("planche-tuck", "core:planche", "Tuck planche", 10, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=true;timeHeld=true;timeUnderTension=false;reps=false"),
+            ExerciseVariationEntity("planche-advanced-tuck", "core:planche", "Advanced tuck planche", 20, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=true;timeHeld=true;timeUnderTension=false;reps=false"),
+            ExerciseVariationEntity("planche-straddle", "core:planche", "Straddle planche", 30, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=true;timeHeld=true;timeUnderTension=false;reps=false"),
+            ExerciseVariationEntity("planche-full", "core:planche", "Full planche", 40, true, TrackingType.SKILL_HOLD.name, "weightUnit=;bandResistance=true;timeHeld=true;timeUnderTension=false;reps=false"),
             ExerciseVariationEntity(
                 "pull-up-assisted", "core:pull-up", "Band-assisted pull-up", 10, true,
                 TrackingType.ASSISTED_REPS.name,

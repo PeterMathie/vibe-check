@@ -50,7 +50,7 @@ fun hasInvalidQuantitativeInput(draft: WorkoutEntryDraftEntity): Boolean {
             draft.romValue,
             draft.timeHeld,
             draft.timeUnderTension,
-        ).any { it.isNotEmpty() && !quantitativeInput(it).isValid }
+        ).plus(timingInputs(draft.tutEntries)).any { it.isNotEmpty() && !quantitativeInput(it).isValid }
     ) return true
     return draft.rpe.isNotEmpty() && !quantitativeInput(draft.rpe, maximum = 10.0).isValid
 }

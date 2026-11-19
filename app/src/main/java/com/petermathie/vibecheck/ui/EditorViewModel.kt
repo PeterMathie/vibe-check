@@ -20,6 +20,15 @@ import java.io.File
 
 fun newId(): String = UUID.randomUUID().toString()
 
+internal data class WorkoutLoggingData(
+    val exercises: List<WorkoutExerciseEntity>,
+    val sets: List<WorkoutSetEntity>,
+    val drafts: List<WorkoutEntryDraftEntity>,
+    val variations: List<ExerciseVariationEntity>,
+    val bands: List<BandEntity>,
+    val definitions: List<ExerciseEntity> = emptyList(),
+)
+
 @HiltViewModel
 class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewModel() {
     suspend fun exportJson() = com.petermathie.vibecheck.data.DataTransfer.export(db)
@@ -44,13 +53,20 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val bands = dao.bands().live()
     val setBands = dao.setBands().live()
     val entryDrafts = dao.observeEntryDrafts().live()
+    internal val workoutLoggingData: StateFlow<WorkoutLoggingData?> = combine(
+        dao.workoutExercises(), dao.sets(), dao.observeEntryDrafts(), dao.variations(), dao.bands(),
+    ) { exercises, sets, drafts, variations, bands ->
+        WorkoutLoggingData(exercises, sets, drafts, variations, bands)
+    }.combine(dao.exercises()) { data, definitions ->
+        data.copy(definitions = definitions)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val trackers = dao.trackers().live()
     val fields = dao.fields().live()
     val values = dao.values().live()
     val measurements = dao.measurements().live()
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
-    private fun write(onSuccess: () -> Unit = {}, block: suspend () -> Unit) {
+    private fun write(onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}, block: suspend () -> Unit) =
         viewModelScope.launch {
             writes.withLock {
                 try {
@@ -60,10 +76,10 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                     throw e
                 } catch (e: Exception) {
                     error.value = e.message ?: "Could not save"
+                    onFailure()
                 }
             }
         }
-    }
     fun save(row: ProgrammeEntity) = write { dao.programme(row) }
     fun createProgramme(row: ProgrammeEntity, day: ProgrammeDayEntity, onCreated: () -> Unit = {}) = write(onCreated) {
         db.withTransaction {
@@ -90,6 +106,14 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             db.withTransaction { rows.forEachIndexed { i,e -> dao.entry(e.copy(position=i)) } }
         }
     }
+    fun moveWorkoutExercise(id: String, delta: Int, onFailure: () -> Unit = {}) = write(onFailure = onFailure) {
+        db.withTransaction {
+            val selected = requireNotNull(dao.workoutExerciseById(id)) { "Workout exercise no longer exists" }
+            moveItem(dao.workoutExercisesForWorkout(selected.workoutId), id, delta) { it.id }?.let { rows ->
+                rows.forEachIndexed { index, row -> dao.updateWorkoutExercisePosition(row.id, index) }
+            }
+        }
+    }
     fun save(row: ProgrammeDayEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.day(row) }
     fun save(row: ProgrammeExerciseEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.entry(row) }
     fun save(row: WorkoutEntity) = write { dao.workout(row) }
@@ -106,12 +130,16 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         db.withTransaction {
             val definition=dao.exerciseById(row.actualExerciseId)
             val changed=row.exerciseName.isBlank()
+            val current = dao.workoutExerciseById(row.id)
             dao.workoutExercise(
-                if(changed) row.copy(
+                (if(changed) row.copy(
                     exerciseName=definition?.canonicalName.orEmpty(),
                     trackingType=definition?.trackingType.orEmpty(),
                     inputConfig=definition?.inputConfig.orEmpty(),
-                ) else row,
+                ) else row).copy(
+                    position = current?.position ?: row.position,
+                    targetSets = if (current == null) row.targetSets else current.targetSets,
+                ),
             )
             if(changed) {
                 dao.clearWorkoutMuscles(row.id)
@@ -128,6 +156,18 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun save(row: TrackerDailyValueEntity, onSaved: () -> Unit = {}) = write(onSaved) { trackerStore.saveValue(row) }
     fun save(row: BodyMeasurementEntity) = write { dao.measurement(row) }
     fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }
+    fun saveBand(row: BandEntity, onSaved: () -> Unit, onFailure: () -> Unit) = write(onSaved, onFailure) {
+        require(!isSeededBandId(row.id)) { "Built-in band definitions cannot be changed" }
+        require(row.name.isNotBlank()) { "Enter a band name" }
+        require(row.widthCentimetres.isFinite() && row.widthCentimetres > 0) { "Band width must be positive" }
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid band colour" }
+        db.withTransaction {
+            require(dao.bandById(row.id) != null || dao.bandCount() < com.petermathie.vibecheck.domain.programme.MAX_RESISTANCE_BANDS) {
+                "At most eight resistance bands can be configured"
+            }
+            dao.band(row)
+        }
+    }
     fun attachReferenceVideo(context: Context, exerciseId: String, uri: Uri, displayName: String) = write {
         val id = newId()
         val directory = File(context.filesDir, "exercise-reference-videos")
@@ -151,11 +191,12 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     }
     suspend fun entryDraft(workoutExerciseId: String) = dao.entryDraft(workoutExerciseId)
     suspend fun entryDrafts(workoutExerciseId: String) = dao.entryDrafts(workoutExerciseId)
+    suspend fun bandsForExercise(workoutExerciseId: String) = dao.bandsForExercise(workoutExerciseId)
     fun saveEntryDraft(row: WorkoutEntryDraftEntity) = write {
         db.withTransaction {
             if (!dao.belongsToDraftWorkout(row.workoutExerciseId)) return@withTransaction
-            dao.deleteSet(row.setId)
             if (
+                !dao.hasSet(row.setId) &&
                 !row.detailsOpen &&
                 row.variationId == null &&
                 row.performance.isBlank() &&
@@ -167,6 +208,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                 row.romValue.isBlank() &&
                 row.timeHeld.isBlank() &&
                 row.timeUnderTension.isBlank() &&
+                row.tutEntries.isBlank() &&
                 row.bandIds == "[]"
             ) {
                 dao.deleteEntryDraft(row.workoutExerciseId, row.ordinal)
@@ -189,14 +231,24 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun removeDay(id: String) = write { dao.deleteDay(id) }
     fun removeEntry(id: String) = write { dao.deleteEntry(id) }
     fun removeSet(id: String) = write { dao.deleteSet(id) }
+    fun removeWorkoutSet(id: String, ordinal: Int, remaining: Int, onRemoved: () -> Unit) =
+        write(onRemoved) { dao.deleteWorkoutSet(id, ordinal, remaining) }
+    fun setWorkoutSetCount(id: String, count: Int) = write { dao.setWorkoutSetCount(id, count) }
+    fun removeWorkoutExercise(id: String, onRemoved: () -> Unit = {}) =
+        write(onRemoved) { dao.deleteWorkoutExercise(id) }
     fun removeWorkout(id: String, onRemoved: () -> Unit = {}) = write(onRemoved) { dao.deleteWorkout(id) }
     fun clearValue(id: String, day: Long) = write { trackerStore.clearValue(id, day) }
     fun removeMeasurement(id: String) = write { dao.deleteMeasurement(id) }
     fun saveSet(row: WorkoutSetEntity, bandIds: List<String>) = write {
         dao.saveSetWithSnapshots(row, bandIds, consumeDraft = false)
     }
-    fun submitEntryDraft(row: WorkoutSetEntity, bandIds: List<String>, onSaved: () -> Unit) = write {
-        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true)
+    fun submitEntryDraft(
+        row: WorkoutSetEntity,
+        bandIds: List<String>,
+        inputConfigOverride: String? = null,
+        onSaved: () -> Unit,
+    ) = write {
+        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true, inputConfigOverride = inputConfigOverride)
         onSaved()
     }
     fun duplicate(programme: ProgrammeEntity) = write {

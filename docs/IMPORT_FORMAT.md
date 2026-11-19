@@ -1,6 +1,6 @@
 # Structured import — format version 1
 
-This format currently targets database schema 15. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
+This format currently targets database schema 16. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
 
 ## Envelope and merge rules
 
@@ -42,7 +42,7 @@ Legacy workout snapshots may have an empty `trackingType`; new imports should su
 
 ## Definitions and relationships
 
-The app must have seeded its catalogue before import. Seeded exercises, their aliases/muscle mappings, seeded variations, muscles and bands are read-only: identical rows from a backup are accepted, but changed or new seeded definitions are rejected. To customise an exercise, use a new ID, `isCustom: true` and its own aliases/mappings. Custom variations use `isSeeded: false`. `core:` and `free:` exercise ID prefixes are reserved. Cross-version catalogue reconciliation is not implemented; conflicting definitions require reconciliation before import.
+The app must have seeded its catalogue before import. Seeded exercises, their aliases/muscle mappings, seeded variations, muscles and the four built-in bands are read-only: identical rows from a backup are accepted, but changed or new seeded definitions are rejected. Exercise/variation `inputConfig` is user-editable and can be restored without changing catalogue identities or historical snapshots. Custom bands may be imported with their own stable ID, name, colour and positive width; existing band/set snapshot columns are reused. To customise an exercise, use a new ID, `isCustom: true` and its own aliases/mappings. Custom variations use `isSeeded: false`. `core:` and `free:` exercise ID prefixes are reserved. Cross-version catalogue reconciliation is not implemented; conflicting definitions require reconciliation before import.
 
 `seed_metadata` is validated but ignored on import: it describes this installation's seeding state and must not control a different installation.
 
@@ -52,8 +52,26 @@ Programme prescriptions (`targetSets`, rep/hold targets, `targetRpe` and `restSe
 
 Finished workouts require `finishedAt >= startedAt`. The merged database may contain at most one DRAFT. Supplying a second active draft is rejected; finish/discard the existing one or update its ID intentionally.
 
+Deleting or adding a set slot in the logger persists the current slot count in that workout exercise's existing `targetSets` column, including zero. Surviving sets and entry drafts are renumbered without changing their IDs or measurements. Programme prescriptions and the original textual `targets` remain unchanged. The one-time Planche band correction changes configuration only in catalogue/variation defaults, assignments and DRAFT snapshots; finished snapshots and band selections are untouched. Neither behaviour changes the schema or version-1 envelope. Import remains a merge, not a way to propagate deletions.
+
 Band link IDs are `band-yellow` (0.6 cm), `band-red` (1.2 cm), `band-black` (2.2 cm) and `band-purple` (3.1 cm). Each stacked band has a separate `workout_set_bands` row. No force conversion occurs during import.
+
+At most eight band definitions (built-in and custom combined) may be configured. Imports whose merged catalogue exceeds eight are rejected transactionally; no band definition or selection is silently dropped.
+
+Logger tick/done locks are device-local UI preferences keyed by stable set ID, not a new database status or backup preference. They survive app restart but are not transferred by JSON export/import; pre-existing local locks are not inferred from or rewritten by imported `result` values. New installations and sets without an explicit local tick start unlocked, including historical records. The composable logger's fixed logical columns and per-set variant headers do not rename bands or rewrite saved measurement orders. Inactive-variant raw-input/snapshot buffers survive saved-instance restoration but are not a new transferable database archive. Untouched recorded sets are not rewritten when ticked.
 
 Habit values must match the field: a numerical field has only `numericValue`, a Boolean field only `booleanValue`, and text/choice/date-time fields only `textValue`. Other value columns are null. Counts are non-negative whole numbers; durations are non-negative. Numeric targets require both comparison and target value, or both null. There is one value per `(fieldId, epochDay)`.
 
 Photos are not part of this JSON format; export them separately. Legacy set `notes` remains a database field for compatibility; new notes should be stored at exercise or workout level.
+
+## Set timing (schema 16)
+
+Exercise and variation `inputConfig` may include optional `resistanceMetric=BODYWEIGHT|KILOGRAMS|BANDS` and `measurementMetric=REPETITIONS|HOLD|SKILL_HOLD|RANGE_OF_MOTION` (one enum value, not the literal alternatives). Unknown or duplicate explicit metric keys are rejected transactionally. These keys select the composable logger's renderers; legacy backing flags and units remain supported. Ambiguous legacy combinations are retained and require explicit selection in the logger, not an import-time conversion. New ROM drafts use degrees; recorded `cm` values remain in centimetres. No Room schema or version-1 envelope change is introduced.
+
+The optional legacy `measurementOrder` entry, for example `measurementOrder=rpe,reps,weight`, still round-trips. Keys are `bodyweight`, `weight`, `reps`, `tut`, `totalTime`, `rpe`, `addedWeight`, `bands` and `rom`. An omitted variation order inherits the exercise default for new sets; recorded configurations retain their own order. The current logger uses fixed logical columns instead of this display order. Duplicate entries, duplicate keys and unknown measurement keys are rejected transactionally.
+
+`inputConfig` still supports legacy `manyTuts=true` or `manyTuts=false`. When omitted, new Handstand entries default to many and other exercises to one; saved variation configurations freeze the chosen setting. Settings now select hold or skill hold explicitly rather than exposing the former one/many switch.
+
+`workout_sets.tutEntriesMillis` is a JSON-array string containing zero to eight non-negative integer millisecond durations, for example `"[1500,2000]"`. A non-empty array must sum to `holdMillis`; the scalar total keeps existing progress consumers compatible. `timeUnderTensionMillis` remains the separate total-time measurement and is not reinterpreted. Legacy version-1 rows may omit the new column: import supplies `"[]"` and retains both original scalar durations unchanged.
+
+`workout_entry_drafts.tutEntries` is a JSON-array string of up to eight text inputs, retaining incomplete decimal entry. Older draft rows may omit it; import supplies `""`. Existing multi-attempt values are retained when a hold-type variant is selected and no additional slots are offered in hold mode. Skill hold exposes all attempts. The envelope format/version remain unchanged.

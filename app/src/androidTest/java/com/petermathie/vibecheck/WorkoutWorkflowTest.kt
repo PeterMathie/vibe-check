@@ -10,6 +10,9 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.SetDraft
 import com.petermathie.vibecheck.ui.MainViewModel
+import com.petermathie.vibecheck.ui.emptySet
+import com.petermathie.vibecheck.ui.emptyEntryDraft
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -66,6 +69,51 @@ class WorkoutWorkflowTest {
         assertTrue(requireNotNull(completion).affectedMuscleIds.isNotEmpty())
         assertNull(repository.observeDraft().first())
         assertTrue(repository.observeMuscleRecency(day.mode).first { it.isNotEmpty() }.isNotEmpty())
+    }
+
+    @Test(timeout = 120_000)
+    fun plancheBandCorrectionUpdatesDefaultsAndDraftsOnceWithoutRewritingHistory() = runBlocking {
+        val dao = database.editorDao()
+        val workout = repository.startWorkout("demo-day-push")
+        val row = dao.workoutExercises().first().single { it.workoutId == workout && it.actualExerciseId == "core:planche" }
+        val config = "weightUnit=lb;timeHeld=true;manyTuts=false;bandResistance=false;measurementOrder=tut,bands,rpe"
+        val exercise = requireNotNull(dao.exerciseById("core:planche"))
+        dao.exercise(exercise.copy(inputConfig = config))
+        dao.variations().first().filter { it.exerciseId == exercise.id }.forEach { dao.variation(it.copy(inputConfig = config)) }
+        val variant = dao.variations().first().first { it.exerciseId == exercise.id }
+        dao.variation(variant.copy(id = "custom-planche", name = "Custom Planche", inputConfig = config, isSeeded = false))
+        val assignments = dao.entries().first().filter { it.exerciseId == exercise.id }
+        assignments.forEach { dao.entry(it.copy(inputConfig = config)) }
+        dao.workoutExercise(row.copy(inputConfig = config))
+        val saved = emptySet(row.id, 1).copy(variationId = variant.id, holdMillis = 12_000, variationInputConfigSnapshot = config)
+        dao.set(saved)
+        val historicalRow = row.copy(id = "historical-planche", workoutId = "demo-workout-push-1", inputConfig = config)
+        dao.workoutExercise(historicalRow)
+        val historicalSet = saved.copy(id = "historical-set", workoutExerciseId = historicalRow.id)
+        dao.set(historicalSet)
+        val beforeBands = dao.setBands().first()
+        database.openHelper.writableDatabase.execSQL("DELETE FROM seed_metadata WHERE `key`='planche-band-measurement'")
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        DatabaseSeeder(context, database).seedIfNeeded()
+        val expected = config.replace("bandResistance=false", "bandResistance=true")
+        assertEquals(expected.split(";").sorted(), dao.exerciseById(exercise.id)!!.inputConfig.split(";").sorted())
+        dao.variations().first().filter { it.exerciseId == exercise.id }.forEach {
+            assertTrue(ExerciseInputConfig.decode(it.inputConfig, it.trackingType).bandResistance)
+        }
+        assertEquals(
+            config.split(";").filterNot { it.startsWith("bandResistance=") },
+            dao.workoutExerciseById(row.id)!!.inputConfig.split(";").filterNot { it.startsWith("bandResistance=") },
+        )
+        assertTrue(ExerciseInputConfig.decode(dao.setById(saved.id)!!.variationInputConfigSnapshot, "SKILL_HOLD").bandResistance)
+        assertEquals(historicalRow, dao.workoutExerciseById(historicalRow.id))
+        assertEquals(historicalSet, dao.setById(historicalSet.id))
+        assertEquals(beforeBands, dao.setBands().first())
+        assignments.forEach { assignment ->
+            assertTrue(ExerciseInputConfig.decode(dao.entries().first().single { it.id == assignment.id }.inputConfig, "SKILL_HOLD").bandResistance)
+        }
+        dao.exercise(exercise.copy(inputConfig = config))
+        DatabaseSeeder(context, database).seedIfNeeded()
+        assertEquals(config, dao.exerciseById(exercise.id)?.inputConfig)
     }
 
     @Test(timeout = 120_000)
@@ -149,6 +197,141 @@ class WorkoutWorkflowTest {
         assertEquals("Legs + Mobility", active.name)
         assertTrue(active.exercises.any { it.exerciseName == "Back squat" })
         assertTrue(active.exercises.none { it.exerciseName == "Planche" })
+    }
+
+    @Test(timeout = 120_000)
+    fun programmeSwitchDiscardsTheDraftWithoutAddingHistory() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val row = database.workoutDao().exercises(id).first()
+        repository.addSet(row.workoutExerciseId, SetDraft(reps = 5.0))
+        database.editorDao().entryDraft(emptyEntryDraft(row.workoutExerciseId, 2).copy(rpe = "7"))
+        val history = database.workoutDao().observeFinishedWorkouts().first()
+
+        assertNull(repository.startProgrammeWorkout("demo-day-legs", id, finishCurrent = false))
+
+        assertEquals("DISCARDED", database.workoutDao().workout(id)?.status)
+        assertEquals("demo-day-legs", database.workoutDao().draft()?.programmeDayId)
+        assertEquals(history, database.workoutDao().observeFinishedWorkouts().first())
+        assertTrue(database.editorDao().entryDrafts(row.workoutExerciseId).isEmpty())
+        assertEquals(1, database.editorDao().workouts().first().count { it.status == "DRAFT" })
+    }
+
+    @Test(timeout = 120_000)
+    fun failedProgrammeStartRollsBackFinishingAndDiscardingWithAllDraftData() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val row = database.workoutDao().exercises(id).first()
+        repository.addSet(row.workoutExerciseId, SetDraft(reps = 5.0, notes = "Keep this snapshot"))
+        database.editorDao().entryDraft(emptyEntryDraft(row.workoutExerciseId, 2).copy(rpe = "7"))
+        val before = database.workoutDao().workout(id)
+        val sets = database.workoutDao().sets(row.workoutExerciseId)
+        val drafts = database.editorDao().entryDrafts(row.workoutExerciseId)
+        val history = database.workoutDao().observeFinishedWorkouts().first()
+
+        listOf(false, true).forEach { finish ->
+            val result = runCatching { repository.startProgrammeWorkout("missing-day", id, finish) }
+            assertTrue(result.isFailure)
+            assertEquals(before, database.workoutDao().workout(id))
+            assertEquals(id, database.workoutDao().draft()?.id)
+            assertEquals(sets, database.workoutDao().sets(row.workoutExerciseId))
+            assertEquals(drafts, database.editorDao().entryDrafts(row.workoutExerciseId))
+            assertEquals(history, database.workoutDao().observeFinishedWorkouts().first())
+        }
+    }
+
+    @Test(timeout = 120_000)
+    fun programmeSwitchRejectsEmptyInvalidAndStaleActiveState() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val row = database.workoutDao().exercises(id).first()
+        val empty = runCatching {
+            repository.startProgrammeWorkout("demo-day-legs", id, finishCurrent = true)
+        }
+        assertTrue(empty.exceptionOrNull()?.message.orEmpty().contains("completed working set"))
+        assertEquals(id, database.workoutDao().draft()?.id)
+        repository.addSet(row.workoutExerciseId, SetDraft(reps = 5.0))
+        val draft = emptyEntryDraft(row.workoutExerciseId, 2).copy(timeHeld = ".")
+        database.editorDao().entryDraft(draft)
+        val invalid = runCatching {
+            repository.startProgrammeWorkout("demo-day-legs", id, finishCurrent = true)
+        }
+        assertTrue(invalid.exceptionOrNull()?.message.orEmpty().contains("highlighted numbers"))
+        assertEquals(draft, database.editorDao().entryDrafts(row.workoutExerciseId).single())
+        listOf(null, "stale-id").forEach { expected ->
+            listOf(false, true).forEach { finish ->
+                val stale = runCatching {
+                    repository.startProgrammeWorkout("demo-day-legs", expected, finish)
+                }
+                assertTrue(stale.exceptionOrNull()?.message.orEmpty().contains("active workout changed"))
+                assertEquals(id, database.workoutDao().draft()?.id)
+            }
+        }
+        assertEquals("DRAFT", database.workoutDao().workout(id)?.status)
+    }
+
+    @Test(timeout = 120_000)
+    fun persistedClearedHoldCannotHideInHistoryThroughFinishOrProgrammeSwitch() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val dao = database.editorDao()
+        val row = dao.workoutExercisesForWorkout(id).first { it.actualExerciseId == "core:handstand" }
+        val config = ExerciseInputConfig(timeHeld = true, reps = false).encode()
+        val saved = emptySet(row.id, 1).copy(
+            variationId = "handstand-wall", holdMillis = 30_000L,
+            variationInputConfigSnapshot = config, variationTrackingTypeSnapshot = "HOLD",
+        )
+        dao.set(saved)
+        dao.set(emptySet(row.id, 2).copy(holdMillis = 5_000L))
+        val cleared = emptyEntryDraft(row.id, 1).copy(
+            setId = saved.id, variationId = saved.variationId, tutEntries = "[\"\"]",
+        )
+        dao.entryDraft(cleared)
+        val workouts = dao.workouts().first()
+        val history = database.workoutDao().observeFinishedWorkouts().first()
+
+        listOf(false, true).forEach { viaProgramme ->
+            val result = runCatching {
+                if (viaProgramme) repository.startProgrammeWorkout("demo-day-legs", id, true)
+                else repository.finishWorkout(id)
+            }
+            assertTrue(
+                "A pending cleared saved measurement must not be discarded into History",
+                result.exceptionOrNull()?.message.orEmpty().contains("cleared measurement"),
+            )
+            assertEquals(workouts, dao.workouts().first())
+            assertEquals(saved, dao.setById(saved.id))
+            assertEquals(listOf(cleared), dao.entryDrafts(row.id))
+            assertEquals(history, database.workoutDao().observeFinishedWorkouts().first())
+        }
+    }
+
+    @Test(timeout = 120_000)
+    fun programmeSwitchPreservesMetricGuardsAndRecordedConfigurationPrecedence() = runBlocking {
+        val id = repository.startWorkout("demo-day-push")
+        val dao = database.editorDao()
+        val row = dao.workoutExercisesForWorkout(id).first { it.actualExerciseId == "core:planche" }
+        val variation = dao.variations().first().first { it.exerciseId == row.actualExerciseId }
+        val ambiguous = "bandResistance=true;timeHeld=true;reps=true"
+        dao.workoutExercise(row.copy(inputConfig = ambiguous, targetSets = 1))
+        dao.variation(variation.copy(inputConfig = ambiguous))
+        val saved = emptySet(row.id, 1).copy(variationId = variation.id, holdMillis = 5_000)
+        dao.set(saved)
+        val before = dao.workouts().first()
+
+        val rejected = runCatching {
+            repository.startProgrammeWorkout("demo-day-legs", id, finishCurrent = true)
+        }
+        assertTrue(rejected.exceptionOrNull()?.message.orEmpty().contains("Choose logging metrics"))
+        assertEquals(before, dao.workouts().first())
+        assertEquals(saved, dao.setById(saved.id))
+
+        val recorded = saved.copy(
+            variationInputConfigSnapshot = "bandResistance=true;timeHeld=true;reps=false",
+            variationTrackingTypeSnapshot = "HOLD",
+            variationNameSnapshot = "Recorded hold",
+        )
+        dao.set(recorded)
+        assertNotNull(repository.startProgrammeWorkout("demo-day-legs", id, finishCurrent = true))
+        assertEquals("FINISHED", database.workoutDao().workout(id)?.status)
+        assertEquals(recorded, dao.setById(saved.id))
+        assertEquals("demo-day-legs", database.workoutDao().draft()?.programmeDayId)
     }
 
     @Test(timeout = 120_000)

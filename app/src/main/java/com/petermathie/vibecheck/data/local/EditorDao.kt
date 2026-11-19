@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck.data.local
 
 import androidx.room.*
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -35,15 +36,44 @@ interface EditorDao {
     @Query("DELETE FROM exercise_muscles WHERE exerciseId = :id") suspend fun clearMappings(id: String)
     @Query("SELECT * FROM workouts ORDER BY startedAt DESC") fun workouts(): Flow<List<WorkoutEntity>>
     @Query("SELECT * FROM workout_exercises ORDER BY position") fun workoutExercises(): Flow<List<WorkoutExerciseEntity>>
+    @Query("SELECT * FROM workout_exercises WHERE id=:id") suspend fun workoutExerciseById(id: String): WorkoutExerciseEntity?
+    @Query("SELECT * FROM workout_exercises WHERE workoutId=:workoutId ORDER BY position")
+    suspend fun workoutExercisesForWorkout(workoutId: String): List<WorkoutExerciseEntity>
+    @Query("UPDATE workout_exercises SET position=:position WHERE id=:id")
+    suspend fun updateWorkoutExercisePosition(id: String, position: Int)
     @Query("SELECT * FROM workout_sets ORDER BY ordinal") fun sets(): Flow<List<WorkoutSetEntity>>
+    @Query("SELECT * FROM workout_sets WHERE id=:id") suspend fun setById(id: String): WorkoutSetEntity?
     @Query("SELECT * FROM workout_set_bands ORDER BY ordinal") fun setBands(): Flow<List<WorkoutSetBandEntity>>
-    @Query("SELECT * FROM bands ORDER BY widthCentimetres") fun bands(): Flow<List<BandEntity>>
+    @Query("SELECT b.* FROM workout_set_bands b JOIN workout_sets s ON s.id=b.setId WHERE s.workoutExerciseId=:workoutExerciseId ORDER BY b.ordinal")
+    suspend fun bandsForExercise(workoutExerciseId: String): List<WorkoutSetBandEntity>
+    @Query("SELECT * FROM bands ORDER BY widthCentimetres,id") fun bands(): Flow<List<BandEntity>>
+    @Query("SELECT COUNT(*) FROM bands") suspend fun bandCount(): Int
+    @Upsert suspend fun band(row: BandEntity)
     @Query("SELECT * FROM bands WHERE id=:id") suspend fun bandById(id: String): BandEntity?
     @Upsert suspend fun workout(row: WorkoutEntity)
     @Upsert suspend fun workoutExercise(row: WorkoutExerciseEntity)
     @Upsert suspend fun set(row: WorkoutSetEntity)
     @Upsert suspend fun setBands(rows: List<WorkoutSetBandEntity>)
     @Query("DELETE FROM workout_sets WHERE id = :id") suspend fun deleteSet(id: String)
+    @Query("DELETE FROM workout_exercises WHERE id = :id") suspend fun deleteWorkoutExercise(id: String)
+    @Query("DELETE FROM workout_sets WHERE workoutExerciseId=:id AND ordinal=:ordinal")
+    suspend fun deleteSetAt(id: String, ordinal: Int)
+    @Query("UPDATE workout_sets SET ordinal=ordinal-1 WHERE workoutExerciseId=:id AND ordinal>:ordinal")
+    suspend fun shiftSetsAfterDeletion(id: String, ordinal: Int)
+    @Query("UPDATE workout_exercises SET targetSets=:count WHERE id=:id")
+    suspend fun setWorkoutSetCount(id: String, count: Int)
+    @Transaction
+    suspend fun deleteWorkoutSet(id: String, ordinal: Int, remaining: Int) {
+        require(ordinal > 0 && remaining >= 0) { "Invalid set deletion" }
+        val drafts = entryDrafts(id)
+        deleteSetAt(id, ordinal)
+        shiftSetsAfterDeletion(id, ordinal)
+        deleteEntryDrafts(id)
+        drafts.filter { it.ordinal != ordinal }.forEach {
+            entryDraft(if (it.ordinal > ordinal) it.copy(ordinal = it.ordinal - 1) else it)
+        }
+        setWorkoutSetCount(id, remaining)
+    }
     @Query("DELETE FROM workout_set_bands WHERE setId = :id") suspend fun clearBands(id: String)
     @Query("SELECT * FROM workout_entry_drafts WHERE workoutExerciseId = :workoutExerciseId ORDER BY ordinal LIMIT 1")
     suspend fun entryDraft(workoutExerciseId: String): WorkoutEntryDraftEntity?
@@ -74,18 +104,41 @@ interface EditorDao {
         deleteEntryDraft(row.workoutExerciseId, row.ordinal)
     }
     @Transaction
-    suspend fun saveSetWithSnapshots(row: WorkoutSetEntity, bandIds: List<String>, consumeDraft: Boolean) {
+    suspend fun saveSetWithSnapshots(
+        row: WorkoutSetEntity,
+        bandIds: List<String>,
+        consumeDraft: Boolean,
+        inputConfigOverride: String? = null,
+    ) {
         val variation = row.variationId?.let { variationById(it) }
-        val saved = row.copy(
-            variationRankSnapshot = variation?.progressionRank,
-            variationNameSnapshot = variation?.name.orEmpty(),
-            variationTrackingTypeSnapshot = variation?.trackingType.orEmpty(),
-            variationInputConfigSnapshot = variation?.inputConfig.orEmpty(),
+        val workoutExercise = requireNotNull(workoutExerciseById(row.workoutExerciseId)) {
+            "Unknown workout exercise: ${row.workoutExerciseId}"
+        }
+        val exerciseConfig = ExerciseInputConfig.decode(
+            workoutExercise.inputConfig, workoutExercise.trackingType, workoutExercise.actualExerciseId,
         )
+        val original = setById(row.id)?.takeIf { it.variationId == row.variationId }
+            ?: row.takeIf { inputConfigOverride != null }
+        val saved = row.copy(
+            variationRankSnapshot = original?.variationRankSnapshot ?: variation?.progressionRank,
+            variationNameSnapshot = original?.variationNameSnapshot?.takeIf { it.isNotBlank() } ?: variation?.name.orEmpty(),
+            variationTrackingTypeSnapshot = original?.variationTrackingTypeSnapshot?.takeIf { it.isNotBlank() } ?: variation?.trackingType.orEmpty(),
+            variationInputConfigSnapshot = inputConfigOverride
+                ?: original?.variationInputConfigSnapshot?.takeIf { it.isNotBlank() } ?: variation?.let {
+                ExerciseInputConfig.decode(
+                    it.inputConfig.ifBlank { workoutExercise.inputConfig }, it.trackingType, it.exerciseId,
+                    defaultManyTuts = exerciseConfig.manyTuts,
+                    defaultMeasurementOrder = exerciseConfig.measurementOrder,
+                ).encode()
+            }.orEmpty(),
+        )
+        val originalBands = bandsForExercise(saved.workoutExerciseId)
+            .filter { it.setId == saved.id }.associateBy { it.bandId }
         set(saved)
         clearBands(saved.id)
         setBands(bandIds.mapIndexedNotNull { index, id ->
-            bandById(id)?.let { WorkoutSetBandEntity(saved.id, id, index, it.name, it.widthCentimetres) }
+            originalBands[id]?.copy(ordinal = index)
+                ?: bandById(id)?.let { WorkoutSetBandEntity(saved.id, id, index, it.name, it.widthCentimetres) }
         })
         if (consumeDraft) deleteEntryDraft(saved.workoutExerciseId, saved.ordinal)
     }

@@ -49,6 +49,80 @@ class ImportValidationTest {
     }
 
     @Test
+    fun customBandsAndExclusiveMetricSettingsRoundTripWhileBuiltInBandsStayProtected() = runBlocking {
+        val band = fixture("bands").put("id", "custom-band").put("name", "Custom blue")
+            .put("colourArgb", 0xFF5085D6L).put("widthCentimetres", 4.0)
+        val exercise = fixture("exercises").put(
+            "inputConfig",
+            "resistanceMetric=BANDS;measurementMetric=RANGE_OF_MOTION;reps=false",
+        )
+        DataTransfer.import(db, document(rows("bands", band).put("exercises", JSONArray().put(exercise))))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertEquals("Custom blue", db.editorDao().bandById("custom-band")!!.name)
+        assertEquals(exercise.getString("inputConfig"), db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        rejected(rows("bands", fixture("bands").put("name", "Changed built-in")), "seeded")
+        rejected(rows("exercises", fixture("exercises").put("inputConfig", "measurementMetric=UNKNOWN")), "Unknown")
+        listOf("widthCentimetres" to 0, "colourArgb" to -1, "name" to " ").forEach { (key, value) ->
+            rejected(rows("bands", fixture("bands").put("id", "invalid-custom").put(key, value)),
+                when (key) { "widthCentimetres" -> "positive"; "colourArgb" -> "colourArgb"; else -> "name" })
+        }
+        val more = JSONArray().apply {
+            (2..4).forEach { put(JSONObject(band.toString()).put("id", "custom-band-$it")) }
+        }
+        DataTransfer.import(db, document(JSONObject().put("bands", more)))
+        assertEquals(8, db.editorDao().bandCount())
+        rejected(rows("bands", JSONObject(band.toString()).put("id", "ninth-band")), "eight")
+    }
+
+    @Test
+    fun legacyTimingRowsAndMutableMeasurementConfigurationRemainPortable() = runBlocking {
+        val set = fixture("workout_sets").put("holdMillis", 1234)
+        set.remove("tutEntriesMillis")
+        val exercise = fixture("exercises")
+        val newConfig = exercise.getString("inputConfig") + ";manyTuts=true"
+        exercise.put("inputConfig", newConfig)
+        DataTransfer.import(db, document(rows("exercises", exercise).put("workout_sets", JSONArray().put(set))))
+        assertEquals(newConfig, db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        db.openHelper.readableDatabase.query("SELECT holdMillis,tutEntriesMillis FROM workout_sets WHERE id=?", arrayOf(set.getString("id"))).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1234L, it.getLong(0))
+            assertEquals("[]", it.getString(1))
+        }
+    }
+
+    @Test
+    fun timingOverflowAndMismatchedTotalsRollBack() = runBlocking {
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", "[1000,2000]").put("holdMillis", 1000)), "total")
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", List(9) { 1000 }.joinToString(",", "[", "]"))), "eight")
+        rejected(rows("workout_sets", fixture("workout_sets").put("tutEntriesMillis", "[-1]")), "range")
+    }
+
+    @Test
+    fun measurementOrderAndHistoricalSnapshotRoundTripWithoutSchemaChanges() = runBlocking {
+        val order = ";measurementOrder=rpe,totalTime,tut,reps,weight"
+        val exercise = fixture("exercises").apply { put("inputConfig", getString("inputConfig") + order) }
+        val set = fixture("workout_sets").put("variationInputConfigSnapshot", "reps=true$order")
+        DataTransfer.import(db, document(rows("exercises", exercise).put("workout_sets", JSONArray().put(set))))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertEquals(exercise.getString("inputConfig"), db.editorDao().exerciseById(exercise.getString("id"))!!.inputConfig)
+        db.openHelper.readableDatabase.query(
+            "SELECT variationInputConfigSnapshot FROM workout_sets WHERE id=?", arrayOf(set.getString("id")),
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertEquals(set.getString("variationInputConfigSnapshot"), it.getString(0))
+        }
+    }
+
+    @Test
+    fun malformedMeasurementOrdersRollBackAllChanges() = runBlocking {
+        rejected(rows("exercises", fixture("exercises").put("inputConfig", "measurementOrder=reps,reps")), "Duplicate measurement")
+        rejected(rows("exercise_variations", fixture("exercise_variations").put("inputConfig", "measurementOrder=unknown")), "Unknown measurement")
+        rejected(rows("workout_sets", fixture("workout_sets").put("variationInputConfigSnapshot", "measurementOrder=reps;measurementOrder=rpe")), "Duplicate measurement")
+    }
+
+    @Test
     fun unfinishedEntryDraftRoundTripsThroughBackup() = runBlocking {
         val workoutExerciseId = fixture("workout_exercises").getString("id")
         val draft = WorkoutEntryDraftEntity(

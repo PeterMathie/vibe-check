@@ -43,16 +43,17 @@ import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 @Composable
 fun ProgrammeEditor(
     vm: EditorViewModel,
-    mode: TrainingMode,
-    onModeChange: (TrainingMode) -> Unit,
-    onStart: (String, Boolean) -> Unit,
+    defaultMode: TrainingMode,
+    onResume: () -> Unit,
+    isStartingWorkout: Boolean = false,
+    onStart: (dayId: String, activeWorkoutId: String?, finishCurrent: Boolean) -> Unit,
 ) {
     val programmes by vm.programmes.collectAsStateWithLifecycle()
     val days by vm.days.collectAsStateWithLifecycle()
     val entries by vm.entries.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
-    var expandedProgrammeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedProgrammeIds by rememberSaveable { mutableStateOf(listOf<String>()) }
     var rename by remember { mutableStateOf<ProgrammeEntity?>(null) }
     var addExerciseDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var addExerciseActivityTag by rememberSaveable { mutableStateOf<String?>(null) }
@@ -60,7 +61,8 @@ fun ProgrammeEditor(
     var pendingAddTypeDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var editPrescription by remember { mutableStateOf<ProgrammeExerciseEntity?>(null) }
     var pendingStartDayId by rememberSaveable { mutableStateOf<String?>(null) }
-    val programmeRows = programmes.filter { it.mode == mode.name }.sortedBy { it.position }
+    var pendingStartWorkoutId by rememberSaveable { mutableStateOf<String?>(null) }
+    val programmeRows = programmes.sortedBy { it.position }
     val selectedProgramme = programmes.find { it.id == selected }
     var generatedEmptyDayId by rememberSaveable(selectedProgramme?.id) { mutableStateOf<String?>(null) }
     var programmeName by rememberSaveable(selectedProgramme?.id, selectedProgramme?.name) {
@@ -77,9 +79,24 @@ fun ProgrammeEditor(
     val haptics = rememberVibeHaptics()
     val activeWorkout = vm.workouts.collectAsStateWithLifecycle().value.find { it.status == "DRAFT" }
     fun requestStart(dayId: String) {
-        if (activeWorkout != null && activeWorkout.programmeDayId != dayId) pendingStartDayId = dayId
-        else onStart(dayId, false)
+        when {
+            isStartingWorkout -> Unit
+            activeWorkout == null -> onStart(dayId, null, false)
+            activeWorkout.programmeDayId == dayId -> onResume()
+            else -> {
+                pendingStartWorkoutId = activeWorkout.id
+                pendingStartDayId = dayId
+            }
+        }
     }
+    RegisterAppFabAction(
+        owner = Destination.PROGRAMMES,
+        destination = AppFabDestination.ResumeWorkout,
+        visible = activeWorkout != null && !isStartingWorkout && rename == null &&
+            addExerciseDayId == null && !pendingAddDayChoice && pendingAddTypeDayId == null &&
+            editPrescription == null && pendingStartDayId == null,
+        onClick = onResume,
+    )
     val availableAddTypes = exercises
         .filterNot { it.isArchived }
         .map { it.tag }
@@ -110,29 +127,6 @@ fun ProgrammeEditor(
             else -> pendingAddDayChoice = true
         }
     }
-    val programmeModalOpen = rename != null ||
-        addExerciseDayId != null ||
-        pendingAddDayChoice ||
-        pendingAddTypeDayId != null ||
-        editPrescription != null ||
-        pendingStartDayId != null
-    if (selected == null) {
-        RegisterAppFabAction(
-            owner = Destination.PROGRAMMES,
-            destination = AppFabDestination.NewProgramme,
-            visible = !programmeModalOpen,
-        ) {
-            rename = ProgrammeEntity(newId(), "", mode.name, false)
-        }
-    } else {
-        RegisterAppFabAction(
-            owner = Destination.PROGRAMMES,
-            destination = AppFabDestination.AddProgrammeItem,
-            enabled = availableAddTypes.isNotEmpty(),
-            visible = !programmeModalOpen && availableAddTypes.isNotEmpty(),
-            onClick = ::requestAddProgrammeItem,
-        )
-    }
     BackHandler(selected != null) { selected = null }
     ScreenList {
         item {
@@ -151,15 +145,14 @@ fun ProgrammeEditor(
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.headlineSmall,
                 )
-                if (selected == null) ModeSelector(mode, onModeChange, Modifier.weight(1.45f))
             }
         }
         if (selected == null) {
             if (programmeRows.isEmpty()) {
-                item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize strength or stretch sessions.") }
+                item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize your sessions.") }
             }
             itemsIndexed(programmeOrder.ordered(programmeRows) { it.id }, key = { _, row -> row.id }) { index, p ->
-                val expanded = expandedProgrammeId == p.id
+                val expanded = p.id in expandedProgrammeIds
                 val previewDays = days.filter { it.programmeId == p.id }.sortedBy { it.position }
                 ReorderItem(
                     state = programmeOrder,
@@ -176,7 +169,11 @@ fun ProgrammeEditor(
                                 Modifier
                                     .weight(1f)
                                     .clickable {
-                                        expandedProgrammeId = if (expanded) null else p.id
+                                        expandedProgrammeIds = if (expanded) {
+                                            expandedProgrammeIds - p.id
+                                        } else {
+                                            expandedProgrammeIds + p.id
+                                        }
                                     }
                                     .semantics {
                                         stateDescription = if (expanded) "Exercises shown" else "Exercises hidden"
@@ -191,7 +188,7 @@ fun ProgrammeEditor(
                             }
                             IconButton(
                                 onClick = { previewDays.firstOrNull()?.let { requestStart(it.id) } },
-                                enabled = previewDays.isNotEmpty(),
+                                enabled = previewDays.isNotEmpty() && !isStartingWorkout,
                             ) {
                                 Icon(Icons.Outlined.PlayArrow, contentDescription = "Start ${p.name}")
                             }
@@ -210,6 +207,9 @@ fun ProgrammeEditor(
                                         .semantics { contentDescription = "Read-only exercises for ${p.name}" },
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
+                                    if (previewDays.isEmpty()) {
+                                        Text("No exercises yet", style = MaterialTheme.typography.bodyMedium)
+                                    }
                                     previewDays.forEach { day ->
                                         if (previewDays.size > 1) {
                                             Text(day.name, style = MaterialTheme.typography.titleMedium)
@@ -238,6 +238,14 @@ fun ProgrammeEditor(
                         }
                     }
                 }
+            }
+            item(key = "add-programme") {
+                VibeActionButton(
+                    "New programme",
+                    { rename = ProgrammeEntity(newId(), "", defaultMode.name, false) },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = Icons.Outlined.Add,
+                )
             }
         } else {
             item {
@@ -275,29 +283,10 @@ fun ProgrammeEditor(
                             modifier = Modifier.fillMaxWidth(),
                             importance = ActionImportance.PRIMARY,
                             icon = Icons.Outlined.PlayArrow,
+                            enabled = !isStartingWorkout,
                         )
                         if (dayEntries.isEmpty()) {
                             Text("No exercises yet", style = MaterialTheme.typography.bodyMedium)
-                        }
-                        pendingStartDayId?.let { dayId ->
-                            val target = days.find { it.id == dayId }
-                            AlertDialog(
-                                onDismissRequest = { pendingStartDayId = null },
-                                title = { Text("Workout in progress") },
-                                text = { Text("${activeWorkout?.name.orEmpty()} is still in progress. Resume it, or discard it and start ${target?.name.orEmpty()}.") },
-                                confirmButton = {
-                                    TextButton(onClick = {
-                                        pendingStartDayId = null
-                                        onStart(dayId, true)
-                                    }) { Text("Discard and start") }
-                                },
-                                dismissButton = {
-                                    TextButton(onClick = {
-                                        pendingStartDayId = null
-                                        activeWorkout?.programmeDayId?.let { onStart(it, false) }
-                                    }) { Text("Resume workout") }
-                                },
-                            )
                         }
                         entryOrder.ordered(dayEntries) { it.id }.forEachIndexed { index, entry ->
                             key(entry.id) {
@@ -336,6 +325,15 @@ fun ProgrammeEditor(
                 }
             }
             }
+                item(key = "add-programme-exercise") {
+                    VibeActionButton(
+                        "Add exercise",
+                        { requestAddProgrammeItem() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = selectedProgramme != null && availableAddTypes.isNotEmpty(),
+                        icon = Icons.Outlined.Add,
+                    )
+                }
                 item {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -358,13 +356,57 @@ fun ProgrammeEditor(
                 }
             }
         }
+    pendingStartDayId?.let { dayId ->
+        val target = days.find { it.id == dayId }
+        val programme = programmes.find { it.id == target?.programmeId }
+        fun switchWorkout(finishCurrent: Boolean) {
+            val workoutId = pendingStartWorkoutId
+            pendingStartDayId = null
+            pendingStartWorkoutId = null
+            if (workoutId == null) {
+                vm.error.value = "The active workout changed. Choose the workout again."
+            } else {
+                onStart(dayId, workoutId, finishCurrent)
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { pendingStartDayId = null },
+            title = { Text("Workout in progress") },
+            text = {
+                Text(
+                    "${activeWorkout?.name.orEmpty()} is still in progress. " +
+                        "Save it to History or discard it before starting ${programme?.name ?: target?.name.orEmpty()}.",
+                )
+            },
+            confirmButton = {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = { switchWorkout(true) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Save") }
+                    TextButton(
+                        onClick = { switchWorkout(false) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Discard") }
+                    TextButton(
+                        onClick = { pendingStartDayId = null },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Cancel") }
+                }
+            },
+        )
+    }
     rename?.let { p ->
         NameDialog("Programme name", p.name, { rename = null }) { name ->
             val programme = p.copy(name = name)
             val day = ProgrammeDayEntity(
                 id = newId(),
                 programmeId = programme.id,
-                name = if (mode == TrainingMode.STRENGTH) "Workout" else "Stretching",
+                name = if (programme.mode == TrainingMode.STRENGTH.name) "Workout" else "Stretching",
                 position = 0,
             )
             vm.createProgramme(programme, day) {

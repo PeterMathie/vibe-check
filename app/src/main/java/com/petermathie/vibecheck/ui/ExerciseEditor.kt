@@ -30,6 +30,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.model.TrackingType
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 
 @Composable
 fun ExerciseEditor(vm: EditorViewModel) {
@@ -38,12 +41,14 @@ fun ExerciseEditor(vm: EditorViewModel) {
     val mappings by vm.mappings.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
     val variations by vm.variations.collectAsStateWithLifecycle()
+    val bands by vm.bands.collectAsStateWithLifecycle()
     val videos by vm.referenceVideos.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var query by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf<ExerciseEntity?>(null) }
     var configuring by remember { mutableStateOf<ExerciseEntity?>(null) }
     var configuringVariation by remember { mutableStateOf<ExerciseVariationEntity?>(null) }
+    var configuringBands by remember { mutableStateOf(false) }
     var videoExerciseId by remember { mutableStateOf<String?>(null) }
     var playingVideo by remember { mutableStateOf<ExerciseReferenceVideoEntity?>(null) }
     var deletingVideo by remember { mutableStateOf<ExerciseReferenceVideoEntity?>(null) }
@@ -71,6 +76,7 @@ fun ExerciseEditor(vm: EditorViewModel) {
         visible = selected == null &&
             configuring == null &&
             configuringVariation == null &&
+            !configuringBands &&
             videoExerciseId == null &&
             playingVideo == null &&
             deletingVideo == null &&
@@ -93,6 +99,12 @@ fun ExerciseEditor(vm: EditorViewModel) {
                 }
             }
             EditField("Name, alias or muscle", query) { query = it }
+            VibeActionButton(
+                "Configure bands",
+                { configuringBands = true },
+                Modifier.fillMaxWidth(),
+                ActionImportance.SECONDARY,
+            )
         }
         items(visibleExercises,key={it.id}) { e ->
             VibeCard {
@@ -199,6 +211,11 @@ fun ExerciseEditor(vm: EditorViewModel) {
             }
         }
     }
+    if (configuringBands) BandSettingsDialog(
+        bands,
+        onDismiss = { configuringBands = false },
+        onSave = { band, saved, failed -> vm.saveBand(band, saved, failed) },
+    )
     variation?.let { id ->
         val parent = exercises.find { it.id == id }
         NameDialog("Variation name","",{variation=null}) {
@@ -300,7 +317,15 @@ private fun VariationSettingsDialog(
             isCustom = !variation.isSeeded,
             inputConfig = variation.inputConfig.ifBlank { parent?.inputConfig.orEmpty() },
         )
-        ExerciseSettingsDialog(effective, onDismiss) { settings ->
+        ExerciseSettingsDialog(
+            effective, onDismiss, parentExerciseId = variation.exerciseId,
+            defaultManyTuts = ExerciseInputConfig.decode(
+                parent?.inputConfig.orEmpty(), parent?.trackingType.orEmpty(), variation.exerciseId,
+            ).manyTuts,
+            defaultMeasurementOrder = ExerciseInputConfig.decode(
+                parent?.inputConfig.orEmpty(), parent?.trackingType.orEmpty(), variation.exerciseId,
+            ).measurementOrder,
+        ) { settings ->
             onSave(
                 variation.copy(
                     trackingType = settings.trackingType,
@@ -314,51 +339,50 @@ private fun VariationSettingsDialog(
 internal fun ExerciseSettingsDialog(
         exercise: ExerciseEntity,
         onDismiss: () -> Unit,
+        parentExerciseId: String = exercise.id,
+        defaultManyTuts: Boolean = parentExerciseId == "core:handstand",
+        defaultMeasurementOrder: List<ExerciseMeasurement> = emptyList(),
         onSave: (ExerciseEntity) -> Unit,
     ) {
         val pounds = LocalContext.current.getSharedPreferences("settings", 0).getBoolean("lb", false)
         val weightUnit = if (pounds) "lb" else "kg"
         var config by remember(exercise.id) {
-            val decoded = ExerciseInputConfig.decode(exercise.inputConfig, exercise.trackingType)
-            mutableStateOf(if (decoded.weightUnit == null) decoded else decoded.copy(weightUnit = weightUnit))
+            val decoded = ExerciseInputConfig.decode(
+                exercise.inputConfig, exercise.trackingType,
+                parentExerciseId,
+                defaultManyTuts,
+                defaultMeasurementOrder,
+            )
+            mutableStateOf(decoded)
         }
+        var resistance by remember(exercise.id) { mutableStateOf(config.loggingResistance()) }
+        var measurement by remember(exercise.id) { mutableStateOf(config.loggingMeasurement()) }
         AlertDialog(
             onDismissRequest = onDismiss,
             title = { Text("Exercise measurements") },
             text = {
-                LazyColumn {
-                    item {
-                        Text(exercise.canonicalName, style = MaterialTheme.typography.titleMedium)
-                        Text("Resistance", style = MaterialTheme.typography.titleMedium)
-                        ExerciseSettingCheckbox("Weight ($weightUnit)", config.weightUnit == weightUnit) {
-                            config = config.copy(weightUnit = if (it) weightUnit else null)
+                        LazyColumn {
+                            item {
+                                Text(exercise.canonicalName, style = MaterialTheme.typography.titleMedium)
+                                Text("Resistance", style = MaterialTheme.typography.titleMedium)
+                                ResistanceMetric.entries.forEach { option ->
+                                    MetricChoice(option.label, resistance == option) { resistance = option }
+                                }
+                                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                                Text("Measurement", style = MaterialTheme.typography.titleMedium)
+                                MeasurementMetric.entries.forEach { option ->
+                                    MetricChoice(option.label, measurement == option) { measurement = option }
+                                }
+                                Text("Recorded values and units are retained.", style = MaterialTheme.typography.bodySmall)
+                            }
                         }
-                        ExerciseSettingCheckbox("Bodyweight", config.bodyweight) {
-                            config = config.copy(bodyweight = it)
-                        }
-                        ExerciseSettingCheckbox("Added weight", config.addedWeight) {
-                            config = config.copy(addedWeight = it)
-                        }
-                        ExerciseSettingCheckbox("Band resistance", config.bandResistance) {
-                            config = config.copy(bandResistance = it)
-                        }
-                        ExerciseSettingCheckbox("Time Under Tension (seconds)", config.timeHeld) {
-                            config = config.copy(timeHeld = it)
-                        }
-                        ExerciseSettingCheckbox("Total Time (seconds)", config.timeUnderTension) {
-                            config = config.copy(timeUnderTension = it)
-                        }
-                        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                        Text("Reps", style = MaterialTheme.typography.titleMedium)
-                        ExerciseSettingCheckbox("Track repetitions", config.reps) {
-                            config = config.copy(reps = it)
-                        }
-                    }
-                }
             },
             confirmButton = {
                 TextButton(
+                    enabled = resistance != null && measurement != null,
                     onClick = {
+                        config = config.withResistance(requireNotNull(resistance), config.weightUnit ?: weightUnit)
+                            .withMeasurement(requireNotNull(measurement))
                         onSave(
                             exercise.copy(
                                 inputConfig = config.encode(),
@@ -372,15 +396,15 @@ internal fun ExerciseSettingsDialog(
     }
 
 @Composable
-private fun ExerciseSettingCheckbox(
+private fun MetricChoice(
         label: String,
         checked: Boolean,
         onCheckedChange: (Boolean) -> Unit,
     ) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Checkbox(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
+            RadioButton(
+                selected = checked,
+                onClick = { onCheckedChange(true) },
                 modifier = Modifier.semantics { contentDescription = label },
             )
             Text(label)

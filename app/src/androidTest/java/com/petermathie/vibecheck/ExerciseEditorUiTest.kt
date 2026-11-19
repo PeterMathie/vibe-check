@@ -6,9 +6,15 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import android.content.Context
 import com.petermathie.vibecheck.data.local.ExerciseEntity
+import com.petermathie.vibecheck.data.local.BandEntity
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.collectAsState
+import com.petermathie.vibecheck.ui.BandSettingsDialog
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.ExerciseEditor
 import com.petermathie.vibecheck.ui.ExerciseSettingsDialog
@@ -19,6 +25,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 
 @RunWith(AndroidJUnit4::class)
 @android.annotation.SuppressLint("ViewModelConstructorInComposable")
@@ -52,10 +59,9 @@ class ExerciseEditorUiTest {
         }
 
         compose.onNodeWithText("Exercise measurements").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Weight (lb)").assertExists()
-        compose.onNodeWithContentDescription("Weight (kg)").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Time Under Tension (seconds)").assertExists()
-        compose.onNodeWithContentDescription("Total Time (seconds)").performClick()
+        compose.onNodeWithContentDescription("Kilograms").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Hold duration").assertIsSelected()
+        compose.onNodeWithContentDescription("Skill hold").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Sets").assertDoesNotExist()
         compose.onNodeWithContentDescription("Target RPE").assertDoesNotExist()
         compose.onNodeWithContentDescription("Rest seconds").assertDoesNotExist()
@@ -65,6 +71,7 @@ class ExerciseEditorUiTest {
         val config = ExerciseInputConfig.decode(result.inputConfig, result.trackingType)
         assertTrue(config.timeHeld)
         assertTrue(config.timeUnderTension)
+        assertEquals("lb", config.weightUnit)
         assertEquals(null, result.targetSets)
         assertEquals(120, result.restSeconds)
         preferences.edit().putBoolean("lb", false).commit()
@@ -86,12 +93,11 @@ class ExerciseEditorUiTest {
         compose.onNodeWithContentDescription("Duplicate Handstand").assertIsDisplayed()
         assertTrue(compose.onAllNodesWithText("Attach reference video").fetchSemanticsNodes().isNotEmpty())
         compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
-        compose.onNodeWithContentDescription("Time Under Tension (seconds)").assertIsOn()
-        compose.onNodeWithContentDescription("Total Time (seconds)").assertIsOn()
+        compose.onNodeWithContentDescription("Bodyweight").assertIsSelected()
+        compose.onNodeWithContentDescription("Skill hold").assertIsSelected()
         compose.onNodeWithText("Cancel").performClick()
         compose.onNodeWithContentDescription("Settings for Freestanding handstand").performClick()
-        compose.onNodeWithContentDescription("Time Under Tension (seconds)").assertIsOff()
-        compose.onNodeWithContentDescription("Total Time (seconds)").assertIsOn()
+        compose.onNodeWithContentDescription("Skill hold").assertIsSelected()
         compose.onNodeWithText("Cancel").performClick()
 
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Stretch"))
@@ -100,5 +106,101 @@ class ExerciseEditorUiTest {
         compose.onNodeWithContentDescription("Edit Front split").assertIsDisplayed()
         compose.onNodeWithContentDescription("Settings for Front split").assertIsDisplayed()
         compose.onNodeWithContentDescription("Duplicate Front split").assertIsDisplayed()
+    }
+
+    @Test
+    fun exclusiveMetricSelectionReopensWithoutRewritingLegacyOrder() {
+        val exercise = mutableStateOf(ExerciseEntity(
+            "compact-test", "Compact exercise", "STRENGTH", "WEIGHT_REPS", null, null, "core", true,
+            inputConfig = ExerciseInputConfig(
+                weightUnit = "kg", reps = true, measurementOrder = listOf(ExerciseMeasurement.RPE),
+            ).encode(),
+        ))
+        val open = mutableStateOf(true)
+        compose.setContent {
+            VibeCheckTheme {
+                if (open.value) ExerciseSettingsDialog(exercise.value, { open.value = false }) {
+                    exercise.value = it
+                    open.value = false
+                } else androidx.compose.material3.TextButton(onClick = { open.value = true }) {
+                    androidx.compose.material3.Text("Reopen")
+                }
+            }
+        }
+        compose.onNodeWithContentDescription("Bodyweight").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Range of motion").performScrollTo().performClick()
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(
+            listOf(ExerciseMeasurement.RPE),
+            ExerciseInputConfig.decode(exercise.value.inputConfig, "WEIGHT_REPS").measurementOrder,
+        )
+        compose.onNodeWithText("Reopen").performClick()
+        compose.onNodeWithContentDescription("Bodyweight").assertIsSelected()
+        compose.onNodeWithContentDescription("Range of motion").performScrollTo().assertIsSelected()
+    }
+
+    @Test
+    fun variationMetricSelectionSavesWithoutChangingParentSettings() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking { DatabaseSeeder(context, database).seedIfNeeded() }
+        val parentBefore = runBlocking { database.editorDao().exerciseById("core:handstand")!!.inputConfig }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { ExerciseEditor(viewModel) } }
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Handstand"))
+        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
+        compose.onNodeWithContentDescription("Range of motion").performScrollTo().performClick()
+        compose.onNodeWithText("Save").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking { ExerciseInputConfig.decode(database.editorDao().variationById("handstand-wall")!!.inputConfig, "SKILL_HOLD").loggingMeasurement() == MeasurementMetric.RANGE_OF_MOTION }
+        }
+        assertEquals(parentBefore, runBlocking { database.editorDao().exerciseById("core:handstand")!!.inputConfig })
+        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
+        compose.onNodeWithContentDescription("Range of motion").performScrollTo().assertIsSelected()
+    }
+
+    @Test
+    fun customBandCanBeAddedAndEditedWithoutChangingItsIdentity() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking { DatabaseSeeder(context, database).seedIfNeeded() }
+        val vm = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme {
+                ExerciseEditor(vm)
+            }
+        }
+        compose.onNodeWithText("Configure bands").performScrollTo().performClick()
+        compose.onNodeWithText("Add band").performClick()
+        compose.onNodeWithText("Save band").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Band name").performTextInput("Custom blue")
+        compose.onNodeWithContentDescription("Band width in centimetres").performTextInput("4")
+        compose.onNodeWithContentDescription("Band colour").performTextReplacement("5085D6")
+        compose.onNodeWithText("Save band").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking { database.editorDao().bands().first().any { it.name == "Custom blue" } }
+        }
+        val band = runBlocking { database.editorDao().bands().first().single { it.name == "Custom blue" } }
+        compose.onNodeWithText("Edit").performClick()
+        compose.onNodeWithContentDescription("Band name").performTextReplacement("Renamed blue")
+        compose.onNodeWithText("Save band").performClick()
+        compose.waitUntil(15_000) {
+            runBlocking { database.editorDao().bandById(band.id)?.name == "Renamed blue" }
+        }
+        assertEquals(band.copy(name = "Renamed blue"), runBlocking { database.editorDao().bandById(band.id) })
+        runBlocking {
+            repeat(3) { database.editorDao().band(BandEntity("limit-$it", "Band $it", it + 5.0, 0xFF5085D6L)) }
+        }
+        compose.waitUntil(15_000) {
+            runBlocking { database.editorDao().bandCount() == 8 } &&
+                compose.onAllNodesWithText("8/8 bands configured").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Add band").assertIsNotEnabled()
+        var rejected = false
+        runBlocking {
+            vm.saveBand(BandEntity("ninth", "Ninth", 10.0, 0xFF5085D6L), {}, { rejected = true }).join()
+        }
+        assertTrue(rejected)
+        assertEquals(8, runBlocking { database.editorDao().bandCount() })
     }
 }

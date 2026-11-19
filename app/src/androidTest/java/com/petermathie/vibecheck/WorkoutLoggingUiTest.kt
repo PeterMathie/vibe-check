@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -27,10 +29,14 @@ import com.petermathie.vibecheck.ui.AppFloatingAction
 import com.petermathie.vibecheck.ui.Destination
 import com.petermathie.vibecheck.ui.LocalAppFabClearance
 import com.petermathie.vibecheck.ui.LocalAppFabHost
+import com.petermathie.vibecheck.ui.MainViewModel
 import com.petermathie.vibecheck.ui.WorkoutEditor
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.domain.programme.ResistanceMetric
+import com.petermathie.vibecheck.domain.workout.encodeTimingInputs
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -38,6 +44,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class WorkoutLoggingUiTest {
@@ -48,6 +55,37 @@ class WorkoutLoggingUiTest {
         if (::database.isInitialized) database else null
     }
     private val compose get() = lifecycle.compose
+
+    @Test
+    fun rpeRejectsValuesAboveTenAndExplainsRepsInReserve() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("RPE for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
+        }
+        val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").performScrollTo()
+        rpe.performTextInput("9")
+        rpe.performTextInput("9")
+        rpe.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("9")))
+        rpe.performTextReplacement("10")
+        rpe.performTextInput("1")
+        rpe.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("10")))
+        compose.onNodeWithText("Value is too large").assertDoesNotExist()
+        rpe.performTextReplacement("8.5")
+        rpe.assertTextContains("8.5")
+        rpe.performTextClearance()
+        compose.onNodeWithContentDescription("About RPE for Handstand set 1").performScrollTo().performTouchInput { click() }
+        compose.onNodeWithText("RIR").assertIsDisplayed()
+        compose.onNodeWithText("~2").assertIsDisplayed()
+        compose.onNodeWithText("0-4").assertIsDisplayed()
+        compose.onNodeWithText("Many").assertIsDisplayed()
+        compose.onNodeWithText("Got it").performClick()
+        compose.onNodeWithText("RIR").assertDoesNotExist()
+        rpe.performScrollTo().assertExists()
+    }
 
     @Test
     fun workoutLoggerHidesSetConfigurationAndPersistsExerciseNotes() {
@@ -77,20 +115,25 @@ class WorkoutLoggingUiTest {
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Bodyweight:", substring = true).assertDoesNotExist()
+        val list = compose.onNodeWithContentDescription("Workout exercise list")
+        list.performScrollToNode(hasContentDescription("Add exercise to workout"))
         compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed().performClick()
         compose.onNodeWithText("Choose exercise").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Add exercise to workout").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add exercise to workout").assertIsNotEnabled()
         compose.onNodeWithText("Close").performClick()
-        compose.onNodeWithContentDescription("Add exercise to workout").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add exercise to workout").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Workout notes").assertDoesNotExist()
         compose.onNodeWithText("Start hold timer").assertDoesNotExist()
         compose.onNodeWithContentDescription("Save set 1 for Handstand").assertDoesNotExist()
+        list.performScrollToNode(hasContentDescription("Show notes for Handstand"))
+        compose.onNodeWithContentDescription("Show notes for Handstand").performClick()
         compose.onAllNodes(hasText("Exercise notes") and hasSetTextAction())[0].performTextInput("Shoulders stable")
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().workoutExercises().first().any { it.notes == "Shoulders stable" } }
         }
 
-        compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 1 for Bench press"))
+        list.performScrollToNode(hasContentDescription("Set 1 for Bench press"))
         compose.onNodeWithContentDescription("Set details for Bench press set 1").assertDoesNotExist()
         compose.onNodeWithText("Set details").assertDoesNotExist()
         assertTrue(compose.onAllNodesWithText("kg").fetchSemanticsNodes().isNotEmpty())
@@ -118,7 +161,144 @@ class WorkoutLoggingUiTest {
     }
 
     @Test
-    fun handstandCanTrackFreestandingAndTotalTensionTime() {
+    fun keyboardClearedSavedHoldCannotFinishWithHiddenMeasurement() =
+        assertKeyboardClearedSavedHoldCannotFinish(viaProgramme = false)
+
+    @Test
+    fun keyboardClearedSavedHoldCannotSaveAndStartWithHiddenMeasurement() =
+        assertKeyboardClearedSavedHoldCannotFinish(viaProgramme = true)
+
+    private fun assertKeyboardClearedSavedHoldCannotFinish(viaProgramme: Boolean) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val saved = runBlocking {
+            val dao = database.editorDao()
+            val row = dao.workoutExercises().first().single {
+                it.workoutId == workoutId && it.actualExerciseId == "core:handstand"
+            }
+            dao.workoutExercise(row.copy(targetSets = 1, restSeconds = 0))
+            val config = ExerciseInputConfig()
+                .withResistance(ResistanceMetric.BODYWEIGHT)
+                .withMeasurement(MeasurementMetric.HOLD)
+                .encode()
+            emptySet(row.id, 1).copy(
+                variationId = "handstand-wall",
+                variationNameSnapshot = "Wall handstand",
+                variationTrackingTypeSnapshot = "HOLD",
+                variationInputConfigSnapshot = config,
+                holdMillis = 30_000L,
+            ).also { dao.set(it) }
+        }
+        val preferences = context.getSharedPreferences("workout_logging", 0)
+        try {
+            val locks = preferences.getStringSet("locked_sets", emptySet()).orEmpty()
+            assertTrue(preferences.edit().putStringSet("locked_sets", locks + saved.id).commit())
+            val editor = lifecycle.own(EditorViewModel(database))
+            val repository = TrainingRepository(
+                database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context,
+            )
+            val main = lifecycle.own(MainViewModel(repository, database.catalogueDao()))
+            val beforeWorkouts = runBlocking { database.editorDao().workouts().first() }
+            var finishHandled = false
+            compose.setContent {
+                VibeCheckTheme {
+                    WorkoutEditor(
+                        editor, workoutId, onChoose = {},
+                        onFinish = { id ->
+                            main.finishWorkout(
+                                id,
+                                onFinished = { finishHandled = true },
+                                onRejected = { finishHandled = true },
+                            )
+                        },
+                    )
+                }
+            }
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithContentDescription("Edit completed set 1 for Handstand")
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithContentDescription("Edit completed set 1 for Handstand").performClick()
+            val hold = compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
+            hold.assertTextContains("30", substring = true).performTextClearance()
+            hold.assert(SemanticsMatcher.expectValue(SemanticsProperties.EditableText, AnnotatedString("")))
+            compose.waitUntil(15_000) {
+                runBlocking {
+                    database.editorDao().setById(saved.id)?.holdMillis == null ||
+                        database.editorDao().entryDrafts(saved.workoutExerciseId).any {
+                            it.setId == saved.id && it.tutEntries == encodeTimingInputs(listOf(""))
+                        }
+                }
+            }
+            if (!viaProgramme) {
+                val image = compose.onRoot().captureToImage().asAndroidBitmap()
+                File(context.cacheDir, "review-repair-cleared-hold-fixture.png").outputStream().use {
+                    assertTrue(image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it))
+                }
+            }
+            if (viaProgramme) {
+                compose.runOnIdle {
+                    main.startWorkout(
+                        "demo-day-legs", workoutId, finishCurrent = true,
+                        onStarted = { finishHandled = true },
+                        onRejected = { finishHandled = true },
+                    )
+                }
+                compose.waitUntil(15_000) { finishHandled }
+            } else {
+                compose.onNodeWithContentDescription("Workout exercise list")
+                    .performScrollToNode(hasText("Finish workout"))
+                val finish = compose.onNodeWithText("Finish workout")
+                if (!finish.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)) {
+                    finish.performClick()
+                    compose.waitUntil(15_000) { finishHandled }
+                }
+            }
+            val workout = runBlocking { requireNotNull(database.workoutDao().workout(workoutId)) }
+            val retained = runBlocking { database.editorDao().setById(saved.id) }
+            assertEquals(
+                "The only completed hold was keyboard-cleared; Finish must not put its hidden " +
+                    "${retained?.holdMillis}ms saved value into History",
+                "DRAFT",
+                workout.status,
+            )
+            assertEquals(workoutId, runBlocking { database.workoutDao().draft()?.id })
+            assertEquals(beforeWorkouts.map { it.id }, runBlocking {
+                database.editorDao().workouts().first().map { it.id }
+            })
+            org.junit.Assert.assertNull(main.completionEvents.value)
+            org.junit.Assert.assertNull(retained?.holdMillis)
+            runBlocking {
+                database.editorDao().set(emptySet(saved.workoutExerciseId, 2).copy(holdMillis = 5_000L))
+            }
+            finishHandled = false
+            compose.runOnIdle {
+                if (viaProgramme) {
+                    main.startWorkout(
+                        "demo-day-legs", workoutId, finishCurrent = true,
+                        onStarted = { finishHandled = true },
+                        onRejected = { error(it) },
+                    )
+                } else {
+                    main.finishWorkout(
+                        workoutId,
+                        onFinished = { finishHandled = true },
+                        onRejected = { error(it) },
+                    )
+                }
+            }
+            compose.waitUntil(15_000) { finishHandled }
+            assertEquals("FINISHED", runBlocking { database.workoutDao().workout(workoutId)?.status })
+            org.junit.Assert.assertNull(runBlocking { database.editorDao().setById(saved.id)?.holdMillis })
+        } finally {
+            val locks = preferences.getStringSet("locked_sets", emptySet()).orEmpty() - saved.id
+            assertTrue(preferences.edit().putStringSet("locked_sets", locks).commit())
+        }
+    }
+
+    @Test
+    fun handstandTimingRatioRetainsEditableDurationWithoutStopwatch() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         runBlocking {
@@ -138,34 +318,33 @@ class WorkoutLoggingUiTest {
             TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context)
                 .startWorkout("demo-day-push")
         }
+        runBlocking {
+            val row = database.editorDao().workoutExercises().first().first {
+                it.workoutId == workoutId && it.actualExerciseId == "core:handstand"
+            }
+            database.editorDao().set(emptySet(row.id, 1).copy(
+                variationId = "handstand-wall", timeUnderTensionMillis = 30_000L,
+            ))
+        }
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}) } }
 
-        assertHandstandQuantitativeFieldsShareRow()
+        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+        assertHandstandQuantitativeFieldsRemainOrdered()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("12")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("30")
-        compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").performClick()
-        compose.onNodeWithText("Total Time stopwatch").assertExists()
-        compose.onNodeWithText("Reset").performClick()
-        compose.onNodeWithText("Start").performClick()
-        compose.waitUntil("Stopwatch did not reach 100 ms", 5_000) {
-            compose.onAllNodes(stopwatchElapsedAtLeast(100)).fetchSemanticsNodes().isNotEmpty()
-        }
-        compose.onNodeWithText("Stop").performClick()
-        compose.onNodeWithText("Apply").performClick()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("TUT (s)")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("Total")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertTextContains("30")
+        compose.onNodeWithContentDescription("Open Total Time stopwatch for Handstand set 1").assertDoesNotExist()
+        compose.onNodeWithText("Total Time stopwatch").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertTextContains("12")
+        compose.onNodeWithContentDescription("TUT total for Handstand set 1").assertTextContains("12 s", substring = true)
         compose.onNodeWithText("Freestanding sec").assertDoesNotExist()
         compose.onNodeWithText("Total wall sec").assertDoesNotExist()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("99")
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextClearance()
         compose.onNodeWithContentDescription("RPE for Handstand set 1").performTextInput("8")
-        val (heldBounds, tensionBounds, rpeBounds) = assertHandstandQuantitativeFieldsShareRow()
-        val stopwatchBounds = compose.onNodeWithContentDescription("Open Total Time stopwatch for set 1").fetchSemanticsNode().boundsInRoot
-        assertTrue(
-            "Stopwatch should occupy the right side of Total Time: Total=$tensionBounds stopwatch=$stopwatchBounds",
-            stopwatchBounds.left >= tensionBounds.center.x && stopwatchBounds.right <= tensionBounds.right,
-        )
+        awaitHandstandQuantitativeFieldBounds(requireSameRow = false)
 
         val handstandId = runBlocking {
             database.editorDao().workoutExercises().first()
@@ -176,8 +355,7 @@ class WorkoutLoggingUiTest {
                 database.editorDao().sets().first().any {
                     it.workoutExerciseId == handstandId &&
                         it.holdMillis == 12_000L &&
-                        it.timeUnderTensionMillis != null &&
-                        it.timeUnderTensionMillis!! >= 100L &&
+                        it.timeUnderTensionMillis == 30_000L &&
                         it.rpe == 8.0
                 }
             }
@@ -201,17 +379,20 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Variation").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").assertExists()
-        compose.onNodeWithText("Wall handstand").performClick()
+        compose.onNodeWithContentDescription("Variant for Handstand set 1").assertTextEquals("Wall handstand")
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performClick()
         compose.onNodeWithText("Freestanding handstand", useUnmergedTree = true).performClick()
-        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1").performTextInput("15")
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").assertExists()
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertExists()
+        compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1").performTextInput("15")
 
         compose.waitUntil(15_000) {
             runBlocking {
                 database.editorDao().sets().first().singleOrNull {
                     it.variationId == "handstand-free" &&
-                        it.timeUnderTensionMillis == 15_000L &&
+                        it.holdMillis == 15_000L &&
                         it.variationNameSnapshot == "Freestanding handstand" &&
                         it.variationInputConfigSnapshot.contains("timeHeld=false")
                 } != null
@@ -224,7 +405,7 @@ class WorkoutLoggingUiTest {
     }
 
     @Test
-    fun substitutionAfterARecordedSetPreservesOriginalHistory() {
+    fun removedSubstitutionControlsPreserveOriginalHistory() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         val workoutId = startPushWorkout(context)
@@ -235,23 +416,14 @@ class WorkoutLoggingUiTest {
 
         compose.waitUntil("Workout and Bench row were not ready", 15_000) {
             viewModel.workouts.value.any { it.id == workoutId } &&
-                viewModel.workoutExercises.value.any { it.id == bench.id } &&
+                viewModel.workoutLoggingData.value?.exercises?.any { it.id == bench.id } == true &&
                 compose.onAllNodesWithContentDescription("Workout exercise list").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithContentDescription("Workout exercise list")
-            .performScrollToNode(hasContentDescription("More actions for Bench press"))
-        compose.onNodeWithContentDescription("More actions for Bench press").performClick()
-        compose.onNodeWithText("Substitute exercise").performScrollTo().performClick()
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("Choose exercise").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNode(hasText("Name, alias or muscle") and hasSetTextAction()).performTextInput("Dip")
-        compose.onNode(hasTextExactly("Dip") and hasClickAction()).performClick()
-
-        compose.waitUntil(15_000) {
-            runBlocking {
-                database.editorDao().workoutExercises().first().count { it.workoutId == workoutId } == 7
-            }
-        }
-        assertEquals(2, runBlocking { database.editorDao().workoutExercises().first().count { it.workoutId == workoutId && it.actualExerciseId == "core:dip" } })
+            .performScrollToNode(hasContentDescription("Set 1 for Bench press"))
+        compose.onNodeWithContentDescription("More actions for Bench press").assertDoesNotExist()
+        compose.onNodeWithText("Substitute exercise").assertDoesNotExist()
+        assertEquals(6, runBlocking { database.editorDao().workoutExercises().first().count { it.workoutId == workoutId } })
         assertEquals(1, runBlocking { database.editorDao().sets().first().count { it.workoutExerciseId == bench.id && it.reps == 5.0 } })
     }
 
@@ -287,41 +459,28 @@ class WorkoutLoggingUiTest {
         }
 
         compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Set 1 for Handstand").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Set 1 for Handstand")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithContentDescription("Variation for Handstand set 1: Wall handstand")
+            compose.onAllNodesWithContentDescription("Change variant for Handstand set 1")
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("Variation for Handstand set 1: Wall handstand").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change variant for Handstand set 1").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Time Under Tension for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
-            .assertTextContains("TUT (s)")
-        compose.onNodeWithContentDescription("Total Time for Handstand set 1")
-            .performScrollTo()
-            .assertIsDisplayed()
-            .assertTextContains("Total")
+            .assertTextContains("s")
+        compose.onNodeWithContentDescription("Total Time for Handstand set 1").assertExists()
         compose.onNodeWithContentDescription("RPE for Handstand set 1")
             .performScrollTo()
             .assertIsDisplayed()
             .assertTextContains("RPE")
         assertHandstandQuantitativeFieldsRemainOrdered()
+        compose.onNodeWithContentDescription("Add set for Handstand").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Show notes for Handstand").performScrollTo().assertIsDisplayed()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasText("Finish workout"))
         compose.onNodeWithText("Finish workout").assertIsDisplayed()
-    }
-
-    private fun assertHandstandQuantitativeFieldsShareRow(): List<Rect> {
-        val bounds = awaitHandstandQuantitativeFieldBounds(requireSameRow = true)
-        val (heldBounds, tensionBounds, rpeBounds) = bounds
-        assertTrue(
-            "TUT, Total, and RPE should share a row: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
-            kotlin.math.abs(heldBounds.center.y - tensionBounds.center.y) < 2f,
-        )
-        assertTrue(
-            "TUT, Total, and RPE should share a row: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
-            kotlin.math.abs(heldBounds.center.y - rpeBounds.center.y) < 2f,
-        )
-        assertOrderedAndNonOverlapping(bounds)
-        return bounds
     }
 
     private fun assertHandstandQuantitativeFieldsRemainOrdered() {
@@ -346,13 +505,13 @@ class WorkoutLoggingUiTest {
     }
 
     private fun assertOrderedAndNonOverlapping(bounds: List<Rect>) {
-        val (heldBounds, tensionBounds, rpeBounds) = bounds
+        val (heldBounds, rpeBounds) = bounds
         assertTrue(
-            "TUT, Total, and RPE should retain readable, ordered bounds: TUT=$heldBounds Total=$tensionBounds RPE=$rpeBounds",
+            "Timing and RPE remain ordered without overlap: TUT=$heldBounds RPE=$rpeBounds",
             bounds.all { it.width > 0f && it.height > 0f } &&
-                bounds.zipWithNext().all { (first, second) ->
-                    val sameRow = kotlin.math.abs(first.center.y - second.center.y) < 2f
-                    if (sameRow) first.right <= second.left else first.bottom <= second.top
+                listOf(heldBounds).all {
+                    it.right <= rpeBounds.left || rpeBounds.right <= it.left ||
+                        it.bottom <= rpeBounds.top || rpeBounds.bottom <= it.top
                 },
         )
     }
@@ -360,7 +519,6 @@ class WorkoutLoggingUiTest {
     private fun handstandQuantitativeFieldBounds(): List<Rect>? {
         return listOf(
             "Time Under Tension for Handstand set 1",
-            "Total Time for Handstand set 1",
             "RPE for Handstand set 1",
         ).map { description ->
             compose.onAllNodesWithContentDescription(description)
@@ -370,22 +528,6 @@ class WorkoutLoggingUiTest {
                 ?: return null
         }
     }
-
-    private fun stopwatchElapsedAtLeast(minimumMillis: Long) =
-        SemanticsMatcher("stopwatch elapsed at least $minimumMillis ms") { node ->
-            if (!node.config.contains(SemanticsProperties.Text)) {
-                false
-            } else {
-                node.config[SemanticsProperties.Text]
-                    .asSequence()
-                    .mapNotNull { text ->
-                        val match = STOPWATCH_TIME.matchEntire(text.text) ?: return@mapNotNull null
-                        match.groupValues[1].toLong() * 60_000L +
-                            (match.groupValues[2].toDouble() * 1_000L).toLong()
-                    }
-                    .any { it >= minimumMillis }
-            }
-        }
 
     @Test
     fun programmedRowsUseSeparateFieldsAndPlusAddsAnExtraSet() {
@@ -401,12 +543,13 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithContentDescription("Set 2 for Bench press").assertExists()
         compose.onNodeWithContentDescription("Set 3 for Bench press").assertExists()
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertDoesNotExist()
-        compose.onNodeWithText("Add set").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Start 120 second rest for Bench press").assertExists()
+        compose.onNodeWithContentDescription("Add set for Bench press").assertTextContains("Add set")
+        compose.onNodeWithContentDescription("Start 120 second rest for Bench press").assertDoesNotExist()
 
         compose.onNodeWithContentDescription("Add set for Bench press").performScrollTo().performClick()
         compose.onAllNodes(hasScrollAction())[0].performScrollToNode(hasContentDescription("Set 4 for Bench press"))
         compose.onNodeWithContentDescription("Set 4 for Bench press").assertExists()
+        compose.onNodeWithContentDescription("Set 1 for Bench press").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Resistance for Bench press set 1").performTextInput("60")
         compose.onNodeWithContentDescription("Reps for Bench press set 1").performTextInput("5")
         compose.onNodeWithContentDescription("RPE for Bench press set 1").performTextInput("8")
@@ -491,7 +634,4 @@ class WorkoutLoggingUiTest {
         repository.startWorkout(repository.observeProgrammeDays().first().first { it.id == "demo-day-push" }.id)
     }
 
-    private companion object {
-        private val STOPWATCH_TIME = Regex("""(\d{2}):(\d{2}\.\d{2})""")
-    }
 }

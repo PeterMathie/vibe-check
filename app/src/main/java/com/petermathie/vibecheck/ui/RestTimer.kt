@@ -14,7 +14,6 @@ object RestTimer {
         val alarm = context.getSystemService(AlarmManager::class.java)
         if(Build.VERSION.SDK_INT < 31 || alarm.canScheduleExactAlarms()) alarm.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,end,intent(context))
         else alarm.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, end, intent(context))
-        android.widget.Toast.makeText(context,"Rest timer started: ${seconds}s",android.widget.Toast.LENGTH_SHORT).show()
     }
     fun cancel(context: Context) {
         context.getSystemService(AlarmManager::class.java).cancel(intent(context))

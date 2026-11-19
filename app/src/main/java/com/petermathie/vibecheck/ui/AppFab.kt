@@ -3,6 +3,7 @@ package com.petermathie.vibecheck.ui
 import android.os.SystemClock
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +27,11 @@ import androidx.compose.ui.unit.dp
 internal sealed interface AppFabDestination {
     val label: String
     val accessibilityLabel: String
+
+    data object ResumeWorkout : AppFabDestination {
+        override val label = "Resume workout"
+        override val accessibilityLabel = "Resume workout"
+    }
 
     data object NewProgramme : AppFabDestination {
         override val label = "New programme"
@@ -143,6 +149,9 @@ internal fun AppFloatingAction(action: AppFabAction, host: AppFabHostState, modi
             .semantics { contentDescription = action.destination.accessibilityLabel },
         shape = MaterialTheme.shapes.small,
     ) {
-        Icon(Icons.Outlined.Add, contentDescription = null)
+        Icon(
+            if (action.destination == AppFabDestination.ResumeWorkout) Icons.Outlined.PlayArrow else Icons.Outlined.Add,
+            contentDescription = null,
+        )
     }
 }

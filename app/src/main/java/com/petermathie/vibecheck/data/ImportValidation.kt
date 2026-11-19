@@ -6,6 +6,9 @@ import com.petermathie.vibecheck.domain.tracker.HabitChoiceIntensity
 import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import org.json.JSONObject
 import java.math.BigDecimal
+import com.petermathie.vibecheck.domain.workout.timingInputs
+import com.petermathie.vibecheck.domain.workout.timingMillis
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
@@ -65,6 +68,26 @@ internal object ImportValidation {
         oneOf("choiceIntensity", HabitChoiceIntensity.entries.map { it.name }.toSet())
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
+        if (table == "bands") {
+            require(row.getString("name").isNotBlank()) { "Band name cannot be blank" }
+            require(row.getDouble("widthCentimetres") > 0) { "Band width must be positive" }
+            range("colourArgb", 0.0, 4_294_967_295.0)
+        }
+        listOf("inputConfig", "variationInputConfigSnapshot").filter { row.has(it) }.forEach { column ->
+            val config = row.getString(column)
+            val modes = config.split(";").filter { it.startsWith("manyTuts=") }
+            require(modes.size <= 1 && modes.all { it.substringAfter("=") in setOf("true", "false") }) {
+                "Invalid one/many timing configuration"
+            }
+            ExerciseInputConfig.decode(config, row.optString("trackingType"))
+        }
+        if (table == "workout_entry_drafts") timingInputs(row.getString("tutEntries"))
+        if (table == "workout_sets") {
+            val entries = timingMillis(row.getString("tutEntriesMillis"))
+            require(entries.isEmpty() || (!row.isNull("holdMillis") && entries.sum() == row.getLong("holdMillis"))) {
+                "Timing entries must match the recorded hold total"
+            }
+        }
         if (table == "workouts") {
             require(row.getString("status") != "FINISHED" || !row.isNull("finishedAt")) { "Finished workout requires finishedAt" }
             require(row.isNull("finishedAt") || row.getLong("finishedAt") >= row.getLong("startedAt")) { "Workout finish precedes start" }
@@ -106,13 +129,15 @@ internal object ImportValidation {
     fun protectCatalogue(sql: SupportSQLiteDatabase, table: String, row: JSONObject, existing: JSONObject?) {
         fun seededExercise(id: String) = sql.query("SELECT isCustom FROM exercises WHERE id=?", arrayOf(id)).use { it.moveToFirst() && it.getInt(0) == 0 }
         val protected = when (table) {
-            "muscles", "bands" -> true
+            "muscles" -> true
+            "bands" -> com.petermathie.vibecheck.data.local.isSeededBandId(row.getString("id"))
             "exercises" -> existing?.optInt("isCustom") == 0 || row.getInt("isCustom") == 0
             "exercise_variations" -> existing?.optInt("isSeeded") == 1 || row.getInt("isSeeded") == 1
             "exercise_aliases", "exercise_muscles" -> seededExercise(row.getString("exerciseId"))
             else -> false
         }
         if (protected) require(existing != null && row.keys().asSequence().all { key ->
+            if (key == "inputConfig" && table in setOf("exercises", "exercise_variations")) return@all true
             val a = row.get(key); val b = existing.get(key)
             if (a is Number && b is Number) BigDecimal(a.toString()).compareTo(BigDecimal(b.toString())) == 0 else a == b
         }) { "Cannot change seeded $table definitions; duplicate an exercise to customise it" }
@@ -121,6 +146,7 @@ internal object ImportValidation {
 
     fun relationships(sql: SupportSQLiteDatabase) {
         fun reject(query: String, message: String) = sql.query(query).use { require(!it.moveToFirst()) { message } }
+        reject("SELECT id FROM bands LIMIT 1 OFFSET ${com.petermathie.vibecheck.domain.programme.MAX_RESISTANCE_BANDS}", "At most eight resistance bands can be configured")
         reject("SELECT s.id FROM workout_sets s JOIN workout_exercises we ON we.id=s.workoutExerciseId LEFT JOIN exercise_variations v ON v.id=s.variationId WHERE s.variationId IS NOT NULL AND (v.id IS NULL OR v.exerciseId != we.actualExerciseId) LIMIT 1", "A set variation does not belong to the performed exercise")
         reject("SELECT wm.muscleId FROM workout_muscles wm LEFT JOIN muscles m ON m.id=wm.muscleId WHERE m.id IS NULL LIMIT 1", "Unknown muscle in workout snapshot")
         reject("SELECT id FROM workouts WHERE status='DRAFT' LIMIT 1 OFFSET 1", "Only one active draft is supported")

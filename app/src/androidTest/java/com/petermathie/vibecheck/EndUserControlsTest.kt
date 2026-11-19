@@ -31,6 +31,7 @@ import com.petermathie.vibecheck.ui.ReorderItem
 import com.petermathie.vibecheck.ui.ReorderOverlayHost
 import com.petermathie.vibecheck.ui.WorkoutCompletionEvent
 import com.petermathie.vibecheck.ui.rememberReorderState
+import com.petermathie.vibecheck.ui.StagedSwipeToDelete
 import com.petermathie.vibecheck.domain.model.TrainingMode
 import com.petermathie.vibecheck.domain.model.ActiveWorkout
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
@@ -46,6 +47,78 @@ import java.time.format.DateTimeFormatter
 class EndUserControlsTest {
     @get:Rule
     val compose = createComposeRule()
+
+    @Test
+    fun nestedSwipeRequiresTwoSeparateLeftGesturesAndNeverDeletesTheExercise() {
+        var setsDeleted = 0
+        var exercisesDeleted = 0
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(300.dp)) {
+                    StagedSwipeToDelete("exercise", { exercisesDeleted++ }) {
+                        Column {
+                            Box(Modifier.fillMaxWidth().height(48.dp))
+                            StagedSwipeToDelete("set", { setsDeleted++ }) {
+                                Box(Modifier.fillMaxWidth().height(80.dp).semantics { contentDescription = "set content" })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val set = compose.onNodeWithContentDescription("Swipe actions for set")
+        val before = compose.onNodeWithContentDescription("set content").getUnclippedBoundsInRoot()
+        set.performTouchInput { swipeLeft() }
+        set.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Delete revealed"))
+        compose.onNodeWithContentDescription("Swipe actions for exercise")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Closed"))
+        val after = compose.onNodeWithContentDescription("set content").getUnclippedBoundsInRoot()
+        assertEquals(before.left.value - (before.right - before.left).value / 3, after.left.value, 1f)
+        assertEquals(0, setsDeleted)
+        set.performTouchInput { swipeRight() }
+        set.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Closed"))
+        set.performTouchInput { swipeLeft() }
+        assertEquals(0, setsDeleted)
+        set.performTouchInput { swipeLeft() }
+        compose.runOnIdle {
+            assertEquals(1, setsDeleted)
+            assertEquals(0, exercisesDeleted)
+        }
+        val exercise = compose.onNodeWithContentDescription("Swipe actions for exercise")
+        exercise.performTouchInput { swipe(Offset(width * 0.9f, 20f), Offset(width * 0.1f, 20f)) }
+        exercise.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Delete revealed"))
+        compose.runOnIdle { assertEquals(0, exercisesDeleted) }
+        exercise.performTouchInput { swipe(Offset(width * 0.9f, 20f), Offset(width * 0.1f, 20f)) }
+        compose.runOnIdle { assertEquals(1, exercisesDeleted) }
+    }
+
+    @OptIn(ExperimentalTestApi::class)
+    @Test
+    fun shortAndCancelledSwipesDoNotDeleteAndAccessibleActionsCanCloseOrConfirm() {
+        var deleted = 0
+        compose.setContent {
+            VibeCheckTheme {
+                StagedSwipeToDelete("set", { deleted++ }, Modifier.width(300.dp)) {
+                    Box(Modifier.fillMaxWidth().height(80.dp))
+                }
+            }
+        }
+        val set = compose.onNodeWithContentDescription("Swipe actions for set")
+        set.performTouchInput { swipe(center, center - Offset(10f, 0f)) }
+        set.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Closed"))
+        set.performCustomAccessibilityActionWithLabel("Reveal delete")
+        set.performTouchInput {
+            down(center)
+            moveTo(center - Offset(width / 2f, 0f))
+            cancel()
+        }
+        compose.runOnIdle { assertEquals(0, deleted) }
+        set.performCustomAccessibilityActionWithLabel("Close delete")
+        set.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Closed"))
+        set.performCustomAccessibilityActionWithLabel("Reveal delete")
+        compose.onNodeWithContentDescription("Delete set").performClick()
+        compose.runOnIdle { assertEquals(1, deleted) }
+    }
 
     @Test
     fun homeKeepsDateControlsTogetherWithoutRemovedHeadings() {

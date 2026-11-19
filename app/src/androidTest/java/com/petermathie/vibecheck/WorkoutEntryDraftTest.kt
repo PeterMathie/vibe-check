@@ -8,6 +8,7 @@ import com.petermathie.vibecheck.data.TrainingRepository
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.local.WorkoutSetEntity
+import com.petermathie.vibecheck.data.local.WorkoutSetBandEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.TrainingMode
 import kotlinx.coroutines.flow.first
@@ -108,6 +109,63 @@ class WorkoutEntryDraftTest {
         val restored = database.editorDao().sets().first().single { it.workoutExerciseId == exerciseId }
         assertEquals(2.75, restored.reps ?: 0.0, 0.0)
         assertEquals(72.125, restored.weightKg ?: 0.0, 0.0)
+    }
+
+    @Test(timeout = 120_000)
+    fun deletingSlotsRenumbersWithoutChangingSurvivingMeasurementsAndPersistsZeroSlots() = runBlocking {
+        val (_, exerciseId) = startWorkout()
+        val dao = database.editorDao()
+        val saved = pendingSet(pendingDraft(exerciseId).copy(setId = "saved", ordinal = 2), 5).copy(
+            weightKg = 20.0, holdMillis = 3_000, tutEntriesMillis = "[1000,2000]",
+            timeUnderTensionMillis = 9_000, addedWeightKg = 2.0,
+            variationNameSnapshot = "Frozen variation", variationInputConfigSnapshot = "timeHeld=true;manyTuts=true",
+        )
+        val draft = pendingDraft(exerciseId).copy(setId = "pending", ordinal = 3, performance = "12.", rpe = "8")
+        val band = dao.bands().first().first()
+        val link = WorkoutSetBandEntity(saved.id, band.id, 0, "Frozen band", band.widthCentimetres)
+        dao.set(saved)
+        dao.setBands(listOf(link))
+        dao.entryDraft(draft)
+        dao.deleteWorkoutSet(exerciseId, 1, 2)
+        assertEquals(saved.copy(ordinal = 1), dao.setById(saved.id))
+        assertEquals(listOf(link), dao.bandsForExercise(exerciseId))
+        assertEquals(listOf(draft.copy(ordinal = 2)), dao.entryDrafts(exerciseId))
+        dao.deleteWorkoutSet(exerciseId, 1, 1)
+        assertNull(dao.setById(saved.id))
+        assertEquals(emptyList<WorkoutSetBandEntity>(), dao.bandsForExercise(exerciseId))
+        assertEquals(listOf(draft.copy(ordinal = 1)), dao.entryDrafts(exerciseId))
+        dao.deleteWorkoutSet(exerciseId, 1, 0)
+        database.close()
+        openDatabase()
+        assertEquals(0, database.editorDao().workoutExerciseById(exerciseId)?.targetSets)
+        assertEquals(emptyList<WorkoutEntryDraftEntity>(), database.editorDao().entryDrafts(exerciseId))
+    }
+
+    @Test(timeout = 120_000)
+    fun deletingExerciseCascadesItsChildrenButLeavesProgrammeAndOtherWorkoutEntries() = runBlocking {
+        val (workout, exerciseId) = startWorkout()
+        val dao = database.editorDao()
+        val others = dao.workoutExercises().first().filter { it.id != exerciseId }
+        val catalogue = dao.exercises().first()
+        val programme = dao.entries().first()
+        val draft = pendingDraft(exerciseId)
+        val set = pendingSet(draft, 5)
+        dao.set(set)
+        dao.entryDraft(draft.copy(setId = "empty", ordinal = 2))
+        val band = dao.bands().first().first()
+        dao.setBands(listOf(WorkoutSetBandEntity(set.id, band.id, 0, band.name, band.widthCentimetres)))
+        dao.deleteWorkoutExercise(exerciseId)
+        assertNull(dao.workoutExerciseById(exerciseId))
+        assertNull(dao.setById(set.id))
+        assertEquals(emptyList<WorkoutEntryDraftEntity>(), dao.entryDrafts(exerciseId))
+        assertEquals(emptyList<WorkoutSetBandEntity>(), dao.bandsForExercise(exerciseId))
+        assertEquals(others, dao.workoutExercises().first())
+        assertEquals(catalogue, dao.exercises().first())
+        assertEquals(programme, dao.entries().first())
+        assertNotNull(dao.workouts().first().find { it.id == workout })
+        database.openHelper.readableDatabase.query(
+            "SELECT count(*) FROM workout_muscles WHERE workoutExerciseId=?", arrayOf(exerciseId),
+        ).use { it.moveToFirst(); assertEquals(0, it.getInt(0)) }
     }
 
     @Test(timeout = 120_000)

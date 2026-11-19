@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -156,6 +157,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
     val prefs = context.getSharedPreferences("settings",0)
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val completionEvent by viewModel.completionEvents.collectAsStateWithLifecycle()
+    val isStartingWorkout by viewModel.isStartingWorkout.collectAsStateWithLifecycle()
     val exercises by viewModel.exerciseResults.collectAsStateWithLifecycle()
     var destination by rememberSaveable { mutableStateOf(Destination.HOME) }
     var paletteId by rememberSaveable {
@@ -216,7 +218,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                 },
             ) { padding ->
             BackHandler(destination in moreDestinations) { destination = Destination.MORE }
-            Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 if(error != null) TextButton(onClick = { editor.error.value = null }) { Text(error.orEmpty(),color=MaterialTheme.colorScheme.error) }
                 AnimatedContent(
                     targetState = destination,
@@ -241,11 +243,22 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         completionEvent,
                         viewModel::consumeCompletionEvent,
                     )
-                    Destination.PROGRAMMES -> ProgrammeEditor(editor, state.mode, viewModel::setMode) { dayId, replace ->
-                        viewModel.startWorkout(dayId, replace) {
-                            haptics.perform(VibeHapticEvent.PLAY)
-                            destination = Destination.ACTIVE_WORKOUT
-                        }
+                    Destination.PROGRAMMES -> ProgrammeEditor(
+                        vm = editor,
+                        defaultMode = state.mode,
+                        onResume = { destination = Destination.ACTIVE_WORKOUT },
+                        isStartingWorkout = isStartingWorkout,
+                    ) { dayId, activeWorkoutId, finishCurrent ->
+                        viewModel.startWorkout(
+                            dayId,
+                            activeWorkoutId,
+                            finishCurrent,
+                            onStarted = {
+                                haptics.perform(VibeHapticEvent.PLAY)
+                                destination = Destination.ACTIVE_WORKOUT
+                            },
+                            onRejected = { editor.error.value = it },
+                        )
                     }
                     Destination.ACTIVE_WORKOUT -> WorkoutEditor(
                         vm = editor,

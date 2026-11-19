@@ -57,6 +57,8 @@ object DataTransfer {
                 val seen=mutableSetOf<List<Any>>()
                 repeat(rows.length()) { i ->
                     val row=rows.getJSONObject(i)
+                    if (table == "workout_sets" && !row.has("tutEntriesMillis")) row.put("tutEntriesMillis", "[]")
+                    if (table == "workout_entry_drafts" && !row.has("tutEntries")) row.put("tutEntries", "")
                     if (table == "tracker_fields" && !row.has("choiceOptionsJson")) {
                         val options = if (row.optString("valueType") == "CHOICE") {
                             legacyHabitChoices(

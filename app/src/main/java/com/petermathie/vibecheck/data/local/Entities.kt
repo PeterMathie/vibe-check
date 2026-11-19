@@ -128,6 +128,9 @@ data class BandEntity(
     val colourArgb: Long,
 )
 
+fun isSeededBandId(id: String): Boolean =
+    id in setOf("band-yellow", "band-red", "band-black", "band-purple")
+
 @Entity(tableName = "programmes", primaryKeys = ["id"])
 data class ProgrammeEntity(
     val id: String,
@@ -299,6 +302,7 @@ data class WorkoutSetEntity(
     val legacyReps: Int? = null,
     val legacyLeftReps: Int? = null,
     val legacyRightReps: Int? = null,
+    @androidx.room.ColumnInfo(defaultValue = "'[]'") val tutEntriesMillis: String = "[]",
 )
 
 @Entity(
@@ -359,6 +363,7 @@ data class WorkoutEntryDraftEntity(
     val updatedAt: Long,
     @androidx.room.ColumnInfo(defaultValue = "''") val timeHeld: String = "",
     @androidx.room.ColumnInfo(defaultValue = "''") val timeUnderTension: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''") val tutEntries: String = "",
 )
 
 @Entity(tableName = "trackers", primaryKeys = ["id"])
