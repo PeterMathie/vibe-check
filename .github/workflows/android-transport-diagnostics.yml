@@ -13,7 +13,6 @@ jobs:
     timeout-minutes: 15
     env:
       ADB_TRACE: adb,transport
-      ANDROID_ADB_LOG_PATH: ${{ runner.temp }}/home-adb-transport-native.log
       TRANSPORT_OUTPUT_DIR: ${{ github.workspace }}/transport-diagnostics
     steps:
       - uses: actions/checkout@v5
@@ -24,7 +23,8 @@ jobs:
       - name: Guard one attempt and exact isolated parent
         run: |
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$(git rev-parse HEAD^)" = 95dc606b24b538e58bed51f756b79324f5d35abe
+          test "$(git rev-parse HEAD^)" = 27d70a4069d26cccab284148472df8bd927a0310
+          printf 'ANDROID_ADB_LOG_PATH=%s\n' "$RUNNER_TEMP/home-adb-transport-native.log" >> "$GITHUB_ENV"
 
       - name: Checkout original runner without modifying it
         uses: actions/checkout@v5
