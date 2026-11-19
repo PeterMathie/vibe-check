@@ -13,6 +13,7 @@ import com.petermathie.vibecheck.data.local.WorkoutSetEntity
 import com.petermathie.vibecheck.domain.model.ActiveWorkout
 import com.petermathie.vibecheck.domain.model.ActivityDay
 import com.petermathie.vibecheck.domain.model.MuscleRecency
+import com.petermathie.vibecheck.domain.model.MuscleContribution
 import com.petermathie.vibecheck.domain.model.HistoryActivity
 import com.petermathie.vibecheck.domain.model.HistoryDayDetail
 import com.petermathie.vibecheck.domain.model.MuscleRole
@@ -60,6 +61,8 @@ private fun List<CompletedMuscleSetRow>.recencyAt(
         .map { (muscleId, muscleRows) ->
             val last = muscleRows.maxOfOrNull { it.finishedAt }
             val recentWindowStart = atMillis - 7 * 86_400_000L
+            val recentSets = muscleRows.filter { it.finishedAt >= recentWindowStart }.distinctBy { it.setId }
+            val ratings = recentSets.mapNotNull { it.rpe }
             MuscleRecency(
                 muscleId = muscleId,
                 lastTrainedAt = last,
@@ -69,6 +72,12 @@ private fun List<CompletedMuscleSetRow>.recencyAt(
                     .distinct(),
                 setEquivalents = muscleRows.filter { it.finishedAt >= recentWindowStart }
                     .sumOf { MuscleRole.valueOf(it.role).setEquivalent },
+                weeklyWorkingSets = recentSets.size,
+                weeklyAverageRpe = ratings.takeIf { it.isNotEmpty() }?.average(),
+                weeklyContributions = recentSets.groupBy { it.exerciseName to MuscleRole.valueOf(it.role) }
+                    .map { (exercise, sets) ->
+                        MuscleContribution(exercise.first, exercise.second, sets.size)
+                    },
             )
         }
 

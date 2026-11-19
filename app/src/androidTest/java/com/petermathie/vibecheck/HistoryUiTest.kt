@@ -10,9 +10,14 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.petermathie.vibecheck.data.TrainingRepository
 import com.petermathie.vibecheck.data.local.VibeDatabase
+import com.petermathie.vibecheck.data.local.TrackerEntity
+import com.petermathie.vibecheck.data.local.TrackerFieldEntity
+import com.petermathie.vibecheck.data.local.TrackerDailyValueEntity
+import com.petermathie.vibecheck.data.local.WorkoutEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.TrainingMode
 import com.petermathie.vibecheck.ui.HistoryDayScreen
+import com.petermathie.vibecheck.ui.HomeScreen
 import com.petermathie.vibecheck.ui.MainViewModel
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import java.time.LocalDate
@@ -36,6 +41,69 @@ class HistoryUiTest {
         if (::database.isInitialized) database else null
     }
     private val compose get() = lifecycle.compose
+
+    @Test
+    fun homeBreakdownListsRecordedValuesRatherThanOnlyTargetMetCounts() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val date = LocalDate.now().minusDays(1)
+        val day = date.toEpochDay()
+        val timestamp = date.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        runBlocking {
+            database.trackerDao().insertTrackers(listOf(
+                TrackerEntity("meditation", "Meditation", false),
+                TrackerEntity("mood", "Mood", false),
+                TrackerEntity("protein", "Protein", false),
+            ))
+            database.trackerDao().insertFields(listOf(
+                TrackerFieldEntity("minutes", "meditation", "Duration", "NUMBER", "min", "AT_LEAST", 10.0, 0),
+                TrackerFieldEntity("feeling", "mood", "Feeling", "TEXT", null, null, null, 0),
+                TrackerFieldEntity("grams", "protein", "Protein", "NUMBER", "g", "AT_LEAST", 120.0, 0),
+            ))
+            database.trackerDao().upsertValue(TrackerDailyValueEntity("minutes", day, 12.0, null, null, "", timestamp))
+            database.trackerDao().upsertValue(TrackerDailyValueEntity("feeling", day, null, null, "Calm", "", timestamp))
+            database.trackerDao().upsertValue(TrackerDailyValueEntity("grams", day, 50.0, null, null, "", timestamp))
+            database.workoutDao().insertWorkouts(listOf(
+                WorkoutEntity("finished", null, "Finished training", "STRENGTH", "FINISHED", timestamp, timestamp + 1_000, "Recorded workout note", null, false),
+                WorkoutEntity("draft", null, "Draft training", "STRENGTH", "DRAFT", timestamp, null, "", null, false),
+                WorkoutEntity("other", null, "Another day", "STRENGTH", "FINISHED", timestamp - 86_400_000, timestamp - 86_400_000, "", null, false),
+            ))
+        }
+        val viewModel = lifecycle.own(MainViewModel(
+            TrainingRepository(database, database.programmeDao(), database.workoutDao(), database.trackerDao(), context),
+            database.catalogueDao(),
+        ))
+        viewModel.selectHomeRecencyDay(day)
+        compose.setContent {
+            val state by viewModel.uiState.collectAsStateWithLifecycle()
+            VibeCheckTheme {
+                HomeScreen(
+                    state, viewModel::selectHistoryDay, viewModel::selectHomeRecencyDay, viewModel::setMode,
+                    onDayDismiss = { viewModel.selectHistoryDay(null) },
+                )
+            }
+        }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("$date: 3 activities", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("$date:", substring = true).performTouchInput { doubleClick() }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("Protein. Protein: 50.0 g").fetchSemanticsNodes().isNotEmpty()
+        }
+        for (activity in listOf(
+            "Finished training. Strength workout. Recorded workout note",
+            "Meditation. Duration: 12.0 min",
+            "Mood. Feeling: Calm",
+            "Protein. Protein: 50.0 g",
+        )) compose.onNodeWithContentDescription(activity).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Draft training", substring = true).assertDoesNotExist()
+        compose.onNodeWithContentDescription("Another day", substring = true).assertDoesNotExist()
+        assertEquals(4, viewModel.uiState.value.historyDay?.activities?.size)
+        assertEquals("Draft training", viewModel.uiState.value.activeWorkout?.name)
+        compose.onNodeWithContentDescription("Close day activity").performClick()
+        compose.onNodeWithContentDescription("Home content").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Historical day page").assertDoesNotExist()
+    }
 
     @Test
     fun navigatesHistoricalDaysAndSwitchesMapModesWithSelectedSemantics() {

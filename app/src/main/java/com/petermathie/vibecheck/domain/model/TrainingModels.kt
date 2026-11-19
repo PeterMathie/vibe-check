@@ -95,6 +95,15 @@ data class MuscleRecency(
     val band: MuscleRecencyBand,
     val contributingExerciseNames: List<String>,
     val setEquivalents: Double,
+    val weeklyWorkingSets: Int = 0,
+    val weeklyAverageRpe: Double? = null,
+    val weeklyContributions: List<MuscleContribution> = emptyList(),
+)
+
+data class MuscleContribution(
+    val exerciseName: String,
+    val role: MuscleRole,
+    val setCount: Int,
 )
 
 data class ActivityDay(
