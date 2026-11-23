@@ -167,7 +167,17 @@ class HabitUiTest {
         launch(listOf(number))
         val icon = compose.onNodeWithContentDescription("Edit Wellbeing settings")
         val iconBounds = icon.getUnclippedBoundsInRoot()
-        assertTrue(iconBounds.right - iconBounds.left >= 48.dp && iconBounds.bottom - iconBounds.top >= 48.dp)
+        withCiFailureDiagnostics(
+            compose, "habits-icon-touch-target",
+            mapOf(
+                "icon" to icon,
+                "heading" to compose.onNodeWithContentDescription("Reorder Wellbeing"),
+                "calendar" to compose.onNodeWithTag("Habit calendar ${tracker.id}"),
+                "viewport" to compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)),
+            ),
+        ) {
+            assertTrue(iconBounds.right - iconBounds.left >= 48.dp && iconBounds.bottom - iconBounds.top >= 48.dp)
+        }
         icon.performTouchInput { click() }
         compose.onNodeWithText("Edit habit").assertExists()
         assertFalse(fixturePreferences.getStringSet(COLLAPSED_HABITS, emptySet()).orEmpty().contains(tracker.id))
@@ -376,7 +386,18 @@ class HabitUiTest {
             val value = compose.onNodeWithTag("Habit entry value ${tracker.id}")
             assertEquals(readout.left, bounds.left)
             assertEquals(readout.right, value.getUnclippedBoundsInRoot().right)
-            assertTextEndsAtRight(value)
+            withCiFailureDiagnostics(
+                compose, "habits-readout-$date-$expanded",
+                mapOf(
+                    "readout" to compose.onNodeWithTag("Habit entry ${tracker.id}"),
+                    "date" to dateNode,
+                    "value" to value,
+                    "calendar" to compose.onNodeWithTag("Habit calendar ${tracker.id}"),
+                    "nextHabit" to compose.onNodeWithTag("Next habit"),
+                ),
+            ) {
+                assertTextEndsAtRight(value)
+            }
             dateNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
                 val layouts = mutableListOf<TextLayoutResult>()
                 assertTrue(action(layouts))
@@ -825,8 +846,10 @@ class HabitUiTest {
         input("Maximum goal").performTextInput("30")
         compose.onNodeWithContentDescription("Measurement type").performScrollTo().performClick()
         menuOption("Number").assertIsSelected()
-        androidx.test.espresso.Espresso.pressBack()
-        compose.onAllNodes(isPopup()).assertCountEquals(0)
+        withCiFailureDiagnostics(compose, "habits-measurement-native-back") {
+            androidx.test.espresso.Espresso.pressBack()
+            compose.onAllNodes(isPopup()).assertCountEquals(0)
+        }
         input("Measurement name").assertTextContains("Time practised")
         input("Unit (optional)").assertTextContains("min")
         input("Minimum goal").assertTextContains("10")
@@ -1157,10 +1180,23 @@ class HabitUiTest {
         assertTrue("Read checkbox must share its title row", (readTitle.top + readTitle.bottom) / 2 in checkboxBounds.top..checkboxBounds.bottom)
         val viewport = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
             .getUnclippedBoundsInRoot()
-        listOf(water, reading).forEach { habit ->
-            val calendar = compose.onNodeWithTag("Habit calendar ${habit.id}").getUnclippedBoundsInRoot()
-            assertTrue("Both complete six-row calendars must fit: $calendar in $viewport",
-                calendar.top >= viewport.top && calendar.bottom <= viewport.bottom)
+        withCiFailureDiagnostics(
+            compose, "habits-two-calendar-viewport",
+            mapOf(
+                "viewport" to compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)),
+                "waterTitle" to compose.onNodeWithText("Water"),
+                "waterInput" to input("g"),
+                "waterCalendar" to compose.onNodeWithTag("Habit calendar ${water.id}"),
+                "readTitle" to compose.onNodeWithText("Read"),
+                "readInput" to compose.onNodeWithContentDescription("Done"),
+                "readCalendar" to compose.onNodeWithTag("Habit calendar ${reading.id}"),
+            ),
+        ) {
+            listOf(water, reading).forEach { habit ->
+                val calendar = compose.onNodeWithTag("Habit calendar ${habit.id}").getUnclippedBoundsInRoot()
+                assertTrue("Both complete six-row calendars must fit: $calendar in $viewport",
+                    calendar.top >= viewport.top && calendar.bottom <= viewport.bottom)
+            }
         }
         val add = compose.onNodeWithContentDescription("Create new habit").getUnclippedBoundsInRoot()
         val lastCalendar = compose.onNodeWithTag("Habit calendar ${reading.id}").getUnclippedBoundsInRoot()

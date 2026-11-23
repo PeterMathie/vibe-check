@@ -309,13 +309,15 @@ class EndUserControlsTest {
         val inspect = map.fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label.startsWith("Inspect CHEST") }
         compose.runOnIdle { assertTrue(inspect.action()) }
         modal.assertIsDisplayed()
-        onView(isRoot()).inRoot(isDialog())
-            .check { view, error ->
-                if (error != null) throw error
-                assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
-            }
-            .perform(pressKey(KeyEvent.KEYCODE_BACK))
-        modal.assertDoesNotExist()
+        withCiFailureDiagnostics(compose, "home-muscle-native-back") {
+            onView(isRoot()).inRoot(isDialog())
+                .check { view, error ->
+                    if (error != null) throw error
+                    assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
+                }
+                .perform(pressKey(KeyEvent.KEYCODE_BACK))
+            modal.assertDoesNotExist()
+        }
     }
 
     @Test
@@ -832,13 +834,15 @@ class EndUserControlsTest {
         assertEquals(day, state.homeRecencyDay)
         compose.runOnIdle { state = state.copy(selectedHistoryDay = day, historyDay = HistoryDayDetail(day, emptyList())) }
         compose.onNodeWithText("No logged activity").assertIsDisplayed()
-        onView(isRoot()).inRoot(isDialog())
-            .check { view, error ->
-                if (error != null) throw error
-                assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
-            }
-            .perform(pressKey(KeyEvent.KEYCODE_BACK))
-        modal.assertDoesNotExist()
+        withCiFailureDiagnostics(compose, "home-day-native-back") {
+            onView(isRoot()).inRoot(isDialog())
+                .check { view, error ->
+                    if (error != null) throw error
+                    assertTrue("The native dialog owns input focus before Back", view.hasWindowFocus())
+                }
+                .perform(pressKey(KeyEvent.KEYCODE_BACK))
+            modal.assertDoesNotExist()
+        }
         compose.runOnIdle { state = state.copy(selectedHistoryDay = day) }
         compose.onNodeWithTag("Home day activity overlay").performTouchInput { click(Offset(5f, 5f)) }
         modal.assertDoesNotExist()
