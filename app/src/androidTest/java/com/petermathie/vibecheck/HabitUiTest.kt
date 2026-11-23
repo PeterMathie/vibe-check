@@ -1175,13 +1175,14 @@ class HabitUiTest {
         val readTitle = compose.onNodeWithText("Read").getUnclippedBoundsInRoot()
         assertTrue("Water input must share its title row", (waterTitle.top + waterTitle.bottom) / 2 in numberBounds.top..numberBounds.bottom)
         assertTrue("Read checkbox must share its title row", (readTitle.top + readTitle.bottom) / 2 in checkboxBounds.top..checkboxBounds.bottom)
-        val viewport = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
-            .getUnclippedBoundsInRoot()
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        val viewport = list.getUnclippedBoundsInRoot()
         listOf(water, reading).forEach { habit ->
             val calendar = compose.onNodeWithTag("Habit calendar ${habit.id}").getUnclippedBoundsInRoot()
             assertTrue("Both complete six-row calendars must fit: $calendar in $viewport",
                 calendar.top >= viewport.top && calendar.bottom <= viewport.bottom)
         }
+        list.performScrollToKey("add-habit")
         val add = compose.onNodeWithContentDescription("Create new habit").getUnclippedBoundsInRoot()
         val lastCalendar = compose.onNodeWithTag("Habit calendar ${reading.id}").getUnclippedBoundsInRoot()
         assertTrue("Add must follow the last habit", add.top >= lastCalendar.bottom)
@@ -1199,6 +1200,7 @@ class HabitUiTest {
                         cell.bottom <= add.top)
                 }
         }
+        list.performScrollToIndex(0)
         captureFixture("habits-compact-two-calendars")
         input("g").performTextReplacement("12.5")
         awaitSaved {
