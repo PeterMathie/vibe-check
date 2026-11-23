@@ -1079,8 +1079,10 @@ class HabitUiTest {
         swipeBack()
         assertMonth(first)
         val firstEntry = "${first.atDay(1).format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))}: 10 g"
-        compose.onNodeWithContentDescription(firstEntry).performTouchInput { click() }
-        compose.onNodeWithText(firstEntry).assertExists()
+        compose.onNodeWithContentDescription(firstEntry).performTouchInput { click() }.assertIsSelected()
+        compose.onNodeWithTag("Habit entry date ${tracker.id}")
+            .assertTextEquals(habitCalendarDate(first.atDay(1))).assertIsDisplayed()
+        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertTextEquals("10 g").assertIsDisplayed()
         captureFixture("habits-calendar-swipe-oldest")
         swipeForward()
         assertMonth(current.minusMonths(1))
