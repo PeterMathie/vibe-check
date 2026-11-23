@@ -1094,6 +1094,7 @@ class HabitUiTest {
         val beforeScroll = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
         compose.onNodeWithTag("Habit calendar ${tracker.id}").performTouchInput { swipeUp() }
         assertTrue(list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > beforeScroll)
+        list.performScrollToNode(hasTestTag("Habit calendar ${tracker.id}"))
         assertMonth(current)
         assertEquals(history.sortedBy { it.epochDay },
             runBlocking { database.editorDao().values().first() }.sortedBy { it.epochDay })
