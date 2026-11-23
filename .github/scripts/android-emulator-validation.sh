@@ -20,14 +20,31 @@ if [[ "${HABITS_CI_DIAGNOSTICS:-false}" == "true" ]]; then
     exit 1
   fi
   diagnostic_id="${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
-  selectors="$(python3 .github/scripts/habits-ci-diagnostics.py selectors --output-dir "$output_dir" --run-id "$diagnostic_id")"
+  device_test_file="$(python3 .github/scripts/habits-ci-diagnostics.py selectors --output-dir "$output_dir" --run-id "$diagnostic_id")"
   instrumentation_args=(
-    "-Pandroid.testInstrumentationRunnerArguments.class=$selectors"
+    "-Pandroid.testInstrumentationRunnerArguments.testFile=$device_test_file"
     "-Pandroid.testInstrumentationRunnerArguments.ciFailureDiagnostics=true"
     "-Pandroid.testInstrumentationRunnerArguments.ciDiagnosticRunId=$diagnostic_id"
   )
   printf 'head=%s\nrunner_arguments=%s\n' "$(git rev-parse HEAD)" "${instrumentation_args[*]}" \
     > "$output_dir/focused-dispatch.txt"
+  adb shell test ! -e "$device_test_file"
+  cleanup_selector_file() {
+    local status=$?
+    if adb shell rm -f "$device_test_file"; then
+      echo "selector_file_cleanup=removed" >> "$output_dir/focused-dispatch.txt"
+    else
+      echo "Failed to remove the owned selector file: $device_test_file" >&2
+      if [[ "$status" -eq 0 ]]; then status=1; fi
+    fi
+    exit "$status"
+  }
+  trap cleanup_selector_file EXIT
+  adb push "$output_dir/focused-selectors.txt" "$device_test_file"
+  adb shell chmod 644 "$device_test_file"
+  adb exec-out cat "$device_test_file" > "$output_dir/focused-selectors-device.txt"
+  python3 .github/scripts/habits-ci-diagnostics.py verify-transport \
+    --output-dir "$output_dir" --run-id "$diagnostic_id"
 fi
 
 # Exclude compilation from the runtime watchdog. In CI, 155 of 175 tests took

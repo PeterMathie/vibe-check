@@ -20,6 +20,7 @@ import androidx.compose.ui.test.printToString
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
 import org.json.JSONArray
 import org.json.JSONObject
@@ -136,7 +137,10 @@ private object CiFailureCapture {
             put("runId", runId)
             put("startedUptimeMillis", started)
             put("completedUptimeMillis", SystemClock.uptimeMillis())
-            put("instrumentationSelectors", InstrumentationRegistry.getArguments().getString("class"))
+            val testFile = requireNotNull(InstrumentationRegistry.getArguments().getString("testFile"))
+            require(testFile == "/data/local/tmp/vibe-ci-selectors-$runId.txt")
+            put("instrumentationTestFile", testFile)
+            put("instrumentationSelectors", File(testFile).readText(Charsets.UTF_8))
             put("composeDensity", compose.density.density)
             put("composeFontScale", compose.density.fontScale)
             put("nativeRoots", roots)

@@ -3,6 +3,7 @@
 
 import argparse
 import collections
+import hashlib
 import json
 import pathlib
 import re
@@ -31,6 +32,35 @@ BOUNDARIES = {
     "habitIconOpensSettingsWhileNameTogglesAndLongPressReorders": "habits-icon-touch-target",
     "calendarInspectionKeepsDatesLeftAndMeasurementsRightWithoutMovingTheNextHabit": "habits-readout-",
 }
+
+
+def selector_text():
+    return "\n".join(SELECTORS) + "\n"
+
+
+def selector_manifest(run_id):
+    return {
+        "runId": run_id,
+        "transport": "testFile",
+        "deviceTestFile": f"/data/local/tmp/vibe-ci-selectors-{run_id}.txt",
+        "testFileSha256": hashlib.sha256(selector_text().encode("utf-8")).hexdigest(),
+        "selectors": SELECTORS,
+    }
+
+
+def verify_transport(output_dir, run_id):
+    issues = []
+    expected = selector_manifest(run_id)
+    manifest_path = output_dir / "focused-selectors.json"
+    if not manifest_path.is_file():
+        issues.append("Missing selector manifest")
+    elif json.loads(manifest_path.read_text()) != expected:
+        issues.append("Wrong selector manifest identity")
+    for name in ("focused-selectors.txt", "focused-selectors-device.txt"):
+        path = output_dir / name
+        if not path.is_file() or path.read_bytes() != selector_text().encode("utf-8"):
+            issues.append(f"{name}: missing or not the exact eleven approved method lines")
+    return {**expected, "issues": issues}
 
 
 def account_results(report_dir):
@@ -90,7 +120,11 @@ def verify_diagnostics(output_dir, run_id, results):
     for path in sorted((output_dir / "ci-failure-diagnostics").glob("*.json")):
         data = json.loads(path.read_text())
         captures.append(data)
-        if data.get("runId") != run_id or set(data.get("instrumentationSelectors", "").split(",")) != set(SELECTORS):
+        if (
+            data.get("runId") != run_id
+            or data.get("instrumentationTestFile") != selector_manifest(run_id)["deviceTestFile"]
+            or data.get("instrumentationSelectors") != selector_text()
+        ):
             issues.append(f"{path.name}: wrong run or instrumentation selector identity")
         for suffix in (".png", "-window.txt", "-activity.txt", "-input.txt"):
             artifact = path.with_name(path.stem + suffix)
@@ -118,7 +152,7 @@ def verify_diagnostics(output_dir, run_id, results):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("selectors", "verify"))
+    parser.add_argument("mode", choices=("selectors", "verify-transport", "verify"))
     parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     parser.add_argument("--report-dir", type=pathlib.Path)
     parser.add_argument("--run-id", required=True)
@@ -129,17 +163,23 @@ def main():
         parser.error("The approved selector set must contain exactly eleven unique methods")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     if args.mode == "selectors":
-        (args.output_dir / "focused-selectors.json").write_text(json.dumps({
-            "runId": args.run_id, "selectors": SELECTORS,
-        }, indent=2) + "\n")
-        print(",".join(SELECTORS))
+        manifest = selector_manifest(args.run_id)
+        (args.output_dir / "focused-selectors.txt").write_bytes(selector_text().encode("utf-8"))
+        (args.output_dir / "focused-selectors.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        print(manifest["deviceTestFile"])
         return 0
+    transport = verify_transport(args.output_dir, args.run_id)
+    if args.mode == "verify-transport":
+        (args.output_dir / "focused-transport-verification.json").write_text(json.dumps(transport, indent=2) + "\n")
+        print(json.dumps(transport, indent=2))
+        return 0 if not transport["issues"] else 1
     if args.report_dir is None:
         parser.error("--report-dir is required for verification")
     report = account_results(args.report_dir)
+    report["transport"] = transport
     report["diagnostics"] = verify_diagnostics(args.output_dir, args.run_id, report["results"])
     report["runId"] = args.run_id
-    report["accounted"] = not report["issues"] and not report["diagnostics"]["issues"]
+    report["accounted"] = not report["issues"] and not report["diagnostics"]["issues"] and not transport["issues"]
     (args.output_dir / "focused-accounting.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if report["accounted"] else 1
