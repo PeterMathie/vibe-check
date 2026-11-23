@@ -38,7 +38,8 @@ data class MainUiState(
     val programmeDays: List<ProgrammeDaySummary> = emptyList(),
     val activeWorkout: ActiveWorkout? = null,
     val recency: List<MuscleRecency> = emptyList(),
-    val freshnessByDay: Map<Long, List<MuscleRecency>> = emptyMap(),
+    val recencyMode: TrainingMode? = null,
+    val recencyAsOfMillis: Long? = null,
     val activityDays: List<ActivityDay> = emptyList(),
     val homeRecencyDay: Long? = null,
     val selectedHistoryDay: Long? = null,
@@ -55,7 +56,7 @@ private data class CoreUiState(
     val mode: TrainingMode,
     val programmeDays: List<ProgrammeDaySummary>,
     val activeWorkout: ActiveWorkout?,
-    val recency: List<MuscleRecency>,
+    val recency: RecencySnapshot,
     val activityDays: List<ActivityDay>,
 )
 
@@ -64,6 +65,12 @@ private data class RecencyQuery(
     val homeDay: Long?,
     val historyDay: Long?,
     val now: Long,
+)
+
+private data class RecencySnapshot(
+    val mode: TrainingMode,
+    val asOfMillis: Long,
+    val muscles: List<MuscleRecency>,
 )
 
 @HiltViewModel
@@ -89,25 +96,14 @@ class MainViewModel @Inject constructor(
             val atMillis = day?.let { epochDay ->
                 LocalDate.ofEpochDay(epochDay).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1
             } ?: query.now
-            repository.observeMuscleRecency(query.mode, atMillis)
+            repository.observeMuscleRecency(query.mode, atMillis).map {
+                RecencySnapshot(query.mode, atMillis, it)
+            }
         }
 
     private val history = selectedHistoryDay.flatMapLatest { day ->
         if (day == null) kotlinx.coroutines.flow.flowOf(null)
         else repository.observeHistoryDay(day).map { it as HistoryDayDetail? }
-    }
-
-    private val freshnessByDay = combine(mode, homeRecencyDay, clock) { currentMode, homeDay, now ->
-        val today = LocalDate.now()
-        val selectedDate = LocalDate.ofEpochDay(homeDay ?: today.toEpochDay()).coerceAtMost(today)
-        Triple(currentMode, freshnessMonthRange(java.time.YearMonth.from(selectedDate), today), now)
-    }.flatMapLatest { (currentMode, range, now) ->
-        repository.observeMuscleRecencyRange(
-            mode = currentMode,
-            firstEpochDay = range.firstDate.toEpochDay(),
-            lastEpochDay = range.lastDate.toEpochDay(),
-            now = now,
-        )
     }
 
     private val coreState = combine(
@@ -120,13 +116,14 @@ class MainViewModel @Inject constructor(
         CoreUiState(currentMode, days, workout, currentRecency, activity)
     }
 
-    val uiState: StateFlow<MainUiState> = combine(coreState, homeRecencyDay, selectedHistoryDay, history, freshnessByDay) { core, homeDay, selectedDay, dayHistory, freshness ->
+    val uiState: StateFlow<MainUiState> = combine(coreState, homeRecencyDay, selectedHistoryDay, history) { core, homeDay, selectedDay, dayHistory ->
         MainUiState(
             mode = core.mode,
             programmeDays = core.programmeDays,
             activeWorkout = core.activeWorkout,
-            recency = core.recency,
-            freshnessByDay = freshness,
+            recency = core.recency.muscles,
+            recencyMode = core.recency.mode,
+            recencyAsOfMillis = core.recency.asOfMillis,
             activityDays = core.activityDays,
             homeRecencyDay = homeDay,
             selectedHistoryDay = selectedDay,

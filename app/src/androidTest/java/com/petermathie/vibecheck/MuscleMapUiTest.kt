@@ -1,17 +1,24 @@
 package com.petermathie.vibecheck
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PixelMap
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.petermathie.vibecheck.domain.model.AnatomySex
@@ -126,6 +133,87 @@ class MuscleMapUiTest {
         }
         assertTrue("Expected rendered head outline, found $headPixels pixels", headPixels > 20)
         assertTrue("Expected rendered feet outline, found $feetPixels pixels", feetPixels > 20)
+    }
+
+    @Test
+    fun musclesOnlyMapKeepsWidthsAndBalancedVerticalPadding() {
+        val crop = mutableStateOf(false)
+        var tappedMuscle: String? = null
+        val palette = VibePalettes.presets.first().light.copy(
+            diagramLine = Color.Magenta,
+            recencyNever = Color.Green,
+            surface = Color.White,
+        )
+        compose.setContent {
+            VibeCheckTheme(palette) {
+                Row {
+                    AnatomyView.entries.forEach { view ->
+                        MuscleMap(
+                            sex = AnatomySex.MALE,
+                            view = view,
+                            states = emptyMap(),
+                            onMuscleTap = { tappedMuscle = it },
+                            modifier = androidx.compose.ui.Modifier.width(140.dp)
+                                .height(if (crop.value) 320.dp else 400.dp)
+                                .background(palette.surface),
+                            musclesOnly = crop.value,
+                            alignToLegendBounds = true,
+                            referenceCanvasHeight = 400.dp,
+                        )
+                    }
+                }
+            }
+        }
+        val before = AnatomyView.entries.associateWith { view ->
+            compose.onNodeWithContentDescription("male ${view.name.lowercase()} freshness map")
+                .captureToImage().toPixelMap()
+        }
+        fun outlinePixels(pixels: PixelMap) = (0 until pixels.width).sumOf { x ->
+            (0 until pixels.height).count { y ->
+                val color = pixels[x, y]
+                color.red > 0.95f && color.blue > 0.95f && color.green < 0.95f
+            }
+        }
+        fun muscleBounds(pixels: PixelMap): List<Int> {
+            var left = pixels.width
+            var top = pixels.height
+            var right = 0
+            var bottom = 0
+            for (x in 0 until pixels.width) for (y in 0 until pixels.height) {
+                val color = pixels[x, y]
+                if (color.green > 0.8f && color.red < 0.2f && color.blue < 0.2f) {
+                    left = minOf(left, x)
+                    top = minOf(top, y)
+                    right = maxOf(right, x)
+                    bottom = maxOf(bottom, y)
+                }
+            }
+            assertTrue(right > left && bottom > top)
+            return listOf(left, top, right, bottom)
+        }
+        compose.runOnIdle { crop.value = true }
+        AnatomyView.entries.forEach { view ->
+            val pixels = compose.onNodeWithContentDescription("male ${view.name.lowercase()} freshness map")
+                .captureToImage().toPixelMap()
+            val original = before.getValue(view)
+            assertEquals(original.width, pixels.width)
+            assertTrue("$view: crop must shorten the map", pixels.height < original.height)
+            assertTrue("$view: default History outlines remain", outlinePixels(original) > 20)
+            assertEquals("$view: Home has no silhouette outlines", 0, outlinePixels(pixels))
+            val oldBounds = muscleBounds(original)
+            val newBounds = muscleBounds(pixels)
+            assertEquals((oldBounds[2] - oldBounds[0]).toFloat(), (newBounds[2] - newBounds[0]).toFloat(), 1f)
+            val topPadding = newBounds[1].toFloat() / pixels.height
+            val bottomPadding = (pixels.height - newBounds[3]).toFloat() / pixels.height
+            assertTrue("$view: modest top breathing room: $topPadding", topPadding in 0.04f..0.08f)
+            assertTrue("$view: modest bottom breathing room: $bottomPadding", bottomPadding in 0.04f..0.08f)
+            assertEquals(topPadding, bottomPadding, 0.01f)
+        }
+        compose.onNodeWithContentDescription("male front freshness map").performTouchInput {
+            down(Offset(width * 0.4f, height * 0.15f))
+            up()
+        }
+        compose.runOnIdle { assertEquals("CHEST", tappedMuscle) }
     }
 
     @Test

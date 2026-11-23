@@ -29,6 +29,12 @@ internal data class WorkoutLoggingData(
     val definitions: List<ExerciseEntity> = emptyList(),
 )
 
+internal data class HabitEditorData(
+    val trackers: List<TrackerEntity>,
+    val fields: List<TrackerFieldEntity>,
+    val values: List<TrackerDailyValueEntity>,
+)
+
 @HiltViewModel
 class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewModel() {
     suspend fun exportJson() = com.petermathie.vibecheck.data.DataTransfer.export(db)
@@ -63,6 +69,9 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val trackers = dao.trackers().live()
     val fields = dao.fields().live()
     val values = dao.values().live()
+    internal val habitEditorData: StateFlow<HabitEditorData?> = combine(
+        dao.trackers(), dao.fields(), dao.values(), ::HabitEditorData,
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val measurements = dao.measurements().live()
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
@@ -148,11 +157,18 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         }
     }
     fun save(row: TrackerEntity) = write { trackerStore.saveTracker(row) }
-    fun deleteTrackerIfEmpty(id: String) = write { trackerStore.deleteTrackerIfEmpty(id) }
+    fun deleteTrackerIfEmpty(id: String, onSaved: () -> Unit = {}, onFailure: () -> Unit = {}) =
+        write(onSaved, onFailure) { trackerStore.deleteTrackerIfEmpty(id) }
     fun createTracker(row: TrackerEntity) = write { trackerStore.createTracker(row) }
+    fun saveHabitEditor(
+        row: TrackerEntity,
+        fields: List<TrackerFieldEntity>,
+        creating: Boolean,
+        onSaved: () -> Unit,
+        onFailure: () -> Unit,
+    ) = write(onSaved, onFailure) { trackerStore.saveEditor(row, fields, creating) }
     fun moveTracker(id: String, delta: Int) = write { trackerStore.moveTracker(id, delta) }
     fun save(row: TrackerFieldEntity) = write { trackerStore.saveField(row) }
-    fun moveTrackerField(id: String, delta: Int) = write { trackerStore.moveField(id, delta) }
     fun save(row: TrackerDailyValueEntity, onSaved: () -> Unit = {}) = write(onSaved) { trackerStore.saveValue(row) }
     fun save(row: BodyMeasurementEntity) = write { dao.measurement(row) }
     fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }

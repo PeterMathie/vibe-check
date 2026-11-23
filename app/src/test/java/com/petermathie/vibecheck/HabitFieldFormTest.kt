@@ -24,6 +24,23 @@ class HabitFieldFormTest {
     )
 
     @Test
+    fun goalDefaultsToNoneAndSelectedGoalsRequireAValue() {
+        val empty = field.copy(targetComparison = null, targetValue = null)
+        val form = HabitFieldForm.from(empty)
+        assertEquals(HabitFieldForm.NONE, form.comparison)
+        assertTrue(form.canSave)
+        assertNull(form.applyTo(empty).targetValue)
+        assertFalse(form.copy(comparison = "AT_LEAST").canSave)
+        val goal = form.copy(comparison = "AT_LEAST", target = "12")
+        assertTrue(goal.canSave)
+        assertEquals(12.0, goal.applyTo(empty).targetValue)
+        val cleared = goal.copy(comparison = HabitFieldForm.NONE, target = "", targetMaximum = "").applyTo(field)
+        assertNull(cleared.targetComparison)
+        assertNull(cleared.targetValue)
+        assertNull(cleared.targetMaxValue)
+    }
+
+    @Test
     fun numericRangeRoundTripsWithoutChangingIdentityOrPosition() {
         val updated = HabitFieldForm.from(field).copy(
             target = "10",
@@ -50,7 +67,19 @@ class HabitFieldFormTest {
         assertFalse(form.isRangeValid)
         assertFalse(form.canSave)
         assertFalse(form.copy(target = "NaN").isTargetValid)
+        assertFalse(form.copy(target = "invalid", targetMaximum = "30").isRangeValid)
+        assertFalse(form.copy(target = "Infinity", targetMaximum = "30").isRangeValid)
         assertTrue(form.copy(target = "").isRangeValid)
+    }
+
+    @Test
+    fun newNegativeGoalsAreRejectedWithoutBlockingUnchangedLegacyGoals() {
+        val form = HabitFieldForm.from(field).copy(target = "-1")
+        assertFalse(form.isValidFor(null))
+        assertFalse(form.isValidFor(field))
+        assertTrue(form.isValidFor(field.copy(targetValue = -1.0)))
+        assertTrue(form.copy(target = "0").isValidFor(null))
+        assertFalse(form.copy(target = "Infinity").isValidFor(null))
     }
 
     @Test

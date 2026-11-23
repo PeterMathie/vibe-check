@@ -50,6 +50,8 @@ data class CompletedMuscleSetRow(
     val exerciseName: String,
     val muscleId: String,
     val role: String,
+    val setId: String,
+    val rpe: Double?,
 )
 
 data class ActivityWorkoutRow(val epochMillis: Long)
@@ -276,7 +278,7 @@ interface WorkoutDao {
         )
         SELECT w.id AS workoutId, w.finishedAt AS finishedAt, w.mode AS mode,
                COALESCE(NULLIF(we.exerciseName,''),e.canonicalName) AS exerciseName,
-               em.muscleId AS muscleId, em.role AS role
+               em.muscleId AS muscleId, em.role AS role, ws.id AS setId, ws.rpe AS rpe
         FROM workouts w
         JOIN workout_exercises we ON we.workoutId = w.id
         JOIN workout_sets ws ON ws.workoutExerciseId = we.id
@@ -340,6 +342,7 @@ interface TrackerDao {
     suspend fun updateOutcome(trackerId: String, epochDay: Long) {
         val fields = activeFields(trackerId)
         val values = valuesForDay(fields.firstOrNull()?.trackerId ?: return, epochDay)
+            .filter { value -> fields.any { it.id == value.fieldId } }
         if (values.isEmpty()) {
             deleteOutcome(trackerId, epochDay)
             return

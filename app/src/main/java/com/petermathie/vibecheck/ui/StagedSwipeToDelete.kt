@@ -1,13 +1,17 @@
 package com.petermathie.vibecheck.ui
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -15,6 +19,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -27,6 +33,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 
 internal class StagedSwipeState {
     var revealed by mutableStateOf(false)
@@ -43,21 +50,48 @@ internal fun StagedSwipeToDelete(
     modifier: Modifier = Modifier,
     state: StagedSwipeState = remember { StagedSwipeState() },
     content: @Composable () -> Unit,
+) = StagedSwipeAction(label, onDelete, modifier, state, edit = false, content)
+
+@Composable
+internal fun StagedSwipeToEdit(
+    label: String,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) = StagedSwipeAction(label, { onEdit() }, modifier, remember { StagedSwipeState() }, edit = true, content)
+
+@Composable
+private fun StagedSwipeAction(
+    label: String,
+    onAction: suspend () -> Unit,
+    modifier: Modifier,
+    state: StagedSwipeState,
+    edit: Boolean,
+    content: @Composable () -> Unit,
 ) = with(state) {
     var width by remember { mutableIntStateOf(0) }
     val threshold = with(LocalDensity.current) { 48.dp.toPx() }
-    val restingOffset by animateFloatAsState(if (revealed) -width / 3f else 0f, label = "delete reveal")
+    val revealWidth = if (edit) with(LocalDensity.current) { 64.dp.toPx() } else width / 3f
+    val direction = if (edit) 1f else -1f
+    val actionName = if (edit) "Edit" else "Delete"
+    val restingOffset by animateFloatAsState(
+        if (revealed) direction * revealWidth else 0f,
+        if (edit && LocalVibeReducedMotion.current) snap() else spring(),
+        label = "swipe action reveal",
+    )
     val offset = if (dragging) {
-        ((if (revealedAtStart) -width / 3f else 0f) + distance).coerceIn(-width.toFloat(), 0f)
+        direction * ((if (revealedAtStart) revealWidth else 0f) + direction * distance)
+            .coerceIn(0f, width.toFloat())
     } else restingOffset
-    val currentDelete by rememberUpdatedState(onDelete)
+    val currentAction by rememberUpdatedState(onAction)
     val scope = rememberCoroutineScope()
-    fun delete() {
+    fun act() {
         if (!deleting) {
             deleting = true
+            if (edit) revealed = false
             scope.launch {
                 try {
-                    currentDelete()
+                    currentAction()
                 } finally {
                     deleting = false
                 }
@@ -65,16 +99,16 @@ internal fun StagedSwipeToDelete(
         }
     }
     Box(
-        modifier.fillMaxWidth().clipToBounds()
+        modifier.then(if (edit) Modifier.widthIn(min = 64.dp) else Modifier.fillMaxWidth()).clipToBounds()
             .onSizeChanged { width = it.width }
             .semantics {
                 contentDescription = "Swipe actions for $label"
-                stateDescription = if (revealed) "Delete revealed" else "Closed"
+                stateDescription = if (revealed) "$actionName revealed" else "Closed"
                 customActions = if (revealed) listOf(
-                    CustomAccessibilityAction("Delete $label") { delete(); true },
-                    CustomAccessibilityAction("Close delete") { revealed = false; true },
+                    CustomAccessibilityAction("$actionName $label") { act(); true },
+                    CustomAccessibilityAction("Close ${actionName.lowercase()}") { revealed = false; true },
                 ) else listOf(
-                    CustomAccessibilityAction("Reveal delete") { revealed = true; true },
+                    CustomAccessibilityAction("Reveal ${actionName.lowercase()}") { revealed = true; true },
                 )
             }
             .pointerInput(state, label, threshold, deleting) {
@@ -86,9 +120,9 @@ internal fun StagedSwipeToDelete(
                     },
                     onDragEnd = {
                         dragging = false
-                        if (distance <= -threshold) {
-                            if (revealedAtStart) delete() else revealed = true
-                        } else if (distance >= threshold) {
+                        if (distance * direction >= threshold) {
+                            if (revealedAtStart && !edit) act() else revealed = true
+                        } else if (distance * direction <= -threshold) {
                             revealed = false
                         }
                         distance = 0f
@@ -98,9 +132,19 @@ internal fun StagedSwipeToDelete(
                 )
             },
     ) {
-        if (revealed || dragging) {
+        if (edit && (revealed || dragging)) {
+            Box(Modifier.matchParentSize().drawWithContent {
+                clipRect(right = offset.coerceAtLeast(0f)) { this@drawWithContent.drawContent() }
+            }) {
+                IconButton(
+                    onClick = { act() },
+                    enabled = revealed && !dragging && !deleting,
+                    modifier = Modifier.align(Alignment.CenterStart).padding(horizontal = 8.dp),
+                ) { Icon(Icons.Outlined.Edit, "Edit $label settings", tint = MaterialTheme.colorScheme.primary) }
+            }
+        } else if (!edit && (revealed || dragging)) {
             IconButton(
-                onClick = { delete() },
+                onClick = { act() },
                 enabled = revealed && !dragging && !deleting,
                 modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
             ) {

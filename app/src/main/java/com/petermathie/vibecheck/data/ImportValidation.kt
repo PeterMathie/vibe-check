@@ -66,6 +66,7 @@ internal object ImportValidation {
         oneOf("valueType", numericTrackers + setOf("BOOLEAN", "TEXT", "CHOICE", "DATETIME"))
         oneOf("targetComparison", setOf("AT_LEAST", "AT_MOST", "EXACTLY", "RANGE"))
         oneOf("choiceIntensity", HabitChoiceIntensity.entries.map { it.name }.toSet())
+        oneOf("heatmapMode", setOf("RELATIVE", "GOAL"))
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
         if (table == "bands") {
@@ -146,6 +147,7 @@ internal object ImportValidation {
 
     fun relationships(sql: SupportSQLiteDatabase) {
         fun reject(query: String, message: String) = sql.query(query).use { require(!it.moveToFirst()) { message } }
+        reject("SELECT t.id FROM trackers t LEFT JOIN tracker_fields f ON f.id=t.heatmapFieldId AND f.trackerId=t.id WHERE t.heatmapFieldId IS NOT NULL AND (f.id IS NULL OR f.isArchived=1) LIMIT 1", "Heatmap measurement must belong to its habit and be active")
         reject("SELECT id FROM bands LIMIT 1 OFFSET ${com.petermathie.vibecheck.domain.programme.MAX_RESISTANCE_BANDS}", "At most eight resistance bands can be configured")
         reject("SELECT s.id FROM workout_sets s JOIN workout_exercises we ON we.id=s.workoutExerciseId LEFT JOIN exercise_variations v ON v.id=s.variationId WHERE s.variationId IS NOT NULL AND (v.id IS NULL OR v.exerciseId != we.actualExerciseId) LIMIT 1", "A set variation does not belong to the performed exercise")
         reject("SELECT wm.muscleId FROM workout_muscles wm LEFT JOIN muscles m ON m.id=wm.muscleId WHERE m.id IS NULL LIMIT 1", "Unknown muscle in workout snapshot")

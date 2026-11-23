@@ -1,9 +1,9 @@
 package com.petermathie.vibecheck.ui.anatomy
 
 import android.graphics.Region
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.aspectRatio
@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -23,17 +25,20 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
-import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.Dp
 import com.petermathie.vibecheck.domain.model.AnatomySex
 import com.petermathie.vibecheck.domain.model.MuscleRecencyBand
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 import com.petermathie.vibecheck.ui.theme.freshnessColors
 import com.petermathie.vibecheck.ui.theme.interpolateFreshnessBandColor
-import androidx.compose.ui.semantics.stateDescription
+import kotlin.math.ceil
 import kotlin.math.min
 
 enum class AnatomyView { FRONT, BACK }
@@ -42,9 +47,65 @@ internal const val MUSCLE_COLOR_TRANSITION_MILLIS = 35
 internal const val MUSCLE_MAP_HORIZONTAL_SCALE = 1.12f
 internal const val MUSCLE_MAP_VERTICAL_STRETCH = 1.10f
 internal const val MUSCLE_MAP_GLOW_OVERFLOW = 8f
+internal const val MUSCLE_MAP_VERTICAL_FILL = 0.9f
 
 private data class ParsedOutline(val def: OutlinePathDef, val path: Path)
 private data class ParsedMuscle(val def: MusclePathDef, val path: Path, val region: Region)
+internal data class MuscleMapBounds(val outline: Rect, val muscles: Rect)
+private data class ParsedDiagram(
+    val definition: MuscleDiagramDef,
+    val outlines: List<ParsedOutline>,
+    val muscles: List<ParsedMuscle>,
+    val bounds: MuscleMapBounds,
+)
+
+private fun pathBounds(paths: List<Pair<BodySide, Path>>, centerX: Float): Rect {
+    val bounds = paths.map { (side, path) -> side to path.getBounds() }
+    return Rect(
+        bounds.minOf { (side, rect) -> if (side == BodySide.LEFT) minOf(rect.left, 2f * centerX - rect.right) else rect.left } - MUSCLE_MAP_GLOW_OVERFLOW,
+        bounds.minOf { it.second.top } - MUSCLE_MAP_GLOW_OVERFLOW,
+        bounds.maxOf { (side, rect) -> if (side == BodySide.LEFT) maxOf(rect.right, 2f * centerX - rect.left) else rect.right } + MUSCLE_MAP_GLOW_OVERFLOW,
+        bounds.maxOf { it.second.bottom } + MUSCLE_MAP_GLOW_OVERFLOW,
+    )
+}
+
+@Composable
+private fun rememberParsedDiagram(sex: AnatomySex, view: AnatomyView): ParsedDiagram = remember(sex, view) {
+    val diagram = when (sex to view) {
+        AnatomySex.MALE to AnatomyView.FRONT -> MuscleDiagrams.MaleFront
+        AnatomySex.MALE to AnatomyView.BACK -> MuscleDiagrams.MaleBack
+        AnatomySex.FEMALE to AnatomyView.FRONT -> MuscleDiagrams.FemaleFront
+        AnatomySex.FEMALE to AnatomyView.BACK -> MuscleDiagrams.FemaleBack
+        else -> MuscleDiagrams.MaleFront
+    }
+    val outlines = diagram.outline.map { ParsedOutline(it, PathParser().parsePathString(it.pathData).toPath()) }
+    val muscles = diagram.muscles.map { definition ->
+        val path = PathParser().parsePathString(definition.pathData).toPath()
+        val clip = Region(0, 0, diagram.viewBoxWidth.toInt() + 1, diagram.viewBoxHeight.toInt() + 1)
+        ParsedMuscle(definition, path, Region().apply { setPath(path.asAndroidPath(), clip) })
+    }
+    ParsedDiagram(
+        diagram,
+        outlines,
+        muscles,
+        MuscleMapBounds(
+            pathBounds(outlines.map { it.def.side to it.path }, diagram.centerX),
+            pathBounds(muscles.map { it.def.side to it.path }, diagram.centerX),
+        ),
+    )
+}
+
+@Composable
+internal fun rememberMuscleMapBounds(sex: AnatomySex, view: AnatomyView): MuscleMapBounds =
+    rememberParsedDiagram(sex, view).bounds
+
+internal fun croppedMuscleMapHeight(bounds: MuscleMapBounds, width: Int, referenceHeight: Float): Int {
+    val transform = muscleMapTransform(
+        width.toFloat(), referenceHeight,
+        bounds.outline.left, bounds.outline.right, bounds.outline.top, bounds.outline.bottom,
+    )
+    return ceil(bounds.muscles.height * transform.scaleY).toInt()
+}
 internal data class MuscleMapTransform(
     val scaleX: Float,
     val scaleY: Float,
@@ -59,19 +120,27 @@ internal fun muscleMapTransform(
     contentRight: Float,
     contentTop: Float,
     contentBottom: Float,
+    visibleTop: Float = contentTop,
+    visibleBottom: Float = contentBottom,
+    referenceHeight: Float = canvasHeight,
+    stretchVertically: Boolean = false,
 ): MuscleMapTransform {
     val targetYScale = MUSCLE_MAP_HORIZONTAL_SCALE * MUSCLE_MAP_VERTICAL_STRETCH
     val fit = min(
         canvasWidth / ((contentRight - contentLeft) * MUSCLE_MAP_HORIZONTAL_SCALE),
-        canvasHeight / ((contentBottom - contentTop) * targetYScale),
+        referenceHeight / ((contentBottom - contentTop) * targetYScale),
     )
     val scaleX = fit * MUSCLE_MAP_HORIZONTAL_SCALE
-    val scaleY = fit * targetYScale
+    val scaleY = if (stretchVertically) {
+        canvasHeight * MUSCLE_MAP_VERTICAL_FILL / (visibleBottom - visibleTop)
+    } else {
+        fit * targetYScale
+    }
     return MuscleMapTransform(
         scaleX = scaleX,
         scaleY = scaleY,
         offsetX = canvasWidth / 2f - (contentLeft + contentRight) / 2f * scaleX,
-        offsetY = canvasHeight / 2f - (contentTop + contentBottom) / 2f * scaleY,
+        offsetY = canvasHeight / 2f - (visibleTop + visibleBottom) / 2f * scaleY,
     )
 }
 
@@ -88,42 +157,30 @@ fun MuscleMap(
     directInterpolation: Boolean = false,
     celebratedMuscleIds: Set<String> = emptySet(),
     alignToLegendBounds: Boolean = false,
+    musclesOnly: Boolean = false,
+    referenceCanvasHeight: Dp = Dp.Infinity,
+    onMuscleDoubleTap: ((String) -> Unit)? = null,
 ) {
+    val selectMuscle by rememberUpdatedState(onMuscleTap)
+    val inspectMuscle by rememberUpdatedState(onMuscleDoubleTap)
     val palette = LocalVibePalette.current
     val freshnessColors = palette.freshnessColors()
     val reducedMotion = LocalVibeReducedMotion.current
-    val diagram = when (sex to view) {
-        AnatomySex.MALE to AnatomyView.FRONT -> MuscleDiagrams.MaleFront
-        AnatomySex.MALE to AnatomyView.BACK -> MuscleDiagrams.MaleBack
-        AnatomySex.FEMALE to AnatomyView.FRONT -> MuscleDiagrams.FemaleFront
-        AnatomySex.FEMALE to AnatomyView.BACK -> MuscleDiagrams.FemaleBack
-        else -> MuscleDiagrams.MaleFront
-    }
-    val outlines = remember(diagram.id) {
-        diagram.outline.map { ParsedOutline(it, PathParser().parsePathString(it.pathData).toPath()) }
-    }
-    val outlineBounds = remember(outlines, diagram.centerX) {
-        val pathBounds = outlines.map { it.def to it.path.getBounds() }
-        val left = pathBounds.minOf { (definition, bounds) ->
-            if (definition.side == BodySide.LEFT) minOf(bounds.left, 2f * diagram.centerX - bounds.right) else bounds.left
-        }
-        val right = pathBounds.maxOf { (definition, bounds) ->
-            if (definition.side == BodySide.LEFT) maxOf(bounds.right, 2f * diagram.centerX - bounds.left) else bounds.right
-        }
-        androidx.compose.ui.geometry.Rect(
-            left - MUSCLE_MAP_GLOW_OVERFLOW,
-            pathBounds.minOf { it.second.top } - MUSCLE_MAP_GLOW_OVERFLOW,
-            right + MUSCLE_MAP_GLOW_OVERFLOW,
-            pathBounds.maxOf { it.second.bottom } + MUSCLE_MAP_GLOW_OVERFLOW,
-        )
-    }
-    val muscles = remember(diagram.id) {
-        diagram.muscles.map { definition ->
-            val path = PathParser().parsePathString(definition.pathData).toPath()
-            val clip = Region(0, 0, diagram.viewBoxWidth.toInt() + 1, diagram.viewBoxHeight.toInt() + 1)
-            ParsedMuscle(definition, path, Region().apply { setPath(path.asAndroidPath(), clip) })
-        }
-    }
+    val parsed = rememberParsedDiagram(sex, view)
+    val diagram = parsed.definition
+    val outlines = parsed.outlines
+    val muscles = parsed.muscles
+    val outlineBounds = parsed.bounds.outline
+    val visibleBounds = if (musclesOnly) parsed.bounds.muscles else outlineBounds
+    val referenceHeightPx = with(LocalDensity.current) { referenceCanvasHeight.toPx() }
+    fun transform(width: Float, height: Float) = muscleMapTransform(
+        width, height,
+        outlineBounds.left, outlineBounds.right, outlineBounds.top, outlineBounds.bottom,
+        visibleTop = visibleBounds.top,
+        visibleBottom = visibleBounds.bottom,
+        referenceHeight = if (musclesOnly) referenceHeightPx else height,
+        stretchVertically = musclesOnly,
+    )
     val groups = muscles.map { it.def.group }.distinct()
     val selectedGroup = selectedMuscleId?.takeIf(groups::contains)
     val animatedColors = groups.associateWith { group ->
@@ -150,7 +207,7 @@ fun MuscleMap(
     } else {
         modifier
             .fillMaxWidth()
-            .aspectRatio(outlineBounds.width / (outlineBounds.height * MUSCLE_MAP_VERTICAL_STRETCH))
+            .aspectRatio(outlineBounds.width / (visibleBounds.height * MUSCLE_MAP_VERTICAL_STRETCH))
     }
     Canvas(
         modifier = canvasModifier
@@ -160,21 +217,14 @@ fun MuscleMap(
                     ?: "No muscle selected"
                 customActions = groups.map { group ->
                     CustomAccessibilityAction("Inspect ${group.replace('_', ' ')}: ${(states[group] ?: MuscleRecencyBand.NEVER).name.lowercase().replace('_', ' ')}") {
-                        onMuscleTap(group)
+                        (inspectMuscle ?: selectMuscle)(group)
                         true
                     }
                 }
             }
-            .pointerInput(diagram.id, muscles) {
-                detectTapGestures { tap ->
-                    val transform = muscleMapTransform(
-                        size.width.toFloat(),
-                        size.height.toFloat(),
-                        outlineBounds.left,
-                        outlineBounds.right,
-                        outlineBounds.top,
-                        outlineBounds.bottom,
-                    )
+            .pointerInput(diagram.id, muscles, musclesOnly, referenceHeightPx, onMuscleDoubleTap != null) {
+                fun muscleAt(tap: Offset): String? {
+                    val transform = transform(size.width.toFloat(), size.height.toFloat())
                     val vectorX = (tap.x - transform.offsetX) / transform.scaleX
                     val vectorY = (tap.y - transform.offsetY) / transform.scaleY
                     val hit = muscles.lastOrNull { item ->
@@ -182,23 +232,35 @@ fun MuscleMap(
                         val mirroredX = 2f * diagram.centerX - vectorX
                         direct || (item.def.side == BodySide.LEFT && item.region.contains(mirroredX.toInt(), vectorY.toInt()))
                     }
-                    hit?.def?.group?.let(onMuscleTap)
+                    return hit?.def?.group
                 }
+                var firstPress: Offset? = null
+                detectTapGestures(
+                    onPress = { tap ->
+                        if (inspectMuscle != null) {
+                            if (firstPress == null) firstPress = tap
+                            muscleAt(tap)?.let(selectMuscle)
+                            if (!tryAwaitRelease()) firstPress = null
+                        }
+                    },
+                    onTap = { tap ->
+                        if (inspectMuscle == null) muscleAt(tap)?.let(selectMuscle)
+                        firstPress = null
+                    },
+                    onDoubleTap = if (onMuscleDoubleTap == null) null else { tap ->
+                        val muscle = muscleAt(tap)
+                        if (muscle != null && firstPress?.let(::muscleAt) == muscle) inspectMuscle?.invoke(muscle)
+                        firstPress = null
+                    },
+                )
             },
     ) {
-        val transform = muscleMapTransform(
-            size.width,
-            size.height,
-            outlineBounds.left,
-            outlineBounds.right,
-            outlineBounds.top,
-            outlineBounds.bottom,
-        )
+        val transform = transform(size.width, size.height)
         withTransform({
             translate(transform.offsetX, transform.offsetY)
             scale(transform.scaleX, transform.scaleY, Offset.Zero)
         }) {
-            outlines.forEach { item ->
+            if (!musclesOnly) outlines.forEach { item ->
                 drawPathWithMirror(item.path, item.def.side, diagram.centerX, Color.Transparent, palette.diagramLine)
             }
             muscles.forEach { item ->

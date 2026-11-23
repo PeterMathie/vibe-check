@@ -14,6 +14,7 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
@@ -57,6 +58,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -337,7 +339,7 @@ class ReorderState internal constructor(
         draggingKey == key && dragSessionToken == token
 }
 
-internal class ReorderScrollContext(val listState: LazyListState) {
+internal class ReorderScrollContext(val scrollBy: suspend (Float) -> Float) {
     var viewportTop by mutableFloatStateOf(Float.NaN)
     var viewportBottom by mutableFloatStateOf(Float.NaN)
 }
@@ -459,7 +461,11 @@ fun ReorderItem(
 
 @Composable
 internal fun rememberReorderScrollContext(listState: LazyListState): ReorderScrollContext =
-    remember(listState) { ReorderScrollContext(listState) }
+    remember(listState) { ReorderScrollContext { listState.scrollBy(it) } }
+
+@Composable
+internal fun rememberReorderScrollContext(scrollState: androidx.compose.foundation.ScrollState): ReorderScrollContext =
+    remember(scrollState) { ReorderScrollContext { scrollState.scrollBy(it) } }
 
 internal fun Modifier.reorderScrollViewport(context: ReorderScrollContext): Modifier =
     onGloballyPositioned {
@@ -498,6 +504,8 @@ fun ReorderHandle(
     itemLabel: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    longPress: Boolean = false,
+    content: (@Composable () -> Unit)? = null,
 ) {
     val threshold = with(LocalDensity.current) { 48.dp.toPx() }
     val edgeSize = with(LocalDensity.current) { 72.dp.toPx() }
@@ -543,7 +551,7 @@ fun ReorderHandle(
                 maxScrollSpeed,
             )
             if (velocity != 0f) {
-                scrollContext.listState.scrollBy(velocity * seconds)
+                scrollContext.scrollBy(velocity * seconds)
                 withFrameNanos { }
                 repeat(state.reorderAfterLayout(threshold, velocity.compareTo(0f))) {
                     haptics.perform(VibeHapticEvent.DRAG_CROSS)
@@ -576,7 +584,22 @@ fun ReorderHandle(
                     }
                 }
             }
-            .draggable(
+            .then(if (longPress) Modifier.pointerInput(state, itemKey, enabled, overlayCopy) {
+                if (enabled && !overlayCopy) detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        state.begin(itemKey, handleTop + it.y)
+                        haptics.perform(VibeHapticEvent.DRAG_START)
+                    },
+                    onDragEnd = {
+                        if (state.end()) haptics.perform(VibeHapticEvent.DRAG_DROP)
+                    },
+                    onDragCancel = { state.cancel() },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        repeat(state.dragBy(amount.y, threshold)) { haptics.perform(VibeHapticEvent.DRAG_CROSS) }
+                    },
+                )
+            } else Modifier.draggable(
                 state = dragState,
                 orientation = Orientation.Vertical,
                 enabled = enabled && !overlayCopy,
@@ -588,9 +611,9 @@ fun ReorderHandle(
                 onDragStopped = {
                     if (state.end()) haptics.perform(VibeHapticEvent.DRAG_DROP)
                 },
-            ),
+            )),
     ) {
-        Box(
+        if (content != null) content() else Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(36.dp)

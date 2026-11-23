@@ -52,3 +52,20 @@ The muscle diagram uses real male/female front/back SVG muscle path data adapted
 - Storage: local-first on-device SQLite
 
 Pushing to `develop` triggers a GitHub Actions debug APK build.
+
+### Isolated Habits review
+
+`gradle -PhabitsReview=true :app:assembleHabitsReview :app:assembleHabitsReviewAndroidTest`
+builds an opt-in debug review app and its instrumentation APK. Their application
+IDs are `com.petermathie.vibecheck.habitsreview` and
+`com.petermathie.vibecheck.habitsreview.test`; the launcher label is
+**Vibe Check - Habits review**. They use the same production sources, demo
+seeding and database schema as debug, with separate Android storage/UIDs and the
+unchanged AndroidJUnitRunner. Normal debug/release and default instrumentation
+are unaffected.
+
+Use the isolated pair for Habits fixture/visual review when an existing install
+must remain untouched. Do not substitute the normal debug APK: its Application
+eagerly opens/seeds the database, and restoring an older APK does not undo a Room
+migration. Review installation, execution and cleanup still require an allocated
+review environment; cleanup must target only the review package names.

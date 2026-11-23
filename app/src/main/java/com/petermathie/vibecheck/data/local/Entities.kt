@@ -377,6 +377,8 @@ data class TrackerEntity(
     @androidx.room.ColumnInfo(defaultValue = "7") val heatmapLightBelow: Double = 7.0,
     @androidx.room.ColumnInfo(defaultValue = "15") val heatmapMediumBelow: Double = 15.0,
     @androidx.room.ColumnInfo(defaultValue = "'habit'") val iconName: String = "habit",
+    val heatmapFieldId: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "'RELATIVE'") val heatmapMode: String = "RELATIVE",
 )
 
 @Entity(

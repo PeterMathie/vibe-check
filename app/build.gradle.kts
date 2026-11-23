@@ -5,6 +5,8 @@ plugins {
     id("com.google.dagger.hilt.android")
 }
 
+val habitsReview = providers.gradleProperty("habitsReview").orNull == "true"
+
 android {
     namespace = "com.petermathie.vibecheck"
     compileSdk = 36
@@ -40,6 +42,14 @@ android {
             versionNameSuffix = "-workout-review"
             buildConfigField("boolean", "SEED_DEMO_DATA", "true")
         }
+        if (habitsReview) {
+            create("habitsReview") {
+                initWith(getByName("debug"))
+                applicationIdSuffix = ".habitsreview"
+                versionNameSuffix = "-habits-review"
+                matchingFallbacks += "debug"
+            }
+        }
         release {
             buildConfigField("boolean", "SEED_DEMO_DATA", "false")
             betaSigningConfig?.let { signingConfig = it }
@@ -58,6 +68,15 @@ android {
     }
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("docs/examples"))
     sourceSets.getByName("androidTest").assets.srcDir(file("schemas"))
+}
+
+if (habitsReview) {
+    androidComponents.beforeVariants(androidComponents.selector().withBuildType("habitsReview")) {
+        it.enableAndroidTest = true
+    }
+    configurations.named("habitsReviewImplementation") {
+        extendsFrom(configurations.getByName("debugImplementation"))
+    }
 }
 
 ksp {
@@ -105,6 +124,7 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
     androidTestImplementation("androidx.room:room-testing:2.8.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.9.2")
     debugImplementation("androidx.compose.ui:ui-test-manifest:1.9.2")

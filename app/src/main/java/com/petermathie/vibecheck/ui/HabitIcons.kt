@@ -79,6 +79,8 @@ internal object HabitIconCatalog {
         HabitIconOption("accessibility", "Mobility", Icons.Outlined.AccessibilityNew),
     )
 
+    val pickerOptions = options.filterNot { it.key == "health" || it.key == "cleaning" }
+
     fun icon(key: String): ImageVector = options.find { it.key == key }?.icon ?: options.first().icon
 
     fun option(key: String): HabitIconOption = options.find { it.key == key } ?: options.first()
