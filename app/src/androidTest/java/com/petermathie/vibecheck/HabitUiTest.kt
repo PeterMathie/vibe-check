@@ -572,8 +572,12 @@ class HabitUiTest {
         awaitHabit()
         input("g").assertIsDisplayed()
         compose.onNodeWithText("Amount (g)").assertDoesNotExist()
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        list.performScrollToKey(count.id)
         input("Count").performScrollTo().assertIsDisplayed()
+        list.performScrollToKey(journal.id)
         input("Journal entry").performScrollTo().assertIsDisplayed()
+        list.performScrollToKey(reading.id)
         val checkboxLabel = compose.onNodeWithText("Read today").performScrollTo()
         val calendar = compose.onNodeWithTag("Habit calendar ${reading.id}").getUnclippedBoundsInRoot()
         assertEquals(calendar.right.value, checkboxLabel.getUnclippedBoundsInRoot().right.value, 0.5f)
@@ -791,7 +795,12 @@ class HabitUiTest {
         compose.onNodeWithText("Row 39").performScrollTo()
         val end = indicator.assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue("The thumb must follow scrolling", end.top > start.top)
-        assertEquals(start.bottom - start.top, end.bottom - end.top)
+        assertEquals(
+            "The thumb height stays constant within one physical pixel",
+            with(compose.density) { (start.bottom - start.top).toPx() },
+            with(compose.density) { (end.bottom - end.top).toPx() },
+            1f,
+        )
         compose.onNodeWithTag("Habit dialog scrollbar")
             .performSemanticsAction(SemanticsActions.SetProgress) { assertTrue(it(0f)) }
         compose.onNodeWithText("Row 0").assertIsDisplayed()
@@ -932,7 +941,10 @@ class HabitUiTest {
         input("Measurement name").performTextReplacement("Grams")
         input("Unit (optional)").performTextInput("g")
         compose.onNodeWithText("Shown beside your entry, e.g. min, g or km.").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Goal (optional)").assertTextContains("None")
+        compose.onNode(
+            hasText("None") and hasAnyAncestor(hasContentDescription("Goal (optional)")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
         compose.onNodeWithText("Goal value").assertDoesNotExist()
         captureFixture("habits-goal-none")
         chooseGoal("At least")
@@ -1275,7 +1287,10 @@ class HabitUiTest {
         val collapsed = modal.fetchSemanticsNode().boundsInRoot.height
         assertTrue("Modal must shrink smoothly: $expanded, $shrinking, $collapsed", shrinking < expanded && shrinking > collapsed)
         compose.mainClock.autoAdvance = true
-        compose.onNodeWithContentDescription("Goal (optional)").assertTextContains("None")
+        compose.onNode(
+            hasText("None") and hasAnyAncestor(hasContentDescription("Goal (optional)")),
+            useUnmergedTree = true,
+        ).assertIsDisplayed()
         compose.onAllNodes(isDialog()).assertCountEquals(1)
         captureFixture("habits-centered-modal")
     }

@@ -205,7 +205,9 @@ class EndUserControlsTest {
         val calendar = compose.onNodeWithContentDescription("Work tracker card").fetchSemanticsNode().boundsInRoot
         assertEquals("Key reaches the middle of the page", fixture.center.x, key.right, 1.5f)
         assertTrue("Figures have room below the heading", front.top - fixture.top >= with(compose.density) { 72.dp.toPx() })
-        assertTrue("Calendar follows anatomy without the removed control slot", calendar.top - front.bottom in 0f..with(compose.density) { 12.dp.toPx() })
+        val heading = compose.onNodeWithTag("Home freshness heading").fetchSemanticsNode().boundsInRoot
+        assertTrue("Figures do not overlap the heading or calendar", front.top >= heading.bottom && front.bottom <= calendar.top)
+        assertEquals("Figures are centred between the heading and calendar", (heading.bottom + calendar.top) / 2f, front.center.y, 1f)
         val originalBounds = listOf(front, calendar)
         for (theme in listOf(VibePalettes.Ocean.dark, VibePalettes.Ocean.light)) {
             compose.runOnIdle { palette = theme }
