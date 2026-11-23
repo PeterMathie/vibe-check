@@ -1,7 +1,5 @@
 package com.petermathie.vibecheck.ui
 
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,20 +10,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -58,87 +50,97 @@ private data class ChoiceDraft(
 )
 
 @Composable
-internal fun HabitFieldDialog(
-    vm: EditorViewModel,
+internal fun HabitMeasurementForm(
     field: TrackerFieldEntity,
+    form: HabitFieldForm,
     habitColour: Color,
-    dismiss: () -> Unit,
+    locked: Boolean,
+    onChange: (HabitFieldForm) -> Unit,
 ) {
-    var form by remember(field.id) {
-        mutableStateOf(resolvedHabitFieldForm(field))
-    }
-    val listState = rememberLazyListState()
-    val reorderContext = rememberReorderScrollContext(listState)
-    AlertDialog(
-        onDismissRequest = dismiss,
-        title = { Text("What would you like to track?") },
-        text = {
-            ReorderOverlayHost(Modifier.fillMaxWidth()) {
-                CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
-                    LazyColumn(state = listState, modifier = Modifier.reorderScrollViewport(reorderContext)) {
-                    item {
-                    Text("Add one thing you want to record for this habit.")
-                    EditField("Name, for example Minutes or Protein", form.name) {
-                        form = form.copy(name = it)
-                    }
-                    Text("How will you record it?", style = MaterialTheme.typography.labelLarge)
-                    HabitFieldForm.TYPES.forEach { value ->
-                        TextButton(
-                            onClick = {
-                                form = if (value == HabitFieldForm.CHOICE && form.choiceValues.isEmpty()) {
-                                    form.copy(type = value)
-                                } else {
-                                    form.copy(type = value)
-                                }
-                            },
-                        ) {
-                            Text((if (form.type == value) "✓ " else "") + habitTypeLabel(value))
-                        }
-                    }
-                    if (form.isNumeric) {
-                        EditField("Unit, for example minutes or grams", form.unit) {
-                            form = form.copy(unit = it)
-                        }
-                    }
-                    if (form.type == HabitFieldForm.CHOICE) {
-                        ChoiceScaleEditor(field.id, form, habitColour) { form = it }
-                    }
-                    if (form.isNumeric) {
-                        Text("Goal (optional)", style = MaterialTheme.typography.labelLarge)
-                        Text("Choose how the recorded value should compare with your goal.")
-                        HabitFieldForm.COMPARISONS.forEach { value ->
-                            TextButton(onClick = { form = form.copy(comparison = value) }) {
-                                Text((if (form.comparison == value) "✓ " else "") + targetComparisonLabel(value))
-                            }
-                        }
-                        EditField(
-                            if (form.comparison == HabitFieldForm.RANGE) "Minimum goal" else "Goal value",
-                            form.target,
-                        ) {
-                            form = form.copy(target = it)
-                        }
-                        if (form.comparison == HabitFieldForm.RANGE && form.target.isNotBlank()) {
-                            EditField("Maximum goal", form.targetMaximum) {
-                                form = form.copy(targetMaximum = it)
-                            }
-                        }
-                        }
-                    }
-                    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (locked) {
+            HabitSettingValue(
+                "Measurement type",
+                habitTypeLabel(field.valueType),
+                modifier = Modifier.semantics(mergeDescendants = true) {
+                    contentDescription = "Measurement type (locked)"
+                },
+                trailingIcon = Icons.Outlined.Lock,
+            )
+        } else {
+            HabitSettingDropdown(
+                "Measurement type", form.type,
+                listOf(
+                    HabitSettingOption("BOOLEAN", habitTypeLabel("BOOLEAN")),
+                    HabitSettingOption("NUMBER", habitTypeLabel("NUMBER")),
+                    HabitSettingOption("TEXT", habitTypeLabel("TEXT")),
+                    HabitSettingOption(HabitFieldForm.CHOICE, habitTypeLabel(HabitFieldForm.CHOICE)),
+                ),
+                onSelect = { onChange(form.copy(type = it)) },
+            )
+        }
+        HabitTextField(
+            "Measurement name", form.name, { onChange(form.copy(name = it)) },
+            hint = when (form.type) {
+                "NUMBER" -> "e.g. Time practised"
+                "TEXT" -> "e.g. Reflection"
+                HabitFieldForm.CHOICE -> "e.g. Mood"
+                else -> "e.g. Practised"
+            },
+        )
+        if (form.isNumeric) {
+            if (locked) {
+                HabitSettingValue(
+                    "Unit", form.unit.ifBlank { "None" },
+                    modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = "Unit (locked)" },
+                    trailingIcon = Icons.Outlined.Lock,
+                )
+            } else {
+                HabitTextField(
+                    "Unit (optional)", form.unit, { onChange(form.copy(unit = it)) },
+                    hint = "e.g. min",
+                )
+            }
+            HabitSettingDropdown(
+                "Goal (optional)", form.comparison,
+                (listOf(HabitFieldForm.NONE) + HabitFieldForm.COMPARISONS).map {
+                    HabitSettingOption(it, if (it == HabitFieldForm.NONE) "None" else targetComparisonLabel(it))
+                },
+                onSelect = {
+                    onChange(
+                        if (it == HabitFieldForm.NONE) form.copy(comparison = it, target = "", targetMaximum = "")
+                        else form.copy(comparison = it),
+                    )
+                },
+            )
+            if (form.comparison != HabitFieldForm.NONE) {
+                HabitTextField(
+                    if (form.comparison == HabitFieldForm.RANGE) "Minimum goal" else "Goal value",
+                    form.target, { onChange(form.copy(target = it)) }, numeric = true,
+                    error = goalInputError(form.target, if (locked) field.targetValue else null),
+                )
+                if (form.comparison == HabitFieldForm.RANGE && form.target.isNotBlank()) {
+                    HabitTextField(
+                        "Maximum goal", form.targetMaximum,
+                        { onChange(form.copy(targetMaximum = it)) }, numeric = true,
+                        error = goalInputError(form.targetMaximum, if (locked) field.targetMaxValue else null)
+                            ?: if (!form.isRangeValid) "Maximum must be at least the minimum" else null,
+                    )
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                enabled = form.canSave,
-                onClick = {
-                    vm.save(form.applyTo(field))
-                    dismiss()
-                },
-            ) { Text("Save") }
-        },
-        dismissButton = { TextButton(onClick = dismiss) { Text("Cancel") } },
-    )
+        }
+        if (form.type == HabitFieldForm.CHOICE) {
+            ChoiceScaleEditor(field.id, form, habitColour, onChange)
+        }
+    }
+}
+
+private fun goalInputError(text: String, previous: Double?): String? {
+    if (text.isBlank()) return null
+    val value = text.toDoubleOrNull()
+    return if (value == null || !value.isFinite() || value < 0 && value != previous) {
+        "Enter a number greater than or equal to zero"
+    } else null
 }
 
 internal fun resolvedHabitFieldForm(field: TrackerFieldEntity): HabitFieldForm {
@@ -161,7 +163,7 @@ internal fun ChoiceScaleEditor(
     habitColour: Color,
     onFormChange: (HabitFieldForm) -> Unit,
 ) {
-    val baseForm = remember(fieldKey) { form }
+    val baseForm by androidx.compose.runtime.rememberUpdatedState(form)
     var editorForm by remember(fieldKey) { mutableStateOf(form) }
     var revision by remember(fieldKey) { mutableIntStateOf(0) }
     val choices = remember(fieldKey) {
@@ -242,21 +244,13 @@ internal fun ChoiceScaleEditor(
                         .size
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("${intensity.name.lowercase().replaceFirstChar(Char::uppercase)} · $count", style = MaterialTheme.typography.labelLarge)
-                        Text(
-                            when (intensity) {
-                                HabitChoiceIntensity.LIGHT -> "Uses the light heat-map colour."
-                                HabitChoiceIntensity.MEDIUM -> "Uses the medium heat-map colour."
-                                HabitChoiceIntensity.DARK -> "Uses the dark heat-map colour."
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                        )
                         ReorderItem(choiceOrder, orderedKey, orderIndex) {
                             Surface(
-                                color = shadeColor.copy(alpha = 0.18f),
+                                color = shadeColor.copy(alpha = if (count == 0) 0.18f else 0.8f),
                                 shape = MaterialTheme.shapes.medium,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(if (count == 0) 48.dp else 1.dp)
+                                    .height(if (count == 0) 48.dp else 8.dp)
                                     .semantics { contentDescription = "${intensity.name.lowercase()} choice drop target" },
                             ) {}
                         }
@@ -265,7 +259,7 @@ internal fun ChoiceScaleEditor(
                     choices.firstOrNull { it.id == orderedKey }?.let { choice ->
                         ReorderItem(choiceOrder, choice.id, orderIndex) {
                         Surface(
-                            color = shadeColor,
+                            color = Color.Transparent,
                             shape = MaterialTheme.shapes.medium,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -296,24 +290,21 @@ internal fun ChoiceScaleEditor(
                             choice.value.ifBlank { "unnamed choice" },
                             enabled = choices.size > 1,
                         )
-                        OutlinedTextField(
+                        HabitTextField(
+                            label = "Choice",
                             value = choice.value,
                             onValueChange = { updated ->
                                 val itemIndex = choices.indexOfFirst { it.id == choice.id }
                                 choices[itemIndex] = choice.copy(value = updated)
                                 syncChoices()
                             },
-                            singleLine = true,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .semantics {
-                                    val position = displayedKeys.subList(
-                                        displayedKeys.indexOf(marker(intensity)) + 1,
-                                        orderIndex + 1,
-                                    ).count { candidate -> HabitChoiceIntensity.entries.none { marker(it) == candidate } }
-                                    contentDescription = "${intensity.name.lowercase()} choice $position"
-                                },
+                            modifier = Modifier.weight(1f),
+                            accessibilityLabel = "${intensity.name.lowercase()} choice ${
+                                displayedKeys.subList(
+                                    displayedKeys.indexOf(marker(intensity)) + 1,
+                                    orderIndex + 1,
+                                ).count { candidate -> HabitChoiceIntensity.entries.none { marker(it) == candidate } }
+                            }",
                         )
                         IconButton(
                             enabled = choices.size > 2,
@@ -336,7 +327,7 @@ internal fun ChoiceScaleEditor(
             }
         }
         }
-        Button(
+        TextButton(
             onClick = {
                 choices += ChoiceDraft(
                     UUID.randomUUID().toString(),
@@ -352,6 +343,7 @@ internal fun ChoiceScaleEditor(
             shape = MaterialTheme.shapes.medium,
         ) {
             Icon(Icons.Outlined.Add, contentDescription = null)
+            Text("Add choice")
         }
         if (
             choices.size < 2 ||

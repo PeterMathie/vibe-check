@@ -10,6 +10,7 @@ import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -46,6 +47,31 @@ class ImportValidationTest {
         DataTransfer.import(db, legacyBackup)
 
         assertEquals("vibe-trainer", JSONObject(DataTransfer.export(db)).getString("format"))
+    }
+
+    @Test
+    fun legacyHabitRowsDefaultToRelativeAndNewPrimaryAndModeRoundTrip() = runBlocking {
+        val tracker = fixture("trackers").apply {
+            remove("heatmapFieldId")
+            remove("heatmapMode")
+        }
+        DataTransfer.import(db, document(rows("trackers", tracker)))
+        val id = tracker.getString("id")
+        val legacy = db.editorDao().trackers().first().first { it.id == id }
+        assertNull(legacy.heatmapFieldId)
+        assertEquals("RELATIVE", legacy.heatmapMode)
+        val primary = db.editorDao().fields().first().first { it.trackerId == id && !it.isArchived }
+        db.editorDao().tracker(legacy.copy(heatmapFieldId = primary.id, heatmapMode = "GOAL"))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertEquals(primary.id, db.editorDao().trackers().first().first { it.id == id }.heatmapFieldId)
+        assertEquals("GOAL", db.editorDao().trackers().first().first { it.id == id }.heatmapMode)
+    }
+
+    @Test
+    fun invalidHabitModeAndCrossHabitPrimaryRollBack() = runBlocking {
+        rejected(rows("trackers", fixture("trackers").put("heatmapMode", "UNKNOWN")), "heatmapMode")
+        rejected(rows("trackers", fixture("trackers").put("heatmapFieldId", "missing-field")), "heatmap")
     }
 
     @Test

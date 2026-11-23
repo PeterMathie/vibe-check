@@ -17,6 +17,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_12_13
 import com.petermathie.vibecheck.data.local.MIGRATION_13_14
 import com.petermathie.vibecheck.data.local.MIGRATION_14_15
 import com.petermathie.vibecheck.data.local.MIGRATION_15_16
+import com.petermathie.vibecheck.data.local.MIGRATION_16_17
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -33,6 +34,34 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate16To17PreservesHabitConfigurationAndHistoricalValues() {
+        helper.createDatabase(databaseName, 16).apply {
+            execSQL("INSERT INTO trackers (id,name,isDemo,isArchived,colourArgb,position,heatmapLightBelow,heatmapMediumBelow,iconName) VALUES ('habit','Practice',0,0,4282549749,3,7,15,'piano')")
+            execSQL("INSERT INTO tracker_fields (id,trackerId,name,valueType,unit,targetComparison,targetValue,position,choiceOptions,targetMaxValue,isArchived,choiceLightThrough,choiceDarkFrom,choiceOptionsJson) VALUES ('field','habit','Minutes','NUMBER','min','AT_LEAST',20,0,'',NULL,0,-1,-1,'')")
+            execSQL("INSERT INTO tracker_daily_values (fieldId,epochDay,numericValue,booleanValue,textValue,notes,updatedAt,choiceOptionId,choiceIntensity) VALUES ('field',10,-2,NULL,NULL,'Legacy',123,NULL,NULL)")
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 17, true, MIGRATION_16_17).use { migrated ->
+            migrated.query("SELECT name,position,heatmapLightBelow,heatmapMediumBelow,iconName,heatmapFieldId,heatmapMode FROM trackers WHERE id='habit'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Practice", it.getString(0))
+                assertEquals(3, it.getInt(1))
+                assertEquals(7.0, it.getDouble(2), 0.0)
+                assertEquals(15.0, it.getDouble(3), 0.0)
+                assertEquals("piano", it.getString(4))
+                assertTrue(it.isNull(5))
+                assertEquals("RELATIVE", it.getString(6))
+            }
+            migrated.query("SELECT numericValue,notes,updatedAt FROM tracker_daily_values WHERE fieldId='field'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(-2.0, it.getDouble(0), 0.0)
+                assertEquals("Legacy", it.getString(1))
+                assertEquals(123L, it.getLong(2))
+            }
+        }
+    }
 
     @Test
     fun migrate15To16PreservesLegacyTimingAndSnapshots() {

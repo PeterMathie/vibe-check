@@ -26,7 +26,8 @@ data class HabitFieldForm(
 
     val isRangeValid: Boolean
         get() = comparison != RANGE || target.isBlank() || (
-            targetMaximum.toDoubleOrNull()?.isFinite() == true &&
+            target.toDoubleOrNull()?.isFinite() == true &&
+                targetMaximum.toDoubleOrNull()?.isFinite() == true &&
                 targetMaximum.toDouble() >= target.toDouble()
             )
 
@@ -38,7 +39,14 @@ data class HabitFieldForm(
             )
 
     val canSave: Boolean
-        get() = name.isNotBlank() && isTargetValid && isRangeValid && areChoicesValid && areChoiceShadesValid
+        get() = type in TYPES && name.isNotBlank() && isTargetValid && isRangeValid &&
+            (!isNumeric || comparison == NONE && target.isBlank() ||
+                comparison in COMPARISONS && target.isNotBlank()) && areChoicesValid && areChoiceShadesValid
+
+    fun isValidFor(original: TrackerFieldEntity?): Boolean = canSave &&
+        (target.isBlank() || target.toDoubleOrNull()?.let { it >= 0.0 || it == original?.targetValue } == true) &&
+        (comparison != RANGE || target.isBlank() ||
+            targetMaximum.toDoubleOrNull()?.let { it >= 0.0 || it == original?.targetMaxValue } == true)
 
     val areChoiceShadesValid: Boolean
         get() = type != CHOICE || choices.isNotEmpty() || (
@@ -48,11 +56,11 @@ data class HabitFieldForm(
             )
 
     fun applyTo(field: TrackerFieldEntity): TrackerFieldEntity {
-        val minimum = if (isNumeric) target.toDoubleOrNull() else null
+        val minimum = if (isNumeric && comparison != NONE) target.toDoubleOrNull() else null
         return field.copy(
             name = name,
             valueType = type,
-            unit = unit.takeIf(String::isNotBlank),
+            unit = unit.takeIf { isNumeric && it.isNotBlank() },
             targetValue = minimum,
             targetComparison = if (minimum == null) null else comparison,
             position = field.position,
@@ -75,6 +83,7 @@ data class HabitFieldForm(
     companion object {
         const val CHOICE = "CHOICE"
         const val RANGE = "RANGE"
+        const val NONE = "NONE"
         val TYPES = listOf(
             "BOOLEAN",
             "NUMBER",
@@ -95,7 +104,7 @@ data class HabitFieldForm(
             options = field.choiceOptions,
             target = field.targetValue?.toString().orEmpty(),
             targetMaximum = field.targetMaxValue?.toString().orEmpty(),
-            comparison = field.targetComparison ?: "AT_LEAST",
+            comparison = field.targetComparison ?: NONE,
             choiceLightThrough = field.choiceLightThrough,
             choiceDarkFrom = field.choiceDarkFrom,
             choices = decodeHabitChoices(field),

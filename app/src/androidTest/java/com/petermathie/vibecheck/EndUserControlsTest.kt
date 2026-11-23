@@ -657,11 +657,11 @@ class EndUserControlsTest {
                     assertTrue("No enclosing border or card fill", distance(pixels[x, y], theme.background) < 0.005f)
                 }
             }
-            val glow = compose.onNodeWithContentDescription("male front freshness map").captureToImage().toPixelMap()
-            val y = (glow.height * 0.8f).toInt()
+            val glow = panel.captureToImage().toPixelMap()
+            val y = ((front.center.y - panelBounds.top).toInt()).coerceIn(0, glow.height - 1)
             val centre = distance(glow[glow.width / 2, y], theme.background)
             val edge = distance(glow[0, y], theme.background)
-            assertTrue("Radial glow must be visible but subtle: $centre", centre in 0.008f..0.065f)
+            assertTrue("Whole-section glow reaches the gap between figures: $centre", centre in 0.008f..0.065f)
             assertTrue("Glow must fade towards the edges: centre=$centre edge=$edge", centre > edge + 0.004f)
             val monthPixels = calendar.captureToImage().toPixelMap()
             val firstDay = compose.onNodeWithContentDescription("2026-11-01:", substring = true).fetchSemanticsNode().boundsInRoot
@@ -1013,7 +1013,7 @@ class EndUserControlsTest {
     }
 
     @Test
-    fun homeCalendarUsesSpaceFreedByTightMusclePanel() {
+    fun homeFiguresStayCenteredAboveTheBottomCalendarWhenTheViewportGrows() {
         var viewportWidth by mutableStateOf<Dp>(411.dp)
         var viewportHeight by mutableStateOf<Dp>(761.dp)
         compose.setContent {
@@ -1044,15 +1044,81 @@ class EndUserControlsTest {
             val range = home.config[SemanticsProperties.VerticalScrollAxisRange]
             val tracker = compose.onNodeWithContentDescription("Work tracker card").fetchSemanticsNode().boundsInRoot
             val freshness = compose.onNodeWithContentDescription("Freshness panel").fetchSemanticsNode().boundsInRoot
+            val grid = compose.onNodeWithContentDescription("Activity heatmap grid", substring = true)
+                .fetchSemanticsNode().boundsInRoot
+            val heading = compose.onNodeWithTag("Home freshness heading").fetchSemanticsNode().boundsInRoot
+            val front = compose.onNodeWithContentDescription("male front freshness map").fetchSemanticsNode().boundsInRoot
+            val back = compose.onNodeWithContentDescription("male back freshness map").fetchSemanticsNode().boundsInRoot
             assertEquals("$width x $height scroll", 0f, range.maxValue(), 0.5f)
-            assertTrue("$width x $height tracker=$tracker viewport=$viewport", viewport.bottom - tracker.bottom in 0f..12f)
+            assertEquals(with(compose.density) { 42.dp.toPx() }, viewport.bottom - tracker.bottom, 1f)
+            assertEquals(with(compose.density) { 46.dp.toPx() }, viewport.bottom - grid.bottom, 1.5f)
             assertTrue(freshness.bottom <= tracker.top)
-            assertTrue(freshness.height / (freshness.height + tracker.height) < 0.7f)
+            val centre = (heading.bottom + tracker.top) / 2f
+            assertEquals(centre, front.center.y, 1f)
+            assertEquals(centre, back.center.y, 1f)
             previousBounds?.let { previous ->
-                assertEquals(previous[0].height, freshness.height, 0.5f)
-                assertEquals(viewport.height - previous[2].height, tracker.height - previous[1].height, 0.5f)
+                assertEquals(previous[1].height, tracker.height, 0.5f)
+                val extraHeight = viewport.height - previous[2].height
+                assertEquals(extraHeight, freshness.height - previous[0].height, 0.5f)
+                assertEquals(extraHeight, tracker.top - previous[1].top, 0.5f)
+                assertEquals(previous[3].height, grid.height, 0.5f)
+                assertEquals(extraHeight, grid.top - previous[3].top, 0.5f)
+                assertEquals(previous[4], heading)
+                listOf(front, back).forEachIndexed { index, figure ->
+                    val before = previous[5 + index]
+                    assertEquals(before.width, figure.width, 0.5f)
+                    assertEquals(before.height, figure.height, 0.5f)
+                    assertEquals(extraHeight / 2f, figure.center.y - before.center.y, 1f)
+                }
             }
-            previousBounds = listOf(freshness, tracker, viewport)
+            previousBounds = listOf(freshness, tracker, viewport, grid, heading, front, back)
+        }
+    }
+
+    @Test
+    fun homeCalendarMatchesHabitCellHeightAndPrimaryMonthColourAtLargerText() {
+        val today = LocalDate.of(2026, 11, 20)
+        var fontScale by mutableFloatStateOf(1f)
+        var palette by mutableStateOf(VibePalettes.Ocean.dark)
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                VibeCheckTheme(palette) {
+                    Box(Modifier.width(411.dp).height(761.dp)) {
+                        HomeScreen(MainUiState(), {}, {}, {}, today = today)
+                    }
+                }
+            }
+        }
+        for (theme in listOf(VibePalettes.Ocean.dark, VibePalettes.Ocean.light)) {
+            for (scale in listOf(1f, 1.6f)) {
+                compose.runOnIdle {
+                    palette = theme
+                    fontScale = scale
+                }
+                val first = compose.onNodeWithContentDescription("2026-11-01:", substring = true)
+                    .getUnclippedBoundsInRoot()
+                val last = compose.onNodeWithContentDescription("2026-11-30:", substring = true)
+                    .getUnclippedBoundsInRoot()
+                assertEquals(22f * scale, (first.bottom - first.top).value, 0.5f)
+                assertEquals(first.bottom - first.top, last.bottom - last.top)
+                val grid = compose.onNodeWithContentDescription("Activity heatmap grid", substring = true)
+                    .getUnclippedBoundsInRoot()
+                assertTrue(last.bottom <= grid.bottom)
+                val heading = compose.onNodeWithTag("Home freshness heading").getUnclippedBoundsInRoot()
+                val calendar = compose.onNodeWithContentDescription("Work tracker card").getUnclippedBoundsInRoot()
+                val centre = (heading.bottom + calendar.top) / 2
+                for (view in listOf("front", "back")) {
+                    val figure = compose.onNodeWithContentDescription("male $view freshness map").getUnclippedBoundsInRoot()
+                    assertEquals(centre.value, ((figure.top + figure.bottom) / 2).value, 0.5f)
+                    assertTrue(figure.top > heading.bottom && figure.bottom < calendar.top)
+                }
+                val layouts = mutableListOf<TextLayoutResult>()
+                compose.onNodeWithText("November 2026")
+                    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                assertEquals(theme.textPrimary, layouts.single().layoutInput.style.color)
+                assertTrue(!layouts.single().hasVisualOverflow)
+            }
         }
     }
 

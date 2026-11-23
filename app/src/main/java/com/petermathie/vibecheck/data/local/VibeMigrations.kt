@@ -6,6 +6,13 @@ import com.petermathie.vibecheck.domain.tracker.encodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoiceSnapshot
 
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE trackers ADD COLUMN heatmapFieldId TEXT")
+        db.execSQL("ALTER TABLE trackers ADD COLUMN heatmapMode TEXT NOT NULL DEFAULT 'RELATIVE'")
+    }
+}
+
 val MIGRATION_15_16 = object : Migration(15, 16) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE workout_sets ADD COLUMN tutEntriesMillis TEXT NOT NULL DEFAULT '[]'")

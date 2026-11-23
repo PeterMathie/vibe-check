@@ -1,476 +1,311 @@
 package com.petermathie.vibecheck.ui
 
+import android.content.SharedPreferences
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
-import com.petermathie.vibecheck.domain.tracker.HabitFieldForm
+import com.petermathie.vibecheck.domain.tracker.habitMeasurement
+import com.petermathie.vibecheck.ui.theme.LocalVibeMotion
+import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import java.time.LocalDate
+import java.time.YearMonth
+import kotlin.random.Random
 
-@Composable
-fun TrackerScreen(vm: EditorViewModel) {
-    val haptics = rememberVibeHaptics()
-    val trackers by vm.trackers.collectAsStateWithLifecycle()
-    val fields by vm.fields.collectAsStateWithLifecycle()
-    val values by vm.values.collectAsStateWithLifecycle()
-    val epoch = LocalDate.now().toEpochDay()
-    var newHabit by remember { mutableStateOf<TrackerEntity?>(null) }
-    var settings by remember { mutableStateOf<TrackerEntity?>(null) }
-    var field by remember { mutableStateOf<TrackerFieldEntity?>(null) }
-    var deleteCandidate by remember { mutableStateOf<TrackerEntity?>(null) }
-    val activeTrackers = trackers.filterNot { it.isArchived }.sortedBy { it.position }
-    val archivedTrackers = trackers.filter { it.isArchived }.sortedBy { it.name }
-    fun hasData(tracker: TrackerEntity): Boolean {
-        val fieldIds = fields.filter { it.trackerId == tracker.id }.map { it.id }.toSet()
-        return values.any { it.fieldId in fieldIds }
-    }
-    val trackerOrder = rememberReorderState(activeTrackers.map { it.id }) { key, from, to ->
-        vm.moveTracker(key as String, to - from)
-    }
-    RegisterAppFabAction(
-        owner = Destination.HABITS,
-        destination = AppFabDestination.NewHabit,
-        visible = newHabit == null && settings == null && field == null && deleteCandidate == null,
-    ) {
-        newHabit = TrackerEntity(newId(), "", false)
-    }
-    ScreenList {
-        item {
-            Text("Habits", style = MaterialTheme.typography.headlineSmall)
+internal const val COLLAPSED_HABITS = "collapsedHabits"
+private const val HABIT_TITLE_CHARACTERS_PER_LINE = 18
+
+internal fun habitHeadingLabel(name: String): String = buildString {
+    var remaining = name
+    // One extra line lets Text ellipsize without formatting the entire saved name.
+    repeat(3) {
+        if (remaining.isNotEmpty()) {
+            val end = remaining.offsetByCodePoints(
+                0, minOf(HABIT_TITLE_CHARACTERS_PER_LINE, remaining.codePointCount(0, remaining.length)),
+            )
+            val split = if (end < remaining.length) {
+                remaining.lastIndexOf(' ', end).takeIf { it > 0 } ?: end
+            } else end
+            val splitWord = split == end && end < remaining.length &&
+                !remaining[end].isWhitespace() && remaining[end - 1] != '-'
+            val boundary = if (splitWord) {
+                remaining.offsetByCodePoints(0, HABIT_TITLE_CHARACTERS_PER_LINE - 1)
+            } else split
+            if (isNotEmpty()) append('\n')
+            append(remaining.substring(0, boundary))
+            if (splitWord) append('-')
+            remaining = remaining.substring(boundary).trimStart()
         }
-        if (activeTrackers.isEmpty()) {
-            item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a habit to record today's entry.") }
-        }
-        itemsIndexed(
-            trackerOrder.ordered(activeTrackers) { it.id },
-            key = { _, tracker -> tracker.id },
-        ) { trackerIndex, tracker ->
-            val trackerFields = fields.filter { it.trackerId == tracker.id }
-            val activeFields = trackerFields.filterNot { it.isArchived }.sortedBy { it.position }
-            ReorderItem(trackerOrder, tracker.id, trackerIndex, Modifier.fillMaxWidth()) {
-                VibeCard {
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Icon(
-                        HabitIconCatalog.icon(tracker.iconName),
-                        contentDescription = null,
-                        tint = Color(tracker.colourArgb.toInt()),
-                        modifier = Modifier.size(32.dp),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(tracker.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                    IconButton(
-                        onClick = {
-                            haptics.perform(VibeHapticEvent.EDIT)
-                            settings = tracker
-                        },
-                        modifier = Modifier.semantics {
-                            contentDescription = "Edit ${tracker.name} settings"
-                        },
-                    ) {
-                        Icon(Icons.Outlined.Edit, contentDescription = null)
-                    }
-                    if (activeTrackers.size > 1) {
-                        ReorderHandle(trackerOrder, tracker.id, tracker.name)
-                    }
-                }
-                activeFields.forEach { habitField ->
-                    HabitDailyInput(
-                        vm,
-                        habitField,
-                        values.find { it.fieldId == habitField.id && it.epochDay == epoch },
-                        epoch,
-                        Color(tracker.colourArgb.toInt()),
-                    )
-                }
-            }
-            }
-        }
-        if (archivedTrackers.isNotEmpty()) {
-            item {
-                VibeCard {
-                    Text("Archived habits", style = MaterialTheme.typography.titleLarge)
-                    archivedTrackers.forEach { tracker ->
-                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Icon(
-                                HabitIconCatalog.icon(tracker.iconName),
-                                contentDescription = null,
-                                tint = Color(tracker.colourArgb.toInt()),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Box(
-                                Modifier
-                                    .size(16.dp)
-                                    .background(Color(tracker.colourArgb.toInt()), CircleShape),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(tracker.name, Modifier.weight(1f))
-                            TextButton(onClick = { vm.save(tracker.copy(isArchived = false)) }) {
-                                Text("Restore")
-                            }
-                            if (!hasData(tracker)) {
-                                TextButton(onClick = { deleteCandidate = tracker }) { Text("Delete") }
-                            }
-                        }
-                    }
+    }
+}
+
+internal fun Modifier.habitGlow(
+    colour: Color,
+    dark: Boolean,
+    origin: Offset = Offset(0.5f, 0.5f),
+): Modifier = drawWithCache {
+    require(origin.x > 0f && origin.x < 1f && origin.y > 0f && origin.y < 1f)
+    val halo = Brush.radialGradient(
+        listOf(colour.copy(alpha = if (dark) 0.09f else 0.05f), colour.copy(alpha = 0f)),
+        center = Offset.Zero, radius = 1f,
+    )
+    val centre = Offset(size.width * origin.x, size.height * origin.y)
+    val quadrants = listOf(
+        Rect(0f, 0f, centre.x, centre.y),
+        Rect(centre.x, 0f, size.width, centre.y),
+        Rect(0f, centre.y, centre.x, size.height),
+        Rect(centre.x, centre.y, size.width, size.height),
+    )
+    onDrawBehind {
+        quadrants.forEach { quadrant ->
+            clipRect(quadrant.left, quadrant.top, quadrant.right, quadrant.bottom) {
+                withTransform({
+                    translate(centre.x, centre.y)
+                    scale(quadrant.width, quadrant.height, pivot = Offset.Zero)
+                }) {
+                    drawCircle(halo, radius = 1f, center = Offset.Zero)
                 }
             }
         }
-    }
-    newHabit?.let { tracker ->
-        NameDialog("Habit name", tracker.name, { newHabit = null }) {
-            vm.createTracker(tracker.copy(name = it))
-            newHabit = null
-        }
-    }
-    settings?.let { tracker ->
-        HabitSettingsDialog(
-            tracker = tracker,
-            fields = fields.filter { it.trackerId == tracker.id },
-            onDismiss = { settings = null },
-            onSave = { updatedTracker, updatedFields ->
-                vm.save(updatedTracker)
-                updatedFields.forEach(vm::save)
-                settings = null
-            },
-            onAddMeasurement = { activeCount ->
-                field = TrackerFieldEntity(
-                    newId(),
-                    tracker.id,
-                    "",
-                    "NUMBER",
-                    null,
-                    null,
-                    null,
-                    activeCount,
-                )
-                settings = null
-            },
-            onEditMeasurement = {
-                field = it
-                settings = null
-            },
-            onRestoreMeasurement = { restored, position ->
-                vm.save(restored.copy(isArchived = false, position = position))
-            },
-            onMoveMeasurement = vm::moveTrackerField,
-            onArchiveHabit = {
-                vm.save(tracker.copy(isArchived = true))
-                settings = null
-            },
-        )
-    }
-    field?.let { habitField ->
-        HabitFieldDialog(
-            vm,
-            habitField,
-            Color(trackers.find { it.id == habitField.trackerId }?.colourArgb?.toInt() ?: 0xFF4CAF50.toInt()),
-        ) { field = null }
-    }
-    deleteCandidate?.let { tracker ->
-        AlertDialog(
-            onDismissRequest = { deleteCandidate = null },
-            title = { Text("Delete ${tracker.name}?") },
-            text = { Text("This empty habit and its settings will be permanently deleted.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        vm.deleteTrackerIfEmpty(tracker.id)
-                        deleteCandidate = null
-                    },
-                ) { Text("Delete permanently") }
-            },
-            dismissButton = { TextButton(onClick = { deleteCandidate = null }) { Text("Cancel") } },
-        )
     }
 }
 
 @Composable
-private fun HabitSettingsDialog(
-    tracker: TrackerEntity,
-    fields: List<TrackerFieldEntity>,
-    onDismiss: () -> Unit,
-    onSave: (TrackerEntity, List<TrackerFieldEntity>) -> Unit,
-    onAddMeasurement: (Int) -> Unit,
-    onEditMeasurement: (TrackerFieldEntity) -> Unit,
-    onRestoreMeasurement: (TrackerFieldEntity, Int) -> Unit,
-    onMoveMeasurement: (String, Int) -> Unit,
-    onArchiveHabit: () -> Unit,
+private fun HabitHeadingAndEntry(
+    heading: @Composable () -> Unit,
+    entry: @Composable () -> Unit,
 ) {
-    val haptics = rememberVibeHaptics()
-    var name by remember(tracker.id) { mutableStateOf(tracker.name) }
-    var colour by remember(tracker.id) { mutableLongStateOf(tracker.colourArgb) }
-    var iconName by remember(tracker.id) { mutableStateOf(tracker.iconName) }
-    var iconsOpen by remember(tracker.id) { mutableStateOf(false) }
-    var coloursOpen by remember(tracker.id) { mutableStateOf(false) }
-    var lightBelow by remember(tracker.id, tracker.heatmapLightBelow) {
-        mutableStateOf(formatThreshold(tracker.heatmapLightBelow))
-    }
-    var mediumBelow by remember(tracker.id, tracker.heatmapMediumBelow) {
-        mutableStateOf(formatThreshold(tracker.heatmapMediumBelow))
-    }
-    val light = lightBelow.toDoubleOrNull()
-    val medium = mediumBelow.toDoubleOrNull()
-    val valid = light != null && medium != null && light >= 0.0 && medium > light
-    val activeFields = fields.filterNot { it.isArchived }.sortedBy { it.position }
-    val choiceForms = remember(tracker.id) {
-        mutableStateMapOf<String, HabitFieldForm>().apply {
-            activeFields.filter { it.valueType == HabitFieldForm.CHOICE }.forEach {
-                put(it.id, resolvedHabitFieldForm(it))
-            }
+    Layout(
+        modifier = Modifier.fillMaxWidth(),
+        content = {
+            Box { heading() }
+            Box(propagateMinConstraints = true) { entry() }
+        },
+    ) { measurables, constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        val gap = 12.dp.roundToPx().coerceAtMost(constraints.maxWidth)
+        val minimumEntryWidth = minOf(
+            (128.dp.toPx() * fontScale).toInt(),
+            ((constraints.maxWidth - gap) * 0.4f).toInt(),
+        )
+        val title = measurables[0].measure(
+            loose.copy(maxWidth = constraints.maxWidth - gap - minimumEntryWidth),
+        )
+        val entryWidth = constraints.maxWidth - title.width - gap
+        val input = measurables[1].measure(loose.copy(minWidth = entryWidth, maxWidth = entryWidth))
+        val height = maxOf(title.height, input.height)
+        layout(constraints.maxWidth, height) {
+            title.placeRelative(0, (height - title.height) / 2)
+            input.placeRelative(constraints.maxWidth - input.width, (height - input.height) / 2)
         }
     }
-    val hasNumericField = activeFields.any { it.valueType == "NUMBER" }
-    val archivedFields = fields.filter { it.isArchived }
-    val activeFieldKeys = remember(activeFields.map { it.id }) { activeFields.map { it.id } }
-    val fieldOrder = rememberReorderState(activeFieldKeys) { key, from, to ->
-        onMoveMeasurement(key as String, to - from)
+}
+
+@Composable
+fun TrackerScreen(
+    vm: EditorViewModel,
+    preferences: SharedPreferences = LocalContext.current.getSharedPreferences("settings", 0),
+) {
+    val data by vm.habitEditorData.collectAsStateWithLifecycle()
+    val haptics = rememberVibeHaptics()
+    val palette = LocalVibePalette.current
+    var collapsedIds by remember(preferences) {
+        mutableStateOf(preferences.getStringSet(COLLAPSED_HABITS, emptySet()).orEmpty().toSet())
     }
-    val unit = activeFields.firstOrNull { it.valueType == "NUMBER" }?.unit
-    val suffix = unit?.let { " ($it)" }.orEmpty()
-    val settingsListState = androidx.compose.foundation.lazy.rememberLazyListState()
-    val reorderContext = rememberReorderScrollContext(settingsListState)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("${tracker.name} settings") },
-        text = {
-            androidx.compose.runtime.CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
-                ReorderOverlayHost {
-                    LazyColumn(
-                        state = settingsListState,
-                        modifier = Modifier.reorderScrollViewport(reorderContext),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                    item {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        EditField("Habit name", name) { name = it }
-                        OutlinedButton(
-                            onClick = { coloursOpen = !coloursOpen },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
+    val today = LocalDate.now()
+    val epoch = today.toEpochDay()
+    var editor by remember { mutableStateOf<HabitEditorSeed?>(null) }
+    var deleteCandidate by remember { mutableStateOf<TrackerEntity?>(null) }
+    var overlay by remember { mutableStateOf(false) }
+    val blur by animateFloatAsState(
+        if (overlay) 12f else 0f, tween(LocalVibeMotion.current.expandMillis), label = "Habit modal blur",
+    )
+    val trackers = data?.trackers.orEmpty()
+    val fields = data?.fields.orEmpty()
+    val values = data?.values.orEmpty()
+    val active = trackers.filterNot { it.isArchived }.sortedBy { it.position }
+    val archived = trackers.filter { it.isArchived }.sortedBy { it.name }
+    fun edit(tracker: TrackerEntity) {
+        haptics.perform(VibeHapticEvent.EDIT)
+        editor = HabitEditorSeed(tracker, fields.filter { it.trackerId == tracker.id }, creating = false)
+    }
+    val order = rememberReorderState(active.map { it.id }) { key, from, to -> vm.moveTracker(key as String, to - from) }
+    fun create() {
+        haptics.perform(VibeHapticEvent.SELECTION)
+        val tracker = TrackerEntity(newId(), "", false)
+        editor = HabitEditorSeed(
+            tracker,
+            listOf(TrackerFieldEntity(newId(), tracker.id, "", "BOOLEAN", null, null, null, 0)),
+            creating = true,
+        )
+    }
+    CompositionLocalProvider(
+        LocalHabitOverlay provides { overlay = it },
+    ) {
+        Box(Modifier.fillMaxSize().blur(blur.dp)) {
+            ScreenList {
+                item { Text("Habits", style = MaterialTheme.typography.headlineSmall) }
+                if (data == null) {
+                    item { CircularProgressIndicator(Modifier.size(24.dp)) }
+                } else if (active.isEmpty()) {
+                    item { Text("Create a habit to record today's entry.", color = palette.textSecondary) }
+                }
+                itemsIndexed(order.ordered(active) { it.id }, key = { _, tracker -> tracker.id }) { index, tracker ->
+                    val trackerFields = fields.filter { it.trackerId == tracker.id }
+                    val calendarState = rememberSaveable(tracker.id, saver = HabitCalendarState.Saver) {
+                        HabitCalendarState(YearMonth.from(today).toString())
+                    }
+                    val expanded = tracker.id !in collapsedIds
+                    val glowOrigin = remember(tracker.id) {
+                        val random = Random(tracker.id.hashCode())
+                        Offset(0.2f + random.nextFloat() * 0.6f, 0.2f + random.nextFloat() * 0.6f)
+                    }
+                    ReorderItem(order, tracker.id, index, Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .padding(top = if (index > 0) 8.dp else 0.dp)
+                                .habitGlow(Color(tracker.colourArgb.toInt()), palette.isDark, glowOrigin),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Box(Modifier.size(20.dp).background(Color(colour.toInt()), CircleShape))
-                            Spacer(Modifier.width(8.dp))
-                            Text(if (coloursOpen) "Hide colours" else "Change colour")
-                        }
-                        if (coloursOpen) {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                HABIT_COLOURS.forEachIndexed { index, option ->
-                                    Box(
-                                        Modifier
-                                            .size(if (colour == option) 38.dp else 34.dp)
-                                            .background(Color(option.toInt()), CircleShape)
-                                            .semantics {
-                                                contentDescription = "Set ${tracker.name} colour ${index + 1}"
+                            if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                            val field = habitMeasurement(trackerFields)
+                            HabitHeadingAndEntry(
+                                heading = {
+                                    ReorderHandle(
+                                        order, tracker.id, tracker.name, enabled = active.size > 1, longPress = true,
+                                    ) {
+                                        Row(
+                                            Modifier.heightIn(min = 48.dp)
+                                                .clickable(onClickLabel = if (expanded) "Collapse to this week" else "Expand to full month") {
+                                                    val updated = if (expanded) collapsedIds + tracker.id else collapsedIds - tracker.id
+                                                    preferences.edit().putStringSet(COLLAPSED_HABITS, updated).apply()
+                                                    collapsedIds = updated
+                                                }
+                                                .semantics { stateDescription = if (expanded) "Month shown" else "This week shown" },
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            IconButton(onClick = { edit(tracker) }) {
+                                                Icon(
+                                                    HabitIconCatalog.icon(tracker.iconName), "Edit ${tracker.name} settings",
+                                                    tint = Color(tracker.colourArgb.toInt()), modifier = Modifier.size(28.dp),
+                                                )
                                             }
-                                            .clickable { colour = option },
+                                            Text(
+                                                remember(tracker.name) { habitHeadingLabel(tracker.name) },
+                                                Modifier.weight(1f, fill = false)
+                                                    .semantics { contentDescription = tracker.name },
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    lineBreak = LineBreak.Heading,
+                                                    hyphens = Hyphens.Auto,
+                                                ),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                },
+                            ) {
+                                if (field != null) {
+                                    HabitDailyInput(
+                                        vm, field, values.find { it.fieldId == field.id && it.epochDay == epoch },
+                                        epoch, Color(tracker.colourArgb.toInt()),
                                     )
                                 }
                             }
-                        }
-                        OutlinedButton(
-                            onClick = { iconsOpen = true },
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = MaterialTheme.shapes.medium,
-                        ) {
-                            Icon(
-                                HabitIconCatalog.icon(iconName),
-                                contentDescription = null,
-                                tint = Color(colour.toInt()),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("Choose icon")
-                        }
-                        if (hasNumericField) {
-                            Text("Shade thresholds", style = MaterialTheme.typography.titleMedium)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(
-                                    value = lightBelow,
-                                    onValueChange = { lightBelow = it },
-                                    label = { Text("Light below$suffix") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                OutlinedTextField(
-                                    value = mediumBelow,
-                                    onValueChange = { mediumBelow = it },
-                                    label = { Text("Dark from$suffix") },
-                                    singleLine = true,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            Text(
-                                if (valid) {
-                                    "Values from ${formatThreshold(light!!)} to under ${formatThreshold(medium!!)}${unit?.let { " $it" }.orEmpty()} use the medium shade."
-                                } else {
-                                    "Dark from must be greater than Light below."
-                                },
-                                style = MaterialTheme.typography.bodySmall,
+                            HabitMonthHeatmap(
+                                tracker, field, values, today, calendarState, expanded,
+                                onChooseMeasurement = { edit(tracker) },
                             )
                         }
-                        Text("Measurements", style = MaterialTheme.typography.titleMedium)
-                        fieldOrder.ordered(activeFields) { it.id }.forEachIndexed { fieldIndex, habitField ->
-                            ReorderItem(fieldOrder, habitField.id, fieldIndex, Modifier.fillMaxWidth()) {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                        if (activeFields.size > 1) {
-                                            ReorderHandle(fieldOrder, habitField.id, habitField.name)
-                                        }
-                                        Text(habitTypeLabel(habitField.valueType), modifier = Modifier.weight(1f))
-                                        if (habitField.valueType != HabitFieldForm.CHOICE) {
-                                            TextButton(onClick = {
-                                                haptics.perform(VibeHapticEvent.EDIT)
-                                                onEditMeasurement(habitField)
-                                            }) { Text("Edit") }
-                                        }
-                                    }
-                                    choiceForms[habitField.id]?.let { form ->
-                                        ChoiceScaleEditor(
-                                            fieldKey = habitField.id,
-                                            form = form,
-                                            habitColour = Color(colour.toInt()),
-                                        ) {
-                                            choiceForms[habitField.id] = it
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        VibeActionButton(
-                            "Add measurement",
-                            { onAddMeasurement(activeFields.size) },
-                            modifier = Modifier.fillMaxWidth(),
-                            importance = ActionImportance.SECONDARY,
-                        )
-                        if (archivedFields.isNotEmpty()) {
-                            Text("Archived measurements", style = MaterialTheme.typography.labelLarge)
-                            archivedFields.forEach { archived ->
-                                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                    Text(archived.name, modifier = Modifier.weight(1f))
-                                    TextButton(onClick = { onRestoreMeasurement(archived, activeFields.size) }) {
-                                        Text("Restore")
-                                    }
+
+                    }
+                }
+                if (archived.isNotEmpty()) item {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                        Text("Archived habits", style = MaterialTheme.typography.titleMedium, color = palette.textSecondary)
+                        archived.forEach { tracker ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(tracker.name, Modifier.weight(1f))
+                                TextButton(onClick = { vm.save(tracker.copy(isArchived = false)) }) { Text("Restore") }
+                                val ids = fields.filter { it.trackerId == tracker.id }.map { it.id }.toSet()
+                                if (values.none { it.fieldId in ids }) {
+                                    TextButton(onClick = { deleteCandidate = tracker }) { Text("Delete") }
                                 }
                             }
                         }
                     }
+                }
+                if (data != null) item(key = "add-habit") {
+                    TextButton(
+                        onClick = ::create,
+                        enabled = !overlay && editor == null && deleteCandidate == null,
+                        modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Create new habit" },
+                    ) {
+                        Icon(Icons.Outlined.Add, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add habit")
                     }
                 }
-                }
             }
-        },
-        confirmButton = {
-            Box(Modifier.fillMaxWidth()) {
-                TextButton(
-                    onClick = onArchiveHabit,
-                    modifier = Modifier.align(androidx.compose.ui.Alignment.CenterStart),
-                ) { Text("Archive") }
-                TextButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.align(androidx.compose.ui.Alignment.Center),
-                ) { Text("Cancel") }
-                TextButton(
-                    enabled = name.isNotBlank() &&
-                        (!hasNumericField || valid) &&
-                        choiceForms.values.all { it.canSave },
-                    modifier = Modifier.align(androidx.compose.ui.Alignment.CenterEnd),
-                    onClick = {
-                        onSave(
-                            tracker.copy(
-                                name = name,
-                                colourArgb = colour,
-                                iconName = iconName,
-                                heatmapLightBelow = light ?: tracker.heatmapLightBelow,
-                                heatmapMediumBelow = medium ?: tracker.heatmapMediumBelow,
-                            ),
-                            choiceForms.mapNotNull { (id, form) ->
-                                activeFields.find { it.id == id }?.let(form::applyTo)
-                            },
+        }
+        editor?.let { seed ->
+            HabitEditorDialog(
+                seed, onDismiss = { editor = null },
+                onSave = { tracker, updatedFields, saved, failed ->
+                    vm.saveHabitEditor(tracker, updatedFields, seed.creating, saved) {
+                        failed(vm.error.value ?: "Could not save habit")
+                    }
+                },
+            )
+        }
+        deleteCandidate?.let { tracker ->
+            var deleting by remember { mutableStateOf(false) }
+            var error by remember { mutableStateOf<String?>(null) }
+            HabitGlassDialog(
+                title = "Delete ${tracker.name}?",
+                onDismiss = { if (!deleting) deleteCandidate = null },
+                actions = {
+                    TextButton(onClick = { deleteCandidate = null }, enabled = !deleting) { Text("Cancel") }
+                    TextButton(onClick = {
+                        deleting = true
+                        vm.deleteTrackerIfEmpty(
+                            tracker.id, onSaved = { deleteCandidate = null },
+                            onFailure = { deleting = false; error = vm.error.value },
                         )
-                    },
-                ) { Text("Save") }
+                    }, enabled = !deleting) { Text("Delete permanently") }
+                },
+            ) {
+                Text("This empty habit and its settings will be permanently deleted.")
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
-        },
-    )
-    if (iconsOpen) {
-        AlertDialog(
-            onDismissRequest = { iconsOpen = false },
-            title = { Text("Choose icon") },
-            text = {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(5),
-                    modifier = Modifier.heightIn(max = 520.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(HabitIconCatalog.options, key = { it.key }) { option ->
-                        Surface(
-                            onClick = {
-                                iconName = option.key
-                                iconsOpen = false
-                            },
-                            color = if (option.key == iconName) {
-                                Color(colour.toInt()).copy(alpha = 0.24f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant
-                            },
-                            shape = MaterialTheme.shapes.medium,
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .semantics {
-                                    contentDescription = "Set ${tracker.name} icon ${option.label}"
-                                },
-                        ) {
-                            Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
-                                Icon(
-                                    option.icon,
-                                    contentDescription = null,
-                                    tint = Color(colour.toInt()),
-                                    modifier = Modifier.size(28.dp),
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { iconsOpen = false }) { Text("Close") }
-            },
-        )
+        }
     }
 }
-
-private fun formatThreshold(value: Double): String =
-    if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
-
-private val HABIT_COLOURS = listOf(
-    0xFF26A69AL,
-    0xFF42A5F5L,
-    0xFF7E57C2L,
-    0xFFEC407AL,
-    0xFFEF5350L,
-    0xFFFFA726L,
-    0xFF66BB6AL,
-)

@@ -1,6 +1,9 @@
 package com.petermathie.vibecheck
 
 import android.content.Context
+import android.content.ContextWrapper
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.*
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -28,12 +31,56 @@ import java.io.File
 class ProgressUiTest {
     private lateinit var database: VibeDatabase
     private var preservedPhotoNames: Set<String>? = null
+    private var fixturePreferenceName: String? = null
 
     @get:Rule
     val lifecycle = ComposeRoomLifecycleRule {
         if (::database.isInitialized) database else null
     }
     private val compose get() = lifecycle.compose
+
+    @After
+    fun cleanUpFixturePreferences() {
+        fixturePreferenceName?.let {
+            ApplicationProvider.getApplicationContext<Context>().deleteSharedPreferences(it)
+        }
+    }
+
+    @Test
+    fun habitCalendarsAreAbsentWhileOtherCardsRetainTheirSavedOrder() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val preferenceName = "habits-progress-fixture-${java.util.UUID.randomUUID()}"
+        fixturePreferenceName = preferenceName
+        val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
+        preferences.edit().putString("card-order", "training|habit:tracker|bodyweight")
+            .putBoolean("card-order-customized", true).commit()
+        val isolatedContext = object : ContextWrapper(context) {
+            override fun getSharedPreferences(name: String, mode: Int) = preferences
+            override fun getFilesDir() = File(context.cacheDir, preferenceName)
+        }
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking {
+            database.editorDao().tracker(com.petermathie.vibecheck.data.local.TrackerEntity("tracker", "Not on Progress", false))
+            database.editorDao().measurement(
+                com.petermathie.vibecheck.data.local.BodyMeasurementEntity("weight", 1, "Bodyweight", 75.0, "kg", "", false),
+            )
+        }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme {
+                CompositionLocalProvider(LocalContext provides isolatedContext) { ProgressScreen(viewModel) }
+            }
+        }
+        compose.waitUntil(15_000) {
+            preferences.getString("card-order", "") == "training|bodyweight"
+        }
+        compose.onNodeWithText("Not on Progress").assertDoesNotExist()
+        compose.onNodeWithText("Training progress").assertExists()
+        compose.onNodeWithText("Bodyweight").assertExists()
+        val training = compose.onNodeWithText("Training progress").fetchSemanticsNode().boundsInRoot
+        val bodyweight = compose.onNodeWithText("Bodyweight").fetchSemanticsNode().boundsInRoot
+        assertTrue("Training should remain before bodyweight", training.top < bodyweight.top)
+    }
 
     @After
     fun cleanUpPhotos() {
@@ -89,39 +136,19 @@ class ProgressUiTest {
 
         compose.onNodeWithText("Overall training trend").assertExists()
         compose.onNodeWithText("Bodyweight").assertExists()
-        compose.onNodeWithText("Piano").assertExists()
-        compose.onNodeWithText("Meditation").assertExists()
-        compose.onNodeWithText("Protein").assertExists()
         compose.onNodeWithContentDescription("Reorder Overall training trend").assertExists()
         compose.onNodeWithContentDescription("Reorder Bodyweight").assertExists()
-        compose.onNodeWithContentDescription("Reorder Piano").assertExists()
-        compose.onNodeWithContentDescription("Reorder Meditation").assertExists()
-        compose.onNodeWithContentDescription("Reorder Protein").assertExists()
         compose.onNodeWithContentDescription("Reorder Training progress").assertExists()
-        compose.onNodeWithContentDescription("Piano icon").assertExists()
-        compose.onNodeWithContentDescription("Meditation icon").assertExists()
-        compose.onNodeWithContentDescription("Protein icon").assertExists()
         listOf("Piano", "Meditation", "Protein", "Mood", "Journal", "Reading").forEach { habit ->
-            compose
-                .onNodeWithContentDescription("${habit.lowercase()} intensity date navigation")
-                .performScrollTo()
-            val headerBounds = compose.onNodeWithText(habit).fetchSemanticsNode().boundsInRoot
-            val navigationBounds = compose
-                .onNodeWithContentDescription("${habit.lowercase()} intensity date navigation")
-                .fetchSemanticsNode()
-                .boundsInRoot
-            assertTrue(
-                "$habit heat map must start below its header: header=$headerBounds navigation=$navigationBounds",
-                navigationBounds.top >= headerBounds.bottom,
-            )
+            compose.onNodeWithText(habit).assertDoesNotExist()
+            compose.onNodeWithContentDescription("Reorder $habit").assertDoesNotExist()
         }
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("kg", substring = true).fetchSemanticsNodes().isNotEmpty()
         }
-        assertTrue(compose.onAllNodesWithContentDescription("piano intensity", substring = true).fetchSemanticsNodes().isNotEmpty())
-        repeat(3) {
+        repeat(1) {
             val actions: List<androidx.compose.ui.semantics.CustomAccessibilityAction> =
-                compose.onNodeWithContentDescription("Reorder Meditation")
+                compose.onNodeWithContentDescription("Reorder Bodyweight")
                 .fetchSemanticsNode()
                 .config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
             assertTrue(actions.first { action -> action.label == "Move earlier" }.action())
@@ -130,7 +157,7 @@ class ProgressUiTest {
         compose.waitUntil(15_000) {
             context.getSharedPreferences("progress-layout", Context.MODE_PRIVATE)
                 .getString("card-order", "")
-                ?.substringBefore('|') == "habit:demo-meditation"
+                ?.substringBefore('|') == "bodyweight"
         }
         compose.onNodeWithText("Bodyweight").performScrollTo()
         compose.waitUntil(15_000) {
@@ -139,13 +166,6 @@ class ProgressUiTest {
         compose.onNodeWithContentDescription("kg", substring = true).performTouchInput { click(androidx.compose.ui.geometry.Offset(16f, center.y)) }
         compose.onNodeWithContentDescription("Progress photo for selected bodyweight day").assertIsDisplayed()
         compose.onNodeWithText("Close").performClick()
-        compose.onNodeWithText("Mood").performScrollTo()
-        assertTrue(compose.onAllNodesWithContentDescription("1 mood intensity", substring = true).fetchSemanticsNodes().isNotEmpty())
-        assertTrue(compose.onAllNodesWithContentDescription("2 mood intensity", substring = true).fetchSemanticsNodes().isNotEmpty())
-        assertTrue(compose.onAllNodesWithContentDescription("3 mood intensity", substring = true).fetchSemanticsNodes().isNotEmpty())
-        compose.onNodeWithText("Journal").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithText("Reading").performScrollTo().assertIsDisplayed()
-
         compose.waitUntil(15_000) {
             compose.onAllNodesWithText("Choose exercise").fetchSemanticsNodes().isNotEmpty()
         }

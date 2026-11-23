@@ -1,6 +1,6 @@
 # Structured import — format version 1
 
-This format currently targets database schema 16. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
+This format currently targets database schema 17. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
 
 ## Envelope and merge rules
 
@@ -36,7 +36,8 @@ All database writes occur in one transaction. Invalid types, values, references 
 | setType | WORKING, WARM_UP |
 | result | COMPLETED, FAILED |
 | tracker valueType | BOOLEAN, NUMBER, COUNT, DURATION, RATING, TEXT, CHOICE, DATETIME |
-| targetComparison | AT_LEAST, AT_MOST, EXACTLY, or null |
+| targetComparison | AT_LEAST, AT_MOST, EXACTLY, RANGE, or null |
+| tracker heatmapMode | RELATIVE, GOAL |
 
 Legacy workout snapshots may have an empty `trackingType`; new imports should supply the actual type. Completed zero attempts are permitted and excluded by progression calculations. Failed/partial attempts use `FAILED` and zero/null outcomes, never positive reps or holds.
 
@@ -61,6 +62,8 @@ At most eight band definitions (built-in and custom combined) may be configured.
 Logger tick/done locks are device-local UI preferences keyed by stable set ID, not a new database status or backup preference. They survive app restart but are not transferred by JSON export/import; pre-existing local locks are not inferred from or rewritten by imported `result` values. New installations and sets without an explicit local tick start unlocked, including historical records. The composable logger's fixed logical columns and per-set variant headers do not rename bands or rewrite saved measurement orders. Inactive-variant raw-input/snapshot buffers survive saved-instance restoration but are not a new transferable database archive. Untouched recorded sets are not rewritten when ticked.
 
 Habit values must match the field: a numerical field has only `numericValue`, a Boolean field only `booleanValue`, and text/choice/date-time fields only `textValue`. Other value columns are null. Counts are non-negative whole numbers; durations are non-negative. Numeric targets require both comparison and target value, or both null. There is one value per `(fieldId, epochDay)`.
+
+Schema 17 adds nullable `trackers.heatmapFieldId` and `trackers.heatmapMode` (default `"RELATIVE"`). Version-1 backups missing either column receive those defaults before validation. A non-null legacy primary ID must reference an active field owned by that habit; invalid modes/references roll back the import. Legacy multiple fields and their values still round-trip without deletion, but Habits now uses only the first active field in configured order, regardless of an older primary selection. Extra fields cannot be added or recorded through the editor. Its next successful edit or recording marks legacy extras internally archived and updates an obsolete primary pointer, without deleting their values or rewriting earlier day-outcome snapshots. Existing threshold columns still round-trip but no longer control shading. Goal-mode calendars evaluate historical values against the current goal without rewriting saved values or Home's saved day-outcome snapshots. Measurement type/unit locking and non-negative input validation apply to new editor writes, not to restoration of compatible historical backups; finite legacy signed NUMBER/RATING values remain importable.
 
 Photos are not part of this JSON format; export them separately. Legacy set `notes` remains a database field for compatibility; new notes should be stored at exercise or workout level.
 

@@ -27,16 +27,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.ExerciseVariationEntity
-import com.petermathie.vibecheck.data.local.TrackerDailyValueEntity
-import com.petermathie.vibecheck.data.local.TrackerEntity
-import com.petermathie.vibecheck.data.local.TrackerFieldEntity
 import com.petermathie.vibecheck.domain.progress.SessionProgress
 import com.petermathie.vibecheck.domain.progress.PersonalRecords
 import com.petermathie.vibecheck.domain.progress.PersonalRecordVisibility
 import com.petermathie.vibecheck.domain.model.ActivityDay
-import com.petermathie.vibecheck.domain.tracker.HabitFieldForm
-import com.petermathie.vibecheck.domain.tracker.HabitChoiceIntensity
-import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import com.petermathie.vibecheck.ui.theme.VibeSpacing
 import com.petermathie.vibecheck.ui.components.VibeGraph
 import com.petermathie.vibecheck.ui.components.VibeGraphStyle
@@ -51,7 +45,7 @@ import java.time.LocalDate
 fun ProgressScreen(vm:EditorViewModel) {
     val exercises by vm.exercises.collectAsStateWithLifecycle();val workouts by vm.workouts.collectAsStateWithLifecycle();val rows by vm.workoutExercises.collectAsStateWithLifecycle()
     val sets by vm.sets.collectAsStateWithLifecycle();val links by vm.setBands.collectAsStateWithLifecycle();val bands by vm.bands.collectAsStateWithLifecycle();val variations by vm.variations.collectAsStateWithLifecycle()
-    val trackers by vm.trackers.collectAsStateWithLifecycle();val fields by vm.fields.collectAsStateWithLifecycle();val values by vm.values.collectAsStateWithLifecycle();val measurements by vm.measurements.collectAsStateWithLifecycle()
+    val measurements by vm.measurements.collectAsStateWithLifecycle()
     val context=LocalContext.current
     var exerciseId by remember { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by remember { mutableStateOf<String?>(null) };var selected by remember { mutableStateOf<Int?>(null) }
     var variationMenu by remember { mutableStateOf(false) };var methodology by remember { mutableStateOf(false) }
@@ -77,11 +71,9 @@ fun ProgressScreen(vm:EditorViewModel) {
     val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
     val records=SessionProgress.records(valid,points)
     val recordVisibility=SessionProgress.recordVisibility(exercises.find { it.id==exerciseId }?.trackingType)
-    val activeTrackers = trackers.filterNot { it.isArchived }.sortedBy { it.position }
     val availableCardKeys = buildList {
         if (aggregate.isNotEmpty()) add("overall")
         if (bodyweights.isNotEmpty()) add("bodyweight")
-        activeTrackers.forEach { add("habit:${it.id}") }
         add("training")
     }
     val layoutPreferences = remember(context) {
@@ -99,9 +91,6 @@ fun ProgressScreen(vm:EditorViewModel) {
                 when {
                     cardKey == "overall" -> 0
                     cardKey == "bodyweight" -> 1
-                    cardKey.startsWith("habit:") -> {
-                        100 + (activeTrackers.find { "habit:${it.id}" == cardKey }?.position ?: 0)
-                    }
                     else -> 1_000
                 }
             }
@@ -134,7 +123,6 @@ fun ProgressScreen(vm:EditorViewModel) {
                             cardKey == "overall" -> "Overall training trend"
                             cardKey == "bodyweight" -> "Bodyweight"
                             cardKey == "training" -> "Training progress"
-                            cardKey.startsWith("habit:") -> activeTrackers.find { "habit:${it.id}" == cardKey }?.name.orEmpty()
                             else -> cardKey
                         }
                         val expanded = !collapsedCards.contains(cardKey)
@@ -160,36 +148,6 @@ fun ProgressScreen(vm:EditorViewModel) {
                                 }
                                 selectedWeight?.let { bodyweights.getOrNull(it) }?.let {
                                     Text("${Instant.ofEpochMilli(it.recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()} · ${formatBodyweight(it.value)} ${it.unit}")
-                                }
-                            }
-                            cardKey.startsWith("habit:") -> {
-                                activeTrackers.find { "habit:${it.id}" == cardKey }?.let { tracker ->
-                                    ReorderItem(progressOrder, cardKey, cardIndex, Modifier.fillMaxWidth()) {
-                                        VibeCard {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable(onClickLabel = if (expanded) "Collapse ${tracker.name}" else "Expand ${tracker.name}") { toggleExpanded() },
-                                                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                                            ) {
-                                                Icon(HabitIconCatalog.icon(tracker.iconName), contentDescription = "${tracker.name} icon", tint = Color(tracker.colourArgb.toInt()))
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(tracker.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                                                ReorderHandle(progressOrder, cardKey, tracker.name)
-                                            }
-                                            if (expanded) {
-                                                val trackerFields = fields.filter { it.trackerId == tracker.id && !it.isArchived }
-                                                val fieldIds = trackerFields.map { it.id }.toSet()
-                                                val habitDays = values.filter { it.fieldId in fieldIds }
-                                                    .groupBy { it.epochDay }
-                                                    .map { (epochDay, dailyValues) -> ActivityDay(epochDay, habitHeatmapLevel(tracker, trackerFields, dailyValues)) }
-                                                val numericField = trackerFields.firstOrNull { it.valueType in setOf("NUMBER", "COUNT", "DURATION", "RATING") }
-                                                val unit = numericField?.unit
-                                                Text(habitIntensityDescription(tracker, trackerFields, unit), style = MaterialTheme.typography.bodySmall)
-                                                ActivityHeatmap(days = habitDays, onDayClick = {}, activityColor = Color(tracker.colourArgb.toInt()), itemLabel = "${tracker.name.lowercase()} intensity")
-                                            }
-                                        }
-                                    }
                                 }
                             }
                             cardKey == "training" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
@@ -391,56 +349,6 @@ private fun PersonalRecordsContent(
         PersonalRecordValue("Estimated 1RM", "${formatAxis(it)} kg")
     }
 }
-
-internal fun heatmapLevel(value: Double, lightBelow: Double, mediumBelow: Double): Int = when {
-    value < lightBelow -> 1
-    value < mediumBelow -> 2
-    else -> 3
-}
-
-internal fun habitHeatmapLevel(
-    tracker: TrackerEntity,
-    fields: List<TrackerFieldEntity>,
-    values: List<TrackerDailyValueEntity>,
-): Int {
-    val fieldsById = fields.associateBy { it.id }
-    val numericValues = values.mapNotNull { it.numericValue }
-    if (numericValues.isNotEmpty()) {
-        return heatmapLevel(numericValues.sum(), tracker.heatmapLightBelow, tracker.heatmapMediumBelow)
-    }
-    return values.mapNotNull { value ->
-        val field = fieldsById[value.fieldId] ?: return@mapNotNull null
-        when (field.valueType) {
-            "BOOLEAN" -> value.booleanValue?.let { if (it) 3 else 1 }
-            HabitFieldForm.CHOICE -> {
-                value.choiceIntensity?.let {
-                    runCatching { HabitChoiceIntensity.valueOf(it).heatmapLevel }.getOrNull()
-                } ?: decodeHabitChoices(field)
-                    .firstOrNull { it.id == value.choiceOptionId || value.choiceOptionId == null && it.label == value.textValue }
-                    ?.intensity
-                    ?.heatmapLevel
-            }
-            "TEXT", "DATETIME" -> value.textValue?.takeIf(String::isNotBlank)?.let { 2 }
-            else -> null
-        }
-    }.maxOrNull() ?: 1
-}
-
-private fun habitIntensityDescription(
-    tracker: TrackerEntity,
-    fields: List<TrackerFieldEntity>,
-    unit: String?,
-): String = when {
-    fields.any { it.valueType in setOf("NUMBER", "COUNT", "DURATION", "RATING") } ->
-        "Low < ${formatAxis(tracker.heatmapLightBelow)}${unitSuffix(unit)} · " +
-            "medium < ${formatAxis(tracker.heatmapMediumBelow)}${unitSuffix(unit)} · strong at or above"
-    fields.any { it.valueType == HabitFieldForm.CHOICE } ->
-        "Each choice uses its configured Light, Medium, or Dark intensity."
-    fields.any { it.valueType == "BOOLEAN" } -> "No is low · Yes is strong"
-    else -> "A written entry uses the medium shade."
-}
-
-private fun unitSuffix(unit: String?): String = unit?.let { " $it" }.orEmpty()
 
 @Composable
 private fun PersonalRecordValue(label:String,value:String,detail:String?=null) {

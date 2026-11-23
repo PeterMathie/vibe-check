@@ -145,6 +145,10 @@ interface EditorDao {
     @Query("DELETE FROM workouts WHERE id = :id") suspend fun deleteWorkout(id: String)
     @Query("SELECT * FROM trackers ORDER BY position, name") fun trackers(): Flow<List<TrackerEntity>>
     @Query("SELECT * FROM tracker_fields ORDER BY position") fun fields(): Flow<List<TrackerFieldEntity>>
+    @Query("SELECT * FROM trackers ORDER BY position, name")
+    suspend fun trackersSnapshot(): List<TrackerEntity>
+    @Query("SELECT * FROM tracker_fields WHERE trackerId = :trackerId ORDER BY position")
+    suspend fun fieldsForTracker(trackerId: String): List<TrackerFieldEntity>
     @Query("SELECT * FROM tracker_daily_values") fun values(): Flow<List<TrackerDailyValueEntity>>
     @Upsert suspend fun tracker(row: TrackerEntity)
     @Query("DELETE FROM trackers WHERE id = :id") suspend fun deleteTracker(id: String)

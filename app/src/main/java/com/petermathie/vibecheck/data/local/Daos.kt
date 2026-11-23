@@ -342,6 +342,7 @@ interface TrackerDao {
     suspend fun updateOutcome(trackerId: String, epochDay: Long) {
         val fields = activeFields(trackerId)
         val values = valuesForDay(fields.firstOrNull()?.trackerId ?: return, epochDay)
+            .filter { value -> fields.any { it.id == value.fieldId } }
         if (values.isEmpty()) {
             deleteOutcome(trackerId, epochDay)
             return

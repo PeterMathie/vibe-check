@@ -86,18 +86,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.blur
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -564,16 +560,22 @@ internal fun HomeScreen(
         val horizontalGutter = ((maxWidth - 840.dp) / 2).coerceAtLeast(VibeSpacing.medium)
         val legendWidth = ((maxWidth - horizontalGutter * 2) / 2 - VibeSpacing.medium).coerceAtLeast(0.dp)
         val verticalPadding = VibeSpacing.xSmall
-        val sectionSpacing = VibeSpacing.xSmall
-        val availableHeight = with(density) {
-            (constraints.maxHeight - verticalPadding.roundToPx() * 2 - sectionSpacing.roundToPx())
+        val referenceAvailableHeight = with(density) {
+            (constraints.maxHeight - verticalPadding.roundToPx() * 2 - VibeSpacing.xSmall.roundToPx())
                 .coerceAtLeast(0).toDp()
         }
-        val minimumCalendarHeight = 36.dp + (if (fontScale > 1.05f) 192.dp else 184.dp) * fontScale
-        // Keep figure sizing stable while reallocating the former slider space.
+        val referenceCalendarHeight = 36.dp + (if (fontScale > 1.05f) 192.dp else 184.dp) * fontScale
+        // Keep figure sizing stable while redistributing the vertical spacing.
         val referenceFreshnessHeight = with(density) {
-            (availableHeight.coerceAtLeast(minimumCalendarHeight / 0.3f).roundToPx() * 0.7f)
+            (referenceAvailableHeight.coerceAtLeast(referenceCalendarHeight / 0.3f).roundToPx() * 0.7f)
                 .roundToInt().toDp()
+        }
+        // Budget rounded child heights, row gaps, spacing and panel padding.
+        val minimumCalendarHeight = with(density) {
+            (48.dp * fontScale).roundToPx() +
+                ((if (fontScale > 1.05f) 32.dp else 24.dp) * fontScale).roundToPx() +
+                (22.dp * fontScale).roundToPx() * 6 +
+                4.dp.roundToPx() * 5 + VibeSpacing.xSmall.roundToPx() * 4
         }
         val headerHeight = if (stackedControls) 80.dp * fontScale else 48.dp
         val referenceMapHeight = referenceFreshnessHeight - VibeSpacing.medium * 2 -
@@ -587,126 +589,141 @@ internal fun HomeScreen(
                 .blur(12.dp * modalProgress)
                 .verticalScroll(scrollState)
                 .semantics { contentDescription = "Home content" }
-                .padding(horizontal = horizontalGutter, vertical = verticalPadding),
+                .padding(horizontal = horizontalGutter)
+                .padding(
+                    top = verticalPadding,
+                    bottom = verticalPadding + VibeSpacing.medium + 22.dp * fontScale,
+                ),
             content = {
-                Column(
+                Layout(
                     modifier = Modifier.fillMaxWidth()
+                        .habitGlow(palette.accent, palette.isDark)
                         .semantics { contentDescription = "Freshness panel" }
-                        .padding(horizontal = VibeSpacing.medium, vertical = VibeSpacing.xSmall),
-                    verticalArrangement = Arrangement.spacedBy(VibeSpacing.small + 16.dp),
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth().height(headerHeight),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(
-                            Modifier.weight(1f).padding(end = VibeSpacing.medium),
-                            verticalArrangement = Arrangement.Center,
+                        .padding(horizontal = VibeSpacing.medium)
+                        .padding(top = VibeSpacing.xSmall),
+                    content = {
+                        Row(
+                            Modifier.fillMaxWidth().height(headerHeight).testTag("Home freshness heading"),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Freshness", color = palette.textPrimary, style = MaterialTheme.typography.labelLarge)
-                            FreshnessLegend(
-                                modifier = Modifier.widthIn(max = legendWidth).fillMaxWidth(),
-                                includeNoData = false,
-                                horizontal = true,
+                            Column(
+                                Modifier.weight(1f).padding(end = VibeSpacing.medium),
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text("Freshness", color = palette.textPrimary, style = MaterialTheme.typography.labelLarge)
+                                FreshnessLegend(
+                                    modifier = Modifier.widthIn(max = legendWidth).fillMaxWidth(),
+                                    includeNoData = false,
+                                    horizontal = true,
+                                )
+                            }
+                            ModeSelector(
+                                state.mode,
+                                onModeChange,
+                                Modifier.width(112.dp).height(48.dp).testTag("Home mode selector"),
+                                iconOnly = true,
                             )
                         }
-                        ModeSelector(
-                            state.mode,
-                            onModeChange,
-                            Modifier.width(112.dp).height(48.dp).testTag("Home mode selector"),
-                            iconOnly = true,
-                        )
-                    }
-                    Box(Modifier.fillMaxWidth()) {
-                        Layout(
-                            modifier = Modifier.fillMaxWidth(),
-                            content = {
-                                MuscleMap(
-                                    sex = sex,
-                                    view = AnatomyView.FRONT,
-                                    states = mapStates,
-                                    onMuscleTap = { selectMuscle(it, AnatomyView.FRONT) },
-                                    onMuscleDoubleTap = {
-                                        selectMuscle(it, AnatomyView.FRONT)
-                                        muscleModalOpen = true
-                                    },
+                        Box(Modifier.fillMaxWidth()) {
+                            Layout(
+                                modifier = Modifier.fillMaxWidth(),
+                                content = {
+                                    MuscleMap(
+                                        sex = sex,
+                                        view = AnatomyView.FRONT,
+                                        states = mapStates,
+                                        onMuscleTap = { selectMuscle(it, AnatomyView.FRONT) },
+                                        onMuscleDoubleTap = {
+                                            selectMuscle(it, AnatomyView.FRONT)
+                                            muscleModalOpen = true
+                                        },
+                                        modifier = Modifier
+                                            .focusRequester(frontMapFocusRequester).focusable(),
+                                        selectedMuscleId = selectedMuscle,
+                                        celebratedMuscleIds = celebratedMuscles,
+                                        alignToLegendBounds = true,
+                                        musclesOnly = true,
+                                        referenceCanvasHeight = referenceMapHeight + (VibeSpacing.medium - VibeSpacing.xSmall) * 2,
+                                    )
+                                    MuscleMap(
+                                        sex = sex,
+                                        view = AnatomyView.BACK,
+                                        states = mapStates,
+                                        onMuscleTap = { selectMuscle(it, AnatomyView.BACK) },
+                                        onMuscleDoubleTap = {
+                                            selectMuscle(it, AnatomyView.BACK)
+                                            muscleModalOpen = true
+                                        },
+                                        modifier = Modifier
+                                            .focusRequester(backMapFocusRequester).focusable(),
+                                        selectedMuscleId = selectedMuscle,
+                                        celebratedMuscleIds = celebratedMuscles,
+                                        alignToLegendBounds = true,
+                                        musclesOnly = true,
+                                        referenceCanvasHeight = referenceMapHeight + (VibeSpacing.medium - VibeSpacing.xSmall) * 2,
+                                    )
+                                },
+                            ) { measurables, constraints ->
+                                val gap = 8.dp.roundToPx()
+                                val referenceGutter = 35.dp.roundToPx().coerceAtMost(constraints.maxWidth / 2)
+                                val referenceWidth = (constraints.maxWidth - referenceGutter * 2 - gap).coerceAtLeast(0)
+                                val sideGutter = 24.dp.roundToPx().coerceAtMost(constraints.maxWidth / 2)
+                                val anatomyWidth = (constraints.maxWidth - sideGutter * 2).coerceAtLeast(0)
+                                val mapWidth = (anatomyWidth - gap).coerceAtLeast(0)
+                                val frontWidth = mapWidth / 2
+                                val backWidth = mapWidth - frontWidth
+                                val mapHeight = maxOf(
+                                    croppedMuscleMapHeight(frontBounds, referenceWidth / 2, referenceMapHeightPx),
+                                    croppedMuscleMapHeight(backBounds, referenceWidth - referenceWidth / 2, referenceMapHeightPx),
+                                ) + 32.dp.roundToPx() +
+                                    2 * (VibeSpacing.medium.roundToPx() - VibeSpacing.xSmall.roundToPx())
+                                val front = measurables[0].measure(Constraints.fixed(frontWidth, mapHeight))
+                                val back = measurables[1].measure(Constraints.fixed(backWidth, mapHeight))
+                                layout(constraints.maxWidth, mapHeight) {
+                                    front.placeRelative(sideGutter, 0)
+                                    back.placeRelative(sideGutter + frontWidth + gap, 0)
+                                }
+                            }
+                            confettiEventId?.let { eventId ->
+                                CompletionConfetti(eventId, Modifier.matchParentSize())
+                            }
+                            completionAnnouncement?.let { announcement ->
+                                Text(
+                                    text = announcement,
+                                    color = Color.Transparent,
                                     modifier = Modifier
-                                        .homeGlow(palette.accent.copy(alpha = if (palette.isDark) 0.085f else 0.05f))
-                                        .focusRequester(frontMapFocusRequester).focusable(),
-                                    selectedMuscleId = selectedMuscle,
-                                    celebratedMuscleIds = celebratedMuscles,
-                                    alignToLegendBounds = true,
-                                    musclesOnly = true,
-                                    referenceCanvasHeight = referenceMapHeight + (VibeSpacing.medium - VibeSpacing.xSmall) * 2,
+                                        .align(Alignment.TopCenter)
+                                        .semantics {
+                                            liveRegion = LiveRegionMode.Polite
+                                            contentDescription = announcement
+                                        },
                                 )
-                                MuscleMap(
-                                    sex = sex,
-                                    view = AnatomyView.BACK,
-                                    states = mapStates,
-                                    onMuscleTap = { selectMuscle(it, AnatomyView.BACK) },
-                                    onMuscleDoubleTap = {
-                                        selectMuscle(it, AnatomyView.BACK)
-                                        muscleModalOpen = true
-                                    },
-                                    modifier = Modifier
-                                        .homeGlow(palette.accent.copy(alpha = if (palette.isDark) 0.085f else 0.05f))
-                                        .focusRequester(backMapFocusRequester).focusable(),
-                                    selectedMuscleId = selectedMuscle,
-                                    celebratedMuscleIds = celebratedMuscles,
-                                    alignToLegendBounds = true,
-                                    musclesOnly = true,
-                                    referenceCanvasHeight = referenceMapHeight + (VibeSpacing.medium - VibeSpacing.xSmall) * 2,
-                                )
-                            },
-                        ) { measurables, constraints ->
-                            val gap = 8.dp.roundToPx()
-                            val referenceGutter = 35.dp.roundToPx().coerceAtMost(constraints.maxWidth / 2)
-                            val referenceWidth = (constraints.maxWidth - referenceGutter * 2 - gap).coerceAtLeast(0)
-                            val sideGutter = 24.dp.roundToPx().coerceAtMost(constraints.maxWidth / 2)
-                            val anatomyWidth = (constraints.maxWidth - sideGutter * 2).coerceAtLeast(0)
-                            val mapWidth = (anatomyWidth - gap).coerceAtLeast(0)
-                            val frontWidth = mapWidth / 2
-                            val backWidth = mapWidth - frontWidth
-                            val mapHeight = maxOf(
-                                croppedMuscleMapHeight(frontBounds, referenceWidth / 2, referenceMapHeightPx),
-                                croppedMuscleMapHeight(backBounds, referenceWidth - referenceWidth / 2, referenceMapHeightPx),
-                            ) + 32.dp.roundToPx() +
-                                2 * (VibeSpacing.medium.roundToPx() - VibeSpacing.xSmall.roundToPx())
-                            val front = measurables[0].measure(Constraints.fixed(frontWidth, mapHeight))
-                            val back = measurables[1].measure(Constraints.fixed(backWidth, mapHeight))
-                            layout(constraints.maxWidth, mapHeight) {
-                                front.placeRelative(sideGutter, 0)
-                                back.placeRelative(sideGutter + frontWidth + gap, 0)
                             }
                         }
-                        confettiEventId?.let { eventId ->
-                            CompletionConfetti(eventId, Modifier.matchParentSize())
-                        }
-                        completionAnnouncement?.let { announcement ->
-                            Text(
-                                text = announcement,
-                                color = Color.Transparent,
-                                modifier = Modifier
-                                    .align(Alignment.TopCenter)
-                                    .semantics {
-                                        liveRegion = LiveRegionMode.Polite
-                                        contentDescription = announcement
-                                    },
-                            )
-                        }
+                    },
+                ) { measurables, constraints ->
+                    val loose = constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity)
+                    val heading = measurables[0].measure(loose)
+                    val anatomy = measurables[1].measure(loose)
+                    val gap = (VibeSpacing.small + 16.dp).roundToPx()
+                    val height = maxOf(constraints.minHeight, heading.height + anatomy.height + gap * 2)
+                    layout(constraints.maxWidth, height) {
+                        heading.placeRelative(0, 0)
+                        anatomy.placeRelative(0, heading.height + (height - heading.height - anatomy.height) / 2)
                     }
                 }
                 Box(
-                    modifier = Modifier.fillMaxWidth()
-                        .onGloballyPositioned { calendarBounds = it.unclippedWindowBounds() }
-                        .homeGlow(palette.accent.copy(alpha = if (palette.isDark) 0.07f else 0.04f))
-                        .semantics { contentDescription = "Work tracker card" },
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.BottomCenter,
                 ) {
                     MonthlyActivityHeatmap(
                         days = state.activityDays,
                         selectedDate = selectedRecencyDate,
                         today = today,
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.fillMaxWidth()
+                            .onGloballyPositioned { calendarBounds = it.unclippedWindowBounds() }
+                            .habitGlow(palette.accent, palette.isDark)
+                            .semantics { contentDescription = "Work tracker card" }
                             .padding(horizontal = VibeSpacing.small, vertical = VibeSpacing.xSmall),
                         onDaySelect = { date ->
                             onRecencyDayChange(date.toEpochDay())
@@ -722,16 +739,16 @@ internal fun HomeScreen(
                 }
             },
         ) { measurables, constraints ->
-            val freshness = measurables[0].measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-            val calendarHeight = maxOf(
-                minimumCalendarHeight.roundToPx(),
-                availableHeight.roundToPx() - freshness.height,
+            val freshness = measurables[0].measure(
+                constraints.copy(
+                    minHeight = (constraints.minHeight - minimumCalendarHeight).coerceAtLeast(0),
+                    maxHeight = Constraints.Infinity,
+                ),
             )
-            val calendar = measurables[1].measure(Constraints.fixed(constraints.maxWidth, calendarHeight))
-            val gap = sectionSpacing.roundToPx()
-            layout(constraints.maxWidth, freshness.height + gap + calendar.height) {
+            val calendar = measurables[1].measure(Constraints.fixed(constraints.maxWidth, minimumCalendarHeight))
+            layout(constraints.maxWidth, freshness.height + calendar.height) {
                 freshness.placeRelative(0, 0)
-                calendar.placeRelative(0, freshness.height + gap)
+                calendar.placeRelative(0, freshness.height)
             }
         }
         if (modalKey != null) {
@@ -778,17 +795,6 @@ private fun LayoutCoordinates.unclippedWindowBounds(): Rect {
     return Rect(position.x, position.y, position.x + size.width, position.y + size.height)
 }
 
-private fun Modifier.homeGlow(color: Color): Modifier = drawWithCache {
-    val centre = Offset(size.width / 2f, size.height / 2f)
-    val radius = size.maxDimension / 2f
-    val glow = Brush.radialGradient(listOf(color, color.copy(alpha = 0f)), centre, radius)
-    onDrawBehind {
-        scale(size.width / size.maxDimension, size.height / size.maxDimension, pivot = centre) {
-            drawCircle(glow, radius, centre)
-        }
-    }
-}
-
 @Composable
 private fun MonthlyActivityHeatmap(
     days: List<ActivityDay>,
@@ -825,8 +831,8 @@ private fun MonthlyActivityHeatmap(
             Text(
                 month.format(DateTimeFormatter.ofPattern("MMMM yyyy")),
                 modifier = Modifier.weight(1f),
-                color = palette.accent,
-                style = MaterialTheme.typography.labelLarge,
+                color = palette.textPrimary,
+                style = MaterialTheme.typography.titleSmall,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 maxLines = 2,
             )
@@ -855,14 +861,13 @@ private fun MonthlyActivityHeatmap(
         Column(
             Modifier
                 .fillMaxWidth()
-                .weight(1f)
                 .homeCalendarGestures(cells, today, onDaySelect, onDayOpen)
                 .semantics { contentDescription = "Activity heatmap grid, 6 weeks, Monday first" },
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             repeat(6) { week ->
                 Row(
-                    Modifier.fillMaxWidth().weight(1f),
+                    Modifier.fillMaxWidth().height(22.dp * fontScale),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     repeat(7) { weekday ->
