@@ -192,7 +192,7 @@ fun TrackerScreen(
                             Modifier.fillMaxWidth()
                                 .padding(top = if (index > 0) 8.dp else 0.dp)
                                 .habitGlow(Color(tracker.colourArgb.toInt()), palette.isDark, glowOrigin),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
                             val field = habitMeasurement(trackerFields)

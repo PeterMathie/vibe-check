@@ -1,6 +1,8 @@
 package com.petermathie.vibecheck
 
 import android.content.Context
+import android.view.KeyEvent
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -31,6 +33,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.test.*
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.Root
+import androidx.test.espresso.action.ViewActions.pressKey
+import androidx.test.espresso.matcher.ViewMatchers.isRoot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.petermathie.vibecheck.data.local.*
@@ -48,6 +54,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.hamcrest.Description
+import org.hamcrest.TypeSafeMatcher
 
 @RunWith(AndroidJUnit4::class)
 class HabitUiTest {
@@ -166,9 +174,13 @@ class HabitUiTest {
     fun habitIconOpensSettingsWhileNameTogglesAndLongPressReorders() {
         launch(listOf(number))
         val icon = compose.onNodeWithContentDescription("Edit Wellbeing settings")
-        val iconBounds = icon.getUnclippedBoundsInRoot()
-        assertTrue(iconBounds.right - iconBounds.left >= 48.dp && iconBounds.bottom - iconBounds.top >= 48.dp)
-        icon.performTouchInput { click() }
+        val iconNode = icon.fetchSemanticsNode()
+        val iconBounds = iconNode.boundsInRoot
+        val touchBounds = iconNode.touchBoundsInRoot
+        val minimumTarget = with(compose.density) { 48.dp.toPx() }
+        assertTrue("The icon touch target must be at least 48dp: $touchBounds",
+            touchBounds.width >= minimumTarget && touchBounds.height >= minimumTarget)
+        icon.performTouchInput { click(Offset(center.x, touchBounds.top - iconBounds.top + 1f)) }
         compose.onNodeWithText("Edit habit").assertExists()
         assertFalse(fixturePreferences.getStringSet(COLLAPSED_HABITS, emptySet()).orEmpty().contains(tracker.id))
         captureFixture("habits-icon-edit-menu")
@@ -816,7 +828,15 @@ class HabitUiTest {
         input("Maximum goal").performTextInput("30")
         compose.onNodeWithContentDescription("Measurement type").performScrollTo().performClick()
         menuOption("Number").assertIsSelected()
-        androidx.test.espresso.Espresso.pressBack()
+        onView(isRoot()).inRoot(object : TypeSafeMatcher<Root>() {
+            override fun describeTo(description: Description) {
+                description.appendText("the focused popup window")
+            }
+
+            override fun matchesSafely(root: Root): Boolean =
+                root.windowLayoutParams.orNull()?.type == WindowManager.LayoutParams.TYPE_APPLICATION_SUB_PANEL &&
+                    root.decorView.hasWindowFocus()
+        }).perform(pressKey(KeyEvent.KEYCODE_BACK))
         compose.onAllNodes(isPopup()).assertCountEquals(0)
         input("Measurement name").assertTextContains("Time practised")
         input("Unit (optional)").assertTextContains("min")
@@ -1399,7 +1419,8 @@ class HabitUiTest {
         val layouts = mutableListOf<TextLayoutResult>()
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         val layout = layouts.single()
-        assertEquals("Text must reach the right of its available space", layout.size.width.toFloat(), layout.getLineRight(0), 1f)
+        // The text node can use intrinsic width while line positions use the wider paragraph.
+        assertEquals("Text must reach the right of its paragraph", layout.multiParagraph.width, layout.getLineRight(0), 1f)
     }
 
     private fun captureFixture(name: String) {
