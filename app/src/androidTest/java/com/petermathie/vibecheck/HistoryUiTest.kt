@@ -21,7 +21,7 @@ import com.petermathie.vibecheck.ui.HomeScreen
 import com.petermathie.vibecheck.ui.MainViewModel
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import com.petermathie.vibecheck.ui.formatDisplayDate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -84,9 +84,9 @@ class HistoryUiTest {
             }
         }
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithContentDescription("$date: 3 activities", substring = true).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithContentDescription("${formatDisplayDate(date)}: 3 activities, selected freshness date").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("$date:", substring = true).performTouchInput { doubleClick() }
+        compose.onNodeWithContentDescription("${formatDisplayDate(date)}: 3 activities, selected freshness date").performTouchInput { doubleClick() }
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("Protein. Protein: 50.0 g").fetchSemanticsNodes().isNotEmpty()
         }
@@ -145,7 +145,7 @@ class HistoryUiTest {
             }
         }
 
-        compose.onNodeWithText(firstDay.format(DATE_FORMAT), useUnmergedTree = true).assertExists()
+        compose.onNodeWithText(formatDisplayDate(firstDay), useUnmergedTree = true).assertExists()
         compose.onNodeWithText("Reconstructed from records up to the end of this day").assertDoesNotExist()
         compose.onNodeWithContentDescription("Historical day controls").assertExists()
         compose.onNodeWithContentDescription("Freshness date").assertDoesNotExist()
@@ -178,7 +178,7 @@ class HistoryUiTest {
         compose.onNodeWithContentDescription("Previous day").performClick()
         compose.waitUntil(15_000) {
             compose.onAllNodesWithText(
-                firstDay.minusDays(1).format(DATE_FORMAT),
+                formatDisplayDate(firstDay.minusDays(1)),
                 useUnmergedTree = true,
             ).fetchSemanticsNodes().isNotEmpty()
         }
@@ -206,7 +206,4 @@ class HistoryUiTest {
         assertNull(state.selectedHistoryDay)
     }
 
-    private companion object {
-        val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMMM yyyy")
-    }
 }

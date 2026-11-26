@@ -538,7 +538,7 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                                                             .weight(1f)
                                                             .height(cellHeight)
                                                             .semantics {
-                                                                contentDescription = "${date.format(DateTimeFormatter.ofPattern("d MMMM yyyy"))}$measurementDescription"
+                                                                contentDescription = "${formatDisplayDate(date)}$measurementDescription"
                                                             },
                                                     ) {
                                                         Column(
@@ -594,9 +594,7 @@ fun MeasurementsScreen(vm:EditorViewModel) {
                             .semantics { contentDescription = "Choose body entry date" },
                     ) {
                         Text(
-                            LocalDate.ofEpochDay(pendingPhotoDay).format(
-                                DateTimeFormatter.ofPattern("d MMMM yyyy"),
-                            ),
+                            formatDisplayDate(LocalDate.ofEpochDay(pendingPhotoDay)),
                         )
                     }
                     EditField("Bodyweight (optional)", value) { value = it }

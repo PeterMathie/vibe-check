@@ -3,6 +3,7 @@ package com.petermathie.vibecheck.ui
 import android.os.Build
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.ScrollState
@@ -29,6 +30,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -48,6 +53,7 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -66,6 +72,26 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 internal val LocalHabitOverlay = compositionLocalOf<(Boolean) -> Unit> { {} }
+private val LocalHabitDialogBounds = compositionLocalOf<Rect?> { null }
+
+@Composable
+internal fun HabitGlassDialogHost(
+    constrainToContent: Boolean = false,
+    content: @Composable (Modifier, Boolean) -> Unit,
+) {
+    var overlay by remember { mutableStateOf(false) }
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val blur by animateFloatAsState(
+        if (overlay) 12f else 0f, tween(LocalVibeMotion.current.expandMillis), label = "Habit modal blur",
+    )
+    CompositionLocalProvider(
+        LocalHabitOverlay provides { overlay = it },
+        LocalHabitDialogBounds provides if (constrainToContent) bounds else null,
+    ) {
+        val viewport = if (constrainToContent) Modifier.onGloballyPositioned { bounds = it.boundsInWindow() } else Modifier
+        content(viewport.blur(blur.dp), overlay)
+    }
+}
 
 @Composable
 internal fun HabitGlassDialog(
@@ -73,6 +99,7 @@ internal fun HabitGlassDialog(
     onDismiss: () -> Unit,
     onBack: (() -> Unit)? = null,
     actions: @Composable FlowRowScope.() -> Unit = {},
+    titleStyle: TextStyle = MaterialTheme.typography.titleLarge,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = LocalVibePalette.current
@@ -94,7 +121,16 @@ internal fun HabitGlassDialog(
                 setWindowAnimations(0)
             }
         }
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            val bounds = LocalHabitDialogBounds.current
+            val contentInsets = bounds?.let {
+                WindowInsets(
+                    left = it.left.roundToInt().coerceAtLeast(0),
+                    top = it.top.roundToInt().coerceAtLeast(0),
+                    right = (constraints.maxWidth - it.right).roundToInt().coerceAtLeast(0),
+                    bottom = (constraints.maxHeight - it.bottom).roundToInt().coerceAtLeast(0),
+                )
+            } ?: WindowInsets(0)
             Box(
                 Modifier.matchParentSize()
                     .background(palette.scrim.copy(alpha = 0.32f))
@@ -106,7 +142,7 @@ internal fun HabitGlassDialog(
             )
             Box(
                 Modifier.fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime))
+                    .windowInsetsPadding(WindowInsets.safeDrawing.union(WindowInsets.ime).union(contentInsets))
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -133,7 +169,7 @@ internal fun HabitGlassDialog(
                                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back")
                                     }
                                 }
-                                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+                                Text(title, Modifier.weight(1f), style = titleStyle)
                                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }
                             }
                             key(title) {

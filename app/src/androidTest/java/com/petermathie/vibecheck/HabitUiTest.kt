@@ -304,10 +304,10 @@ class HabitUiTest {
                 compose.runOnIdle { palette = theme; expanded = showMonth }
                 val shades = theme.habitHeatmapColors(Color(tracker.colourArgb.toInt()))
                 listOf(
-                    Triple("17 November 2026: 10 g", shades.low, 0.8f),
-                    Triple("18 November 2026: 20 g", shades.strong, 0.8f),
-                    Triple("19 November 2026: No entry", shades.neutral, 0.8f),
-                    Triple("21 November 2026: No entry", shades.neutral, 0.32f * 0.8f),
+                    Triple("17th of November 2026: 10 g", shades.low, 0.8f),
+                    Triple("18th of November 2026: 20 g", shades.strong, 0.8f),
+                    Triple("19th of November 2026: No entry", shades.neutral, 0.8f),
+                    Triple("21st of November 2026: No entry", shades.neutral, 0.32f * 0.8f),
                 ).forEach { (description, fill, alpha) ->
                     val pixels = compose.onNodeWithContentDescription(description).captureToImage().toPixelMap()
                     val pixel = pixels[pixels.width / 2, with(compose.density) { 1.dp.roundToPx() }]
@@ -414,7 +414,7 @@ class HabitUiTest {
             }
             readout.onChildren().assertCountEquals(0)
             listOf(18 to "20 g", 19 to "0 g", 17 to "No entry").forEach { (day, entry) ->
-                val description = "$day November 2026: $entry"
+                val description = "${formatDisplayDate(today.withDayOfMonth(day))}: $entry"
                 compose.onNodeWithContentDescription(description).performClick().assertIsSelected()
                 compose.onNode(hasText(entry) and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}")))
                     .assertIsDisplayed()
@@ -428,10 +428,10 @@ class HabitUiTest {
             expanded = true
             state.show(YearMonth.of(2026, 9))
         }
-        compose.onNodeWithContentDescription("30 September 2026: 5 g").performClick()
+        compose.onNodeWithContentDescription("30th of September 2026: 5 g").performClick()
         assertDateAndAlignment(today.withMonth(9).withDayOfMonth(30))
         compose.runOnIdle { state.show(YearMonth.of(2026, 11)) }
-        compose.onNodeWithContentDescription("1 November 2026: No entry").performClick()
+        compose.onNodeWithContentDescription("1st of November 2026: No entry").performClick()
         assertDateAndAlignment(today.withDayOfMonth(1))
     }
 
@@ -456,7 +456,7 @@ class HabitUiTest {
         val readout = compose.onNodeWithTag("Habit entry ${tracker.id}")
         val before = readout.getUnclippedBoundsInRoot()
         val next = compose.onNodeWithTag("Next habit").getUnclippedBoundsInRoot()
-        compose.onNodeWithContentDescription("20 November 2026: $note").performClick()
+        compose.onNodeWithContentDescription("20th of November 2026: $note").performClick()
         compose.onNode(hasText(note) and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}"))).assertExists()
         val scrolling = compose.onNode(
             hasScrollAction() and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}")),
@@ -487,7 +487,7 @@ class HabitUiTest {
         }
         awaitHabit()
         compose.onNodeWithTag("Habit calendar ${tracker.id}").performTouchInput { swipeLeft() }
-        val description = "${date.format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))}: 10 g"
+        val description = "${formatDisplayDate(date)}: 10 g"
         val cell = compose.onNodeWithContentDescription(description)
         cell.performTouchInput { click() }
         cell.assertIsSelected()
@@ -503,7 +503,7 @@ class HabitUiTest {
         compose.onNodeWithContentDescription(description).assertDoesNotExist()
         compose.onNodeWithContentDescription("Previous month for ${tracker.name}").assertDoesNotExist()
         habitWeekCells(LocalDate.now()).forEach { day ->
-            val prefix = day.format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))
+            val prefix = formatDisplayDate(day)
             compose.onNode(
                 hasContentDescription("$prefix:", substring = true) and
                     hasAnyAncestor(hasTestTag("Habit calendar ${tracker.id}")),
@@ -542,19 +542,18 @@ class HabitUiTest {
                 HabitMonthHeatmap(tracker, number, emptyList(), today, state, expanded, {})
             }
         }
-        val formatter = java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy")
         val week = habitWeekCells(today)
         week.forEach { day ->
-            compose.onNodeWithContentDescription("${day.format(formatter)}: No entry").assertExists()
+            compose.onNodeWithContentDescription("${formatDisplayDate(day)}: No entry").assertExists()
         }
-        compose.onNodeWithContentDescription("2 October 2026: No entry").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("2nd of October 2026: No entry").assertIsNotEnabled()
         captureFixture("habits-week-cross-month")
         compose.runOnIdle { expanded = true }
         week.filter { it.month != today.month }.forEach { day ->
-            compose.onNodeWithContentDescription("${day.format(formatter)}: No entry").assertDoesNotExist()
+            compose.onNodeWithContentDescription("${formatDisplayDate(day)}: No entry").assertDoesNotExist()
         }
         (1..today.lengthOfMonth()).forEach { day ->
-            compose.onNodeWithContentDescription("${today.withDayOfMonth(day).format(formatter)}: No entry").assertExists()
+            compose.onNodeWithContentDescription("${formatDisplayDate(today.withDayOfMonth(day))}: No entry").assertExists()
         }
     }
 
@@ -1040,8 +1039,7 @@ class HabitUiTest {
         ).assertExists()
         compose.runOnIdle { dismissFixtureKeyboard() }
         history.forEach { value ->
-            val date = LocalDate.ofEpochDay(value.epochDay)
-                .format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))
+            val date = formatDisplayDate(LocalDate.ofEpochDay(value.epochDay))
             compose.onNodeWithContentDescription("$date: ${requireNotNull(value.numericValue).toInt()} g")
                 .performScrollTo().assertIsDisplayed()
         }
@@ -1110,7 +1108,7 @@ class HabitUiTest {
         compose.onNodeWithContentDescription("Previous month for Wellbeing").assertIsNotEnabled()
         swipeBack()
         assertMonth(first)
-        val firstEntry = "${first.atDay(1).format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))}: 10 g"
+        val firstEntry = "${formatDisplayDate(first.atDay(1))}: 10 g"
         compose.onNodeWithContentDescription(firstEntry).performTouchInput { click() }.assertIsSelected()
         compose.onNodeWithTag("Habit entry date ${tracker.id}")
             .assertTextEquals(habitCalendarDate(first.atDay(1))).assertIsDisplayed()
@@ -1187,8 +1185,7 @@ class HabitUiTest {
         val lastCalendar = compose.onNodeWithTag("Habit calendar ${reading.id}").getUnclippedBoundsInRoot()
         assertTrue("Add must follow the last habit", add.top >= lastCalendar.bottom)
         (1..today.lengthOfMonth()).forEach { day ->
-            val date = today.withDayOfMonth(day)
-                .format(java.time.format.DateTimeFormatter.ofPattern("d MMMM yyyy"))
+            val date = formatDisplayDate(today.withDayOfMonth(day))
             compose.onAllNodes(SemanticsMatcher("calendar date $date") { node ->
                 node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
                     .any { it.startsWith("$date:") }

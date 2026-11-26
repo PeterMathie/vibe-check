@@ -41,7 +41,6 @@ import com.petermathie.vibecheck.ui.components.muscleDetailsUiState
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.freshnessColors
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 
 @Composable
 internal fun HistoryDayScreen(
@@ -83,7 +82,7 @@ internal fun HistoryDayScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "Back", tint = LocalVibePalette.current.textPrimary) }
                 Text(
-                    date.format(DateTimeFormatter.ofPattern("d MMMM yyyy")),
+                    formatDisplayDate(date),
                     style = MaterialTheme.typography.headlineMedium,
                     color = LocalVibePalette.current.textPrimary,
                 )

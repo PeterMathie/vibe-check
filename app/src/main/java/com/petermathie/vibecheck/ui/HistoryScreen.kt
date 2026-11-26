@@ -38,7 +38,7 @@ fun HistoryScreen(vm:EditorViewModel,onMap:(Long)->Unit) {
         items(filteredWorkouts,key={it.id}) { w ->
             VibeCard {
                 Text(w.name, style = MaterialTheme.typography.titleMedium)
-                Text(Instant.ofEpochMilli(w.finishedAt ?: w.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(), style = MaterialTheme.typography.bodySmall)
+                Text(formatDisplayDate(w.finishedAt ?: w.startedAt), style = MaterialTheme.typography.bodySmall)
                 exerciseRows.filter { it.workoutId == w.id }.sortedBy { it.position }.forEach { row ->
                     val results = sets.filter { it.workoutExerciseId == row.id }.sortedBy { it.ordinal }
                     if (results.isNotEmpty()) {

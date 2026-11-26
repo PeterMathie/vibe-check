@@ -759,13 +759,16 @@ private fun BandDot(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Box(
-            Modifier.size(minOf(22.dp, (width - 2.dp).coerceAtLeast(0.dp)))
-                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier)
-                .padding(3.dp)
-                .background(colour, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-        }
+        BandColourDot(colour, diameter = minOf(22.dp, (width - 2.dp).coerceAtLeast(0.dp)), selected = selected)
     }
+}
+
+@Composable
+internal fun BandColourDot(colour: Color, modifier: Modifier = Modifier, diameter: Dp = 22.dp, selected: Boolean = false) {
+    Box(
+        modifier.size(diameter)
+            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape) else Modifier)
+            .padding(3.dp)
+            .background(colour, CircleShape),
+    )
 }

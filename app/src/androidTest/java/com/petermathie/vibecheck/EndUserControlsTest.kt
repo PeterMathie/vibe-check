@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -61,6 +62,7 @@ import com.petermathie.vibecheck.ui.ReorderItem
 import com.petermathie.vibecheck.ui.ReorderOverlayHost
 import com.petermathie.vibecheck.ui.StagedSwipeToDelete
 import com.petermathie.vibecheck.ui.WorkoutCompletionEvent
+import com.petermathie.vibecheck.ui.formatDisplayDate
 import com.petermathie.vibecheck.ui.rememberReorderState
 import com.petermathie.vibecheck.ui.anatomy.AnatomyView
 import com.petermathie.vibecheck.ui.anatomy.MuscleMap
@@ -81,6 +83,13 @@ import java.time.format.DateTimeFormatter
 class EndUserControlsTest {
     @get:Rule
     val compose = createComposeRule()
+
+    private fun calendarDay(date: LocalDate): SemanticsNodeInteraction {
+        val prefix = "${formatDisplayDate(date)}:"
+        return compose.onNode(SemanticsMatcher("calendar day $prefix") { node ->
+            node.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty().any { it.startsWith(prefix) }
+        })
+    }
 
     @Test
     fun homeMuscleViewingDateAccompaniesElapsedTimeBelowName() {
@@ -105,16 +114,16 @@ class EndUserControlsTest {
             .fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label.startsWith("Inspect GLUTES") }
         compose.runOnIdle { assertTrue(inspect.action()) }
         val heading = compose.onNodeWithText("Glutes").assertIsDisplayed()
-        val summary = compose.onNodeWithText("13/11/2026, last trained about 5 days ago").assertIsDisplayed()
+        val summary = compose.onNodeWithText("${formatDisplayDate(date)}, last trained about 5 days ago").assertIsDisplayed()
         val headingLayouts = mutableListOf<TextLayoutResult>()
         val summaryLayouts = mutableListOf<TextLayoutResult>()
         heading.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(headingLayouts) }
         summary.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(summaryLayouts) }
         val headingLayout = headingLayouts.single()
         val summaryLayout = summaryLayouts.single()
-        assertEquals(1, summaryLayout.lineCount)
+        assertTrue("The full date and elapsed time must fit without clipping", !summaryLayout.hasVisualOverflow)
         val summaryText = summaryLayout.layoutInput.text.text
-        assertEquals(summaryText.length, summaryLayout.getLineEnd(0, visibleEnd = true))
+        assertEquals(summaryText.length, summaryLayout.getLineEnd(summaryLayout.lineCount - 1, visibleEnd = true))
         summaryText.indices.forEach { index ->
             val character = summaryLayout.getBoundingBox(index)
             assertTrue(
@@ -134,7 +143,7 @@ class EndUserControlsTest {
             summaryBounds.top - headingBounds.bottom >= with(compose.density) { 8.dp.toPx() },
         )
         compose.onNodeWithText("As of", substring = true).assertDoesNotExist()
-        compose.onNodeWithText("13/11/2026").assertDoesNotExist()
+        compose.onNodeWithText(formatDisplayDate(date)).assertDoesNotExist()
         compose.onNodeWithContentDescription("Close muscle activity").performClick()
     }
 
@@ -168,14 +177,14 @@ class EndUserControlsTest {
         val inspect = compose.onNodeWithContentDescription("male back freshness map")
             .fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label.startsWith("Inspect GLUTES") }
         compose.runOnIdle { assertTrue(inspect.action()) }
-        compose.onNodeWithText("13/11/2026, last trained about 5 days ago").assertIsDisplayed()
+        compose.onNodeWithText("${formatDisplayDate(date)}, last trained about 5 days ago").assertIsDisplayed()
         val swatch = compose.onNodeWithTag("Home muscle freshness colour")
         val pixels = swatch.captureToImage().toPixelMap()
         assertEquals(palette.recency3To7.toArgb(), pixels[pixels.width / 2, pixels.height / 2].toArgb())
         assertEquals(pixels.width, pixels.height)
         assertTrue("The colour swatch is circular, not a square", pixels[0, 0].toArgb() != palette.recency3To7.toArgb())
         compose.runOnIdle { state = state.copy(recency = emptyList()) }
-        compose.onNodeWithText("13/11/2026, no recorded training").assertIsDisplayed()
+        compose.onNodeWithText("${formatDisplayDate(date)}, no recorded training").assertIsDisplayed()
         val neutral = swatch.captureToImage().toPixelMap()
         assertEquals(palette.recencyNever.toArgb(), neutral[neutral.width / 2, neutral.height / 2].toArgb())
         compose.onNodeWithContentDescription("Close muscle activity").performClick()
@@ -212,7 +221,7 @@ class EndUserControlsTest {
         for (theme in listOf(VibePalettes.Ocean.dark, VibePalettes.Ocean.light)) {
             compose.runOnIdle { palette = theme }
             val paints = listOf(9, 13).map { day ->
-                val cell = compose.onNodeWithContentDescription("${today.withDayOfMonth(day)}:", substring = true)
+                val cell = calendarDay(today.withDayOfMonth(day))
                 cell.performClick().assertIsSelected()
                 val pixels = cell.captureToImage().toPixelMap()
                 assertEquals("Selection is background-coloured at either intensity", theme.background.toArgb(), pixels[2, pixels.height / 2].toArgb())
@@ -288,7 +297,7 @@ class EndUserControlsTest {
         assertTrue("Softer blur still retains recognizable muscle colour", tint.green > maxOf(tint.red, tint.blue) + 0.15f)
         val calendar = compose.onNodeWithContentDescription("Work tracker card").fetchSemanticsNode().boundsInWindow
         assertEquals(calendar, modal.fetchSemanticsNode().boundsInWindow)
-        compose.onNodeWithText("13/11/2026, last trained about 2 days ago").assertIsDisplayed()
+        compose.onNodeWithText("${formatDisplayDate(date)}, last trained about 2 days ago").assertIsDisplayed()
         compose.onNodeWithContentDescription("Past 7 days. 8 sets").assertIsDisplayed()
         compose.onNodeWithContentDescription("Average recorded RPE. 4.0").assertIsDisplayed()
         compose.onNodeWithContentDescription("Push up. Primary \u00b7 2 sets").assertIsDisplayed()
@@ -300,7 +309,7 @@ class EndUserControlsTest {
         compose.onNodeWithText("Loading activity...").assertIsDisplayed()
         compose.onNodeWithContentDescription("Push up.", substring = true).assertDoesNotExist()
         compose.runOnIdle { state = state.copy(recency = emptyList(), recencyAsOfMillis = endOfDay(date.minusDays(1))) }
-        compose.onNodeWithText("12/11/2026, no recorded training").assertIsDisplayed()
+        compose.onNodeWithText("${formatDisplayDate(date.minusDays(1))}, no recorded training").assertIsDisplayed()
         compose.onNodeWithContentDescription("Average recorded RPE. Not recorded").assertIsDisplayed()
         compose.onNodeWithText("No contributing exercises in the past 7 days").assertIsDisplayed()
         compose.onNodeWithContentDescription("Close muscle activity").performClick()
@@ -446,11 +455,11 @@ class EndUserControlsTest {
         assertEquals(TrainingMode.STRETCHING, selectedMode)
         val today = LocalDate.now()
         val targetDay = (today.dayOfMonth - 1).coerceAtLeast(1)
-        compose.onNodeWithContentDescription("${today.withDayOfMonth(targetDay)}:", substring = true).performClick()
+        calendarDay(today.withDayOfMonth(targetDay)).performClick()
         compose.waitUntil(15_000) { previewDay == today.withDayOfMonth(targetDay).toEpochDay() }
         assertEquals(today.withDayOfMonth(targetDay).toEpochDay(), previewDay)
         compose.onNodeWithContentDescription(
-            "${today.withDayOfMonth(targetDay)}: 0 activities, selected freshness date",
+            "${formatDisplayDate(today.withDayOfMonth(targetDay))}: 0 activities, selected freshness date",
         ).assertExists()
 
         compose.onNodeWithContentDescription("Previous month").performClick()
@@ -459,9 +468,9 @@ class EndUserControlsTest {
             previewDay?.let(LocalDate::ofEpochDay)?.let(YearMonth::from) == previousMonth
         }
         compose.onNodeWithText(previousMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy"))).assertIsDisplayed()
-        compose.onNodeWithContentDescription("${previousMonth.atDay(10)}:", substring = true).performClick()
+        calendarDay(previousMonth.atDay(10)).performClick()
         compose.waitUntil(15_000) { previewDay == previousMonth.atDay(10).toEpochDay() }
-        compose.onNodeWithContentDescription("${previousMonth.atDay(11)}:", substring = true).performClick()
+        calendarDay(previousMonth.atDay(11)).performClick()
         compose.waitUntil(15_000) { previewDay == previousMonth.atDay(11).toEpochDay() }
         assertNotNull(previewDay)
 
@@ -666,7 +675,7 @@ class EndUserControlsTest {
             assertTrue("Whole-section glow reaches the gap between figures: $centre", centre in 0.008f..0.065f)
             assertTrue("Glow must fade towards the edges: centre=$centre edge=$edge", centre > edge + 0.004f)
             val monthPixels = calendar.captureToImage().toPixelMap()
-            val firstDay = compose.onNodeWithContentDescription("2026-11-01:", substring = true).fetchSemanticsNode().boundsInRoot
+            val firstDay = calendarDay(LocalDate.of(2026, 11, 1)).fetchSemanticsNode().boundsInRoot
             val blankRowY = (firstDay.center.y - calendarBounds.top).toInt()
             val calendarGlow = distance(monthPixels[monthPixels.width / 2, blankRowY], theme.background)
             assertTrue("Calendar has a subtle glow in its empty first-row cells: $calendarGlow", calendarGlow in 0.008f..0.065f)
@@ -701,7 +710,7 @@ class EndUserControlsTest {
         }
         val grid = compose.onNodeWithContentDescription("Activity heatmap grid, 6 weeks, Monday first")
         val origin = grid.fetchSemanticsNode().boundsInRoot.topLeft
-        fun point(day: Int) = compose.onNodeWithContentDescription("2026-11-${day.toString().padStart(2, '0')}:", substring = true)
+        fun point(day: Int) = calendarDay(today.withDayOfMonth(day))
             .fetchSemanticsNode().boundsInRoot.center - origin
         fun greenPixels() = compose.onNodeWithContentDescription("male front freshness map").captureToImage().toPixelMap().let { pixels ->
             (0 until pixels.width).sumOf { x -> (0 until pixels.height).count { y -> pixels[x, y].green > 0.8f && pixels[x, y].red < 0.2f } }
@@ -731,10 +740,10 @@ class EndUserControlsTest {
         val seventeenth = point(17)
         grid.performTouchInput { doubleClick(seventeenth) }
         compose.onNodeWithTag("Home day activity").assertIsDisplayed()
-        compose.onNodeWithText("17 November 2026").assertIsDisplayed()
+        compose.onNodeWithText("17th of November 2026").assertIsDisplayed()
         compose.onNodeWithContentDescription("Historical day page").assertDoesNotExist()
         compose.onNodeWithContentDescription("Close day activity").performClick()
-        val open = compose.onNodeWithContentDescription("2026-11-17:", substring = true)
+        val open = calendarDay(today.withDayOfMonth(17))
             .fetchSemanticsNode().config[SemanticsActions.CustomActions].single { it.label == "Open activity breakdown" }
         compose.runOnIdle { assertTrue(open.action()) }
         compose.onNodeWithTag("Home day activity").assertIsDisplayed()
@@ -849,7 +858,7 @@ class EndUserControlsTest {
         val visible = home.fetchSemanticsNode().boundsInWindow
         val scrolledAnatomy = compose.onNodeWithContentDescription("Freshness panel").fetchSemanticsNode().boundsInWindow
         assertTrue("The anatomy is scrolled out of view", scrolledAnatomy.width == 0f || scrolledAnatomy.bottom <= visible.top)
-        compose.onNodeWithContentDescription("2026-11-08:", substring = true).performTouchInput { doubleClick() }
+        calendarDay(today.withDayOfMonth(8)).performTouchInput { doubleClick() }
         modal.assertIsDisplayed()
         val constrained = modal.fetchSemanticsNode().boundsInWindow
         assertEquals(visible.top, constrained.top, 1f)
@@ -942,14 +951,14 @@ class EndUserControlsTest {
         val calendar = compose.onNodeWithContentDescription("Work tracker card").fetchSemanticsNode().boundsInRoot
         val front = compose.onNodeWithContentDescription("male front freshness map").fetchSemanticsNode().boundsInRoot
         assertTrue(front.bottom <= calendar.top)
-        val oldDay = compose.onNodeWithContentDescription("2026-11-08: 0 activities, selected freshness date")
+        val oldDay = compose.onNodeWithContentDescription("8th of November 2026: 0 activities, selected freshness date")
         oldDay.assertIsSelected()
-        compose.onNodeWithContentDescription("2026-11-12:", substring = true).performClick()
+        calendarDay(LocalDate.of(2026, 11, 12)).performClick()
         compose.waitForIdle()
         val selected = LocalDate.ofEpochDay(requireNotNull(state.homeRecencyDay))
         assertTrue(selected.dayOfMonth > 8)
-        compose.onNodeWithContentDescription("$selected: 0 activities, selected freshness date").assertIsSelected()
-        compose.onNodeWithContentDescription("2026-11-08: 0 activities").assertIsNotSelected()
+        compose.onNodeWithContentDescription("${formatDisplayDate(selected)}: 0 activities, selected freshness date").assertIsSelected()
+        compose.onNodeWithContentDescription("8th of November 2026: 0 activities").assertIsNotSelected()
     }
 
     @Test
@@ -1098,9 +1107,9 @@ class EndUserControlsTest {
                     palette = theme
                     fontScale = scale
                 }
-                val first = compose.onNodeWithContentDescription("2026-11-01:", substring = true)
+                val first = calendarDay(today.withDayOfMonth(1))
                     .getUnclippedBoundsInRoot()
-                val last = compose.onNodeWithContentDescription("2026-11-30:", substring = true)
+                val last = calendarDay(today.withDayOfMonth(30))
                     .getUnclippedBoundsInRoot()
                 assertEquals(22f * scale, (first.bottom - first.top).value, 0.5f)
                 assertEquals(first.bottom - first.top, last.bottom - last.top)
@@ -1148,9 +1157,9 @@ class EndUserControlsTest {
         listOf(YearMonth.of(2021, 2), YearMonth.of(2024, 2), YearMonth.of(2026, 6), YearMonth.of(2026, 8)).forEach { month ->
             compose.runOnIdle { selectedDate = month.atDay(1) }
             compose.waitForIdle()
-            val first = compose.onNodeWithContentDescription("${month.atDay(1)}: 0 activities", substring = true)
+            val first = calendarDay(month.atDay(1))
                 .fetchSemanticsNode().boundsInRoot
-            val last = compose.onNodeWithContentDescription("${month.atEndOfMonth()}: 0 activities", substring = true)
+            val last = calendarDay(month.atEndOfMonth())
                 .fetchSemanticsNode().boundsInRoot
             val grid = compose.onNodeWithContentDescription("Activity heatmap grid", substring = true)
                 .fetchSemanticsNode().boundsInRoot
@@ -1163,8 +1172,8 @@ class EndUserControlsTest {
                 listOf("Freshness panel", "Work tracker card", "Activity heatmap grid, 6 weeks, Monday first")
                     .map { compose.onNodeWithContentDescription(it).getUnclippedBoundsInRoot() },
             )
-            compose.onNodeWithContentDescription("${month.atDay(1).minusDays(1)}:", substring = true).assertDoesNotExist()
-            compose.onNodeWithContentDescription("${month.atEndOfMonth().plusDays(1)}:", substring = true).assertDoesNotExist()
+            calendarDay(month.atDay(1).minusDays(1)).assertDoesNotExist()
+            calendarDay(month.atEndOfMonth().plusDays(1)).assertDoesNotExist()
             val headings = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
                 .map { compose.onNodeWithText(it).fetchSemanticsNode().boundsInRoot }
             headings.zipWithNext().forEach { (left, right) ->
@@ -1196,7 +1205,7 @@ class EndUserControlsTest {
                 }
             }
         }
-        fun fill(day: Int) = compose.onNodeWithContentDescription("${month.atDay(day)}:", substring = true)
+        fun fill(day: Int) = calendarDay(month.atDay(day))
             .captureToImage().toPixelMap().let { it[it.width / 2, 3] }
         val light = fill(1)
         val medium = fill(2)
@@ -1226,13 +1235,13 @@ class EndUserControlsTest {
                 }
             }
         }
-        val future = compose.onNodeWithContentDescription("2026-09-16: 0 activities, future date")
+        val future = compose.onNodeWithContentDescription("${formatDisplayDate(today.plusDays(1))}: 0 activities, future date")
         future.assertIsDisplayed().assertIsNotEnabled().performTouchInput { click() }
         assertEquals(today.toEpochDay(), state.homeRecencyDay)
         assertEquals(null, openedDay)
-        compose.onNodeWithContentDescription("2026-09-30: 0 activities, future date").assertExists()
+        compose.onNodeWithContentDescription("${formatDisplayDate(today.withDayOfMonth(30))}: 0 activities, future date").assertExists()
         compose.onNodeWithContentDescription("Next month").assertIsNotEnabled()
-        compose.onNodeWithContentDescription("2026-09-14: 0 activities").performClick()
+        compose.onNodeWithContentDescription("${formatDisplayDate(today.minusDays(1))}: 0 activities").performClick()
         assertEquals(LocalDate.of(2026, 9, 14).toEpochDay(), state.homeRecencyDay)
         assertEquals(null, openedDay)
     }

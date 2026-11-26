@@ -1,36 +1,30 @@
 package com.petermathie.vibecheck.ui.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
@@ -38,12 +32,12 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.platform.LocalDensity
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.VibeDashboardTypography
 import com.petermathie.vibecheck.ui.theme.VibeSpacing
-import com.petermathie.vibecheck.ui.theme.VibeShapes
-import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
+import com.petermathie.vibecheck.ui.formatDisplayDate
 import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.roundToInt
@@ -61,11 +55,16 @@ internal data class GraphDomain(val minimum: Double, val maximum: Double) {
     val span: Double get() = (maximum - minimum).coerceAtLeast(1.0)
 }
 
-internal fun graphDomain(values: List<Double>, fixedRange: ClosedFloatingPointRange<Double>? = null): GraphDomain? {
+internal fun graphDomain(
+    values: List<Double>,
+    fixedRange: ClosedFloatingPointRange<Double>? = null,
+    secondaryValues: List<Double?> = emptyList(),
+): GraphDomain? {
     fixedRange?.let { return GraphDomain(it.start, it.endInclusive) }
     val finite = values.filter(Double::isFinite)
     if (finite.isEmpty()) return null
-    return GraphDomain(finite.minOrNull() ?: 0.0, finite.maxOrNull() ?: 1.0)
+    val plotted = finite + secondaryValues.filterNotNull().filter(Double::isFinite)
+    return GraphDomain(checkNotNull(plotted.minOrNull()), checkNotNull(plotted.maxOrNull()))
 }
 
 internal fun nearestGraphIndex(x: Float, width: Float, count: Int): Int {
@@ -90,29 +89,6 @@ internal fun graphPoint(
     )
 }
 
-internal data class GraphTooltipPlacement(
-    val offset: IntOffset,
-    val abovePoint: Boolean,
-)
-
-internal fun graphTooltipPlacement(
-    point: Offset,
-    viewport: IntSize,
-    tooltip: IntSize,
-    gapPx: Int,
-): GraphTooltipPlacement {
-    val maxX = (viewport.width - tooltip.width).coerceAtLeast(0)
-    val maxY = (viewport.height - tooltip.height).coerceAtLeast(0)
-    val x = (point.x - tooltip.width / 2f).roundToInt().coerceIn(0, maxX)
-    val aboveY = point.y.roundToInt() - gapPx - tooltip.height
-    val belowY = point.y.roundToInt() + gapPx
-    val above = aboveY >= 0 || belowY + tooltip.height > viewport.height
-    return GraphTooltipPlacement(
-        offset = IntOffset(x, (if (above) aboveY else belowY).coerceIn(0, maxY)),
-        abovePoint = above,
-    )
-}
-
 @Composable
 fun VibeGraph(
     values: List<Double>,
@@ -123,20 +99,38 @@ fun VibeGraph(
     style: VibeGraphStyle = VibeGraphStyle.LINE,
     graphState: VibeGraphState = if (values.any(Double::isFinite)) VibeGraphState.Data else VibeGraphState.Empty("Complete a valid entry to see this chart."),
     fixedRange: ClosedFloatingPointRange<Double>? = null,
+    dateRange: LongRange? = null,
+    readoutBelow: Boolean = false,
     onSelect: (Int) -> Unit = {},
+    edgeToEdge: Boolean = false,
+    plotHeight: Dp = 138.dp,
+    readoutDateLabel: String? = null,
+    selectedDate: Long? = null,
+    onDateSelect: ((Long) -> Unit)? = null,
+    compactLayout: Boolean = false,
+    onValueHelp: (() -> Unit)? = null,
+    valueFormatter: ((Double) -> String)? = null,
+    valueHelpDescription: String = "What are points?",
 ) {
+    if (dateRange != null) {
+        require(dateRange.first <= dateRange.last && dates.size == values.size)
+    }
     val palette = LocalVibePalette.current
-    val domain = remember(values, fixedRange) { graphDomain(values, fixedRange) }
-    val graphPaddingPx = with(LocalDensity.current) { 12.dp.toPx() }
-    val tooltipGapPx = with(LocalDensity.current) { 6.dp.roundToPx() }
-    var selectedIndex by remember(values) { mutableIntStateOf(-1) }
-    var plotSize by remember { mutableStateOf(IntSize.Zero) }
-    var tooltipSize by remember { mutableStateOf(IntSize.Zero) }
+    fun valueText(value: Double) = valueFormatter?.invoke(value) ?: formatGraphAxis(value)
+    val domain = remember(values, fixedRange, secondaryValues) { graphDomain(values, fixedRange, secondaryValues) }
+    val graphPaddingPx = with(LocalDensity.current) { if (edgeToEdge) 0f else 12.dp.toPx() }
+    var selectedIndex by remember(values, dates, dateRange) { mutableIntStateOf(values.indexOfLast(Double::isFinite)) }
+    val currentOnSelect by rememberUpdatedState(onSelect)
+    val currentOnDateSelect by rememberUpdatedState(onDateSelect)
     val select: (Float, Float) -> Unit = { x, width ->
         if (values.isNotEmpty()) {
             val plotX = (x - graphPaddingPx).coerceAtLeast(0f)
             val plotWidth = (width - graphPaddingPx * 2f).coerceAtLeast(1f)
-            (if (style == VibeGraphStyle.BARS) {
+            (if (dateRange != null) {
+                values.indices.filter { values[it].isFinite() }.minByOrNull {
+                    kotlin.math.abs(graphDateX(dates[it], dateRange, width, graphPaddingPx) - x)
+                } ?: 0
+            } else if (style == VibeGraphStyle.BARS) {
                 (plotX / plotWidth * values.size).toInt().coerceIn(0, values.lastIndex)
             } else {
                 nearestGraphIndex(plotX, plotWidth, values.size)
@@ -147,41 +141,54 @@ fun VibeGraph(
                 }
                 .also {
                     selectedIndex = it
-                    onSelect(it)
+                    currentOnSelect(it)
                 }
+            dateRange?.let { currentOnDateSelect?.invoke(graphDateAtX(x, it, width, graphPaddingPx)) }
         }
     }
     val description = domain?.let {
-        val minimum = if (fixedRange == null) it.minimum.toString() else formatGraphAxis(it.minimum)
-        val maximum = if (fixedRange == null) it.maximum.toString() else formatGraphAxis(it.maximum)
+        val minimum = if (valueFormatter != null) valueText(it.minimum) else if (fixedRange == null) it.minimum.toString() else formatGraphAxis(it.minimum)
+        val maximum = if (valueFormatter != null) valueText(it.maximum) else if (fixedRange == null) it.maximum.toString() else formatGraphAxis(it.maximum)
         "Progress chart from ${formatGraphDate(dates.firstOrNull())} to ${formatGraphDate(dates.lastOrNull())}, $minimum to $maximum $unit"
     } ?: "Progress chart, no data"
 
-    VibeSurface(VibeSurfaceLevel.INSET, modifier = modifier.fillMaxWidth()) {
+    Box(modifier = modifier.fillMaxWidth()) {
         when (graphState) {
             VibeGraphState.Loading -> VibeSkeleton("Loading chart", Modifier.fillMaxWidth().height(178.dp))
             is VibeGraphState.Empty -> VibeStatePanel(graphState.message)
             is VibeGraphState.Error -> VibeStatePanel(graphState.message, isError = true)
             VibeGraphState.Data -> if (domain != null) {
-                Column(Modifier.fillMaxWidth().padding(VibeSpacing.compact)) {
-                    Text("${formatGraphAxis(domain.maximum)} $unit", style = VibeDashboardTypography.annotation)
+                Column(Modifier.fillMaxWidth().padding(horizontal = if (edgeToEdge) 0.dp else VibeSpacing.compact, vertical = if (compactLayout) VibeSpacing.xSmall else VibeSpacing.compact)) {
+                    if (!readoutBelow) selectedIndex.takeIf { it in values.indices && values[it].isFinite() }?.let { index ->
+                        DateValueReadout(
+                            date = dates.getOrNull(index)?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() },
+                            value = "${valueText(values[index])} $unit",
+                            modifier = Modifier.padding(bottom = VibeSpacing.small).semantics {
+                                contentDescription = "Graph readout"
+                                stateDescription = "${formatGraphDate(dates.getOrNull(index))}, ${valueText(values[index])} $unit"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            valueColor = palette.textPrimary,
+                        )
+                    }
+                    if (!readoutBelow) Text("${valueText(domain.maximum)} $unit", style = VibeDashboardTypography.annotation)
                     Box(
                         Modifier
                             .fillMaxWidth()
-                            .height(138.dp)
-                            .onSizeChanged { plotSize = it }
-                            .pointerInput(values) {
+                            .height(plotHeight)
+                            .pointerInput(values, dates, style, dateRange, graphPaddingPx) {
                                 detectTapGestures { select(it.x, size.width.toFloat()) }
                             }
-                            .pointerInput(values) {
-                                detectDragGestures { change, _ ->
+                            .pointerInput(values, dates, style, dateRange, graphPaddingPx) {
+                                detectHorizontalDragGestures { change, _ ->
+                                    change.consume()
                                     select(change.position.x, size.width.toFloat())
                                 }
                             }
                             .semantics {
                                 contentDescription = description
                                 selectedIndex.takeIf { it in values.indices }?.let {
-                                    stateDescription = "${formatGraphDate(dates.getOrNull(it))}, ${formatGraphAxis(values[it])} $unit"
+                                    stateDescription = "${formatGraphDate(dates.getOrNull(it))}, ${valueText(values[it])} $unit"
                                 }
                                 customActions = listOf(
                                     CustomAccessibilityAction("Previous data point") {
@@ -189,7 +196,8 @@ fun VibeGraph(
                                         val previous = (start - 1 downTo 0).firstOrNull { values[it].isFinite() }
                                         if (previous == null) false else {
                                             selectedIndex = previous
-                                            onSelect(selectedIndex)
+                                            currentOnSelect(selectedIndex)
+                                            dates.getOrNull(selectedIndex)?.let { currentOnDateSelect?.invoke(it) }
                                             true
                                         }
                                     },
@@ -198,7 +206,8 @@ fun VibeGraph(
                                             .firstOrNull { values[it].isFinite() }
                                         if (next == null) false else {
                                             selectedIndex = next
-                                            onSelect(selectedIndex)
+                                            currentOnSelect(selectedIndex)
+                                            dates.getOrNull(selectedIndex)?.let { currentOnDateSelect?.invoke(it) }
                                             true
                                         }
                                     },
@@ -211,19 +220,32 @@ fun VibeGraph(
                                 .matchParentSize()
                                 .drawWithCache {
                                     val padding = 12.dp.toPx()
+                                    val horizontalPadding = if (edgeToEdge) 0f else padding
+                                    fun point(index: Int, value: Double): Offset {
+                                        val point = graphPoint(index, value, values.size, size.width, size.height, domain, padding)
+                                        return if (dateRange == null) point else point.copy(
+                                            x = graphDateX(dates[index], dateRange, size.width, horizontalPadding),
+                                        )
+                                    }
+                                    val slot = (size.width - horizontalPadding * 2f) / values.size.coerceAtLeast(1)
+                                    val barWidth = if (dateRange == null) slot * 0.6f else {
+                                        val positions = dates.map { graphDateX(it, dateRange, size.width, horizontalPadding) }.distinct().sorted()
+                                        val gap = positions.zipWithNext { a, b -> b - a }.minOrNull() ?: 20.dp.toPx()
+                                        (gap * 0.6f).coerceIn(2.dp.toPx(), 12.dp.toPx())
+                                    }
                                     val major = palette.textPrimary.copy(alpha = if (palette.isDark) 0.09f else 0.12f)
                                     val primaryPath = Path()
                                     var primaryStarted = false
                                     val primaryPoints = values.mapIndexedNotNull { index, value ->
                                         value.takeIf(Double::isFinite)?.let {
-                                            graphPoint(index, it, values.size, size.width, size.height, domain, padding)
+                                            point(index, it)
                                         }
                                     }
                                     values.forEachIndexed { index, value ->
                                         if (!value.isFinite()) {
                                             primaryStarted = false
                                         } else {
-                                            val point = graphPoint(index, value, values.size, size.width, size.height, domain, padding)
+                                            val point = point(index, value)
                                             if (primaryStarted) primaryPath.lineTo(point.x, point.y) else primaryPath.moveTo(point.x, point.y)
                                             primaryStarted = true
                                         }
@@ -231,32 +253,31 @@ fun VibeGraph(
                                     val secondarySegments = secondaryValues.mapIndexedNotNull { index, value ->
                                         val previous = secondaryValues.getOrNull(index - 1)
                                         if (value != null && value.isFinite() && previous != null && previous.isFinite()) {
-                                            graphPoint(index - 1, previous, values.size, size.width, size.height, domain, padding) to
-                                                graphPoint(index, value, values.size, size.width, size.height, domain, padding)
+                                            point(index - 1, previous) to point(index, value)
                                         } else null
                                     }
                                     onDrawBehind {
                                         repeat(5) { row ->
                                             val y = padding + (size.height - padding * 2f) * row / 4f
-                                            drawLine(major, Offset(padding, y), Offset(size.width - padding, y), 1.dp.toPx())
+                                            drawLine(major, Offset(horizontalPadding, y), Offset(size.width - horizontalPadding, y), 1.dp.toPx())
                                         }
                                         repeat(4) { column ->
-                                            val x = padding + (size.width - padding * 2f) * column / 3f
+                                            val x = horizontalPadding + (size.width - horizontalPadding * 2f) * column / 3f
                                             drawLine(major, Offset(x, padding), Offset(x, size.height - padding), 1.dp.toPx())
                                         }
                                         if (style == VibeGraphStyle.LINE) {
                                             drawPath(primaryPath, palette.accent, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round))
                                             primaryPoints.forEach { drawCircle(palette.accent, 2.5.dp.toPx(), it) }
                                         } else {
-                                            val slot = (size.width - padding * 2f) / values.size.coerceAtLeast(1)
                                             values.forEachIndexed { index, value ->
                                                 if (value.isFinite()) {
-                                                    val point = graphPoint(index, value, values.size, size.width, size.height, domain, padding)
-                                                        .copy(x = padding + slot * (index + 0.5f))
+                                                    val point = point(index, value).let {
+                                                        if (dateRange == null) it.copy(x = horizontalPadding + slot * (index + 0.5f)) else it
+                                                    }
                                                     drawRect(
                                                         palette.accent,
-                                                        topLeft = Offset(point.x - slot * 0.3f, point.y),
-                                                        size = androidx.compose.ui.geometry.Size(slot * 0.6f, size.height - padding - point.y),
+                                                        topLeft = Offset(point.x - barWidth / 2, point.y),
+                                                        size = androidx.compose.ui.geometry.Size(barWidth, size.height - padding - point.y),
                                                     )
                                                 }
                                             }
@@ -271,84 +292,63 @@ fun VibeGraph(
                             val index = selectedIndex
                             if (index in values.indices && values[index].isFinite()) {
                                 val padding = 12.dp.toPx()
-                                val linePoint = graphPoint(index, values[index], values.size, size.width, size.height, domain, padding)
-                                val point = if (style == VibeGraphStyle.BARS) {
-                                    val slot = (size.width - padding * 2f) / values.size.coerceAtLeast(1)
-                                    linePoint.copy(x = padding + slot * (index + 0.5f))
+                                val horizontalPadding = if (edgeToEdge) 0f else padding
+                                val linePoint = graphPoint(index, values[index], values.size, size.width, size.height, domain, padding).let {
+                                    if (dateRange == null) it else it.copy(x = graphDateX(dates[index], dateRange, size.width, horizontalPadding))
+                                }
+                                val point = if (style == VibeGraphStyle.BARS && dateRange == null) {
+                                    val slot = (size.width - horizontalPadding * 2f) / values.size.coerceAtLeast(1)
+                                    linePoint.copy(x = horizontalPadding + slot * (index + 0.5f))
                                 } else {
                                     linePoint
                                 }
                                 drawCircle(palette.accent, 3.5.dp.toPx(), point)
-                                drawCircle(palette.surfaceInset, 1.dp.toPx(), point)
+                                drawCircle(palette.background, 1.dp.toPx(), point)
+                                val markerX = selectedDate?.takeIf { dateRange != null && it in dateRange }?.let {
+                                    graphDateX(it, checkNotNull(dateRange), size.width, horizontalPadding)
+                                } ?: point.x
                                 drawLine(
                                     palette.textSecondary.copy(alpha = 0.6f),
-                                    Offset(point.x, padding),
-                                    Offset(point.x, size.height - padding),
+                                    Offset(markerX, padding),
+                                    Offset(markerX, size.height - padding),
                                     1.dp.toPx(),
                                     pathEffect = dashEffect,
                                 )
                             }
                         }
-                        selectedIndex.takeIf { it in values.indices && values[it].isFinite() }?.let { index ->
-                            val linePoint = graphPoint(
-                                index,
-                                values[index],
-                                values.size,
-                                plotSize.width.toFloat(),
-                                plotSize.height.toFloat(),
-                                domain,
-                                graphPaddingPx,
-                            )
-                            val selectedPoint = if (style == VibeGraphStyle.BARS) {
-                                val slot = (plotSize.width - graphPaddingPx * 2f) / values.size.coerceAtLeast(1)
-                                linePoint.copy(x = graphPaddingPx + slot * (index + 0.5f))
-                            } else {
-                                linePoint
-                            }
-                            val placement = graphTooltipPlacement(
-                                point = selectedPoint,
-                                viewport = plotSize,
-                                tooltip = tooltipSize,
-                                gapPx = tooltipGapPx,
-                            )
-                            VibeGraphTooltip(
-                                value = "${formatGraphAxis(values[index])} $unit",
-                                date = formatGraphDate(dates.getOrNull(index)),
-                                modifier = Modifier
-                                    .offset { placement.offset }
-                                    .onSizeChanged { tooltipSize = it },
-                            )
-                        }
                     }
-                    Row(Modifier.fillMaxWidth()) {
+                    if (dateRange != null) {
+                        GraphDateAxis(dateRange, graphPaddingPx)
+                    } else Row(Modifier.fillMaxWidth()) {
                         Text(formatGraphDate(dates.firstOrNull()), style = VibeDashboardTypography.annotation, modifier = Modifier.weight(1f))
                         Text(formatGraphDate(dates.lastOrNull()), style = VibeDashboardTypography.annotation, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
                     }
-                    Text("${formatGraphAxis(domain.minimum)} $unit", style = VibeDashboardTypography.annotation)
+                    if (readoutBelow) selectedIndex.takeIf { it in values.indices && values[it].isFinite() }?.let { index ->
+                        DateValueReadout(
+                            date = dates.getOrNull(index)?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() },
+                            value = "${valueText(values[index])} $unit",
+                            modifier = Modifier.padding(top = if (compactLayout) VibeSpacing.xSmall else VibeSpacing.small).semantics {
+                                contentDescription = "Graph readout"
+                                stateDescription = "${formatGraphDate(dates.getOrNull(index))}, ${valueText(values[index])} $unit"
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            valueColor = palette.textPrimary,
+                            dateLabel = readoutDateLabel,
+                            onValueHelp = onValueHelp,
+                            valueHelpDescription = valueHelpDescription,
+                            compactValue = if (compactLayout) values.filter(Double::isFinite)
+                                .map { "${valueText(it)} $unit" }.maxByOrNull { it.length } else null,
+                        )
+                    }
+                    if (!readoutBelow) Text("${valueText(domain.minimum)} $unit", style = VibeDashboardTypography.annotation)
                 }
             }
         }
     }
 }
 
-@Composable
-fun VibeGraphTooltip(value: String, date: String, modifier: Modifier = Modifier) {
-    VibeSurface(
-        level = VibeSurfaceLevel.FLOATING,
-        modifier = modifier
-            .widthIn(max = 148.dp)
-            .semantics { contentDescription = "Graph tooltip" },
-        shape = RoundedCornerShape(VibeShapes.tooltip),
-    ) {
-        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
-            Text(value, style = MaterialTheme.typography.titleMedium)
-            Text(date, color = LocalVibePalette.current.textSecondary, style = VibeDashboardTypography.annotation)
-        }
-    }
-}
-
 internal fun formatGraphDate(value: Long?): String = value?.let {
-    Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+    formatDisplayDate(it)
 }.orEmpty()
 
 internal fun formatGraphAxis(value: Double): String =

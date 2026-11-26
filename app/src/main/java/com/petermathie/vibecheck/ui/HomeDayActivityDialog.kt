@@ -64,7 +64,6 @@ import com.petermathie.vibecheck.domain.model.TrainingMode
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.freshnessColors
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
@@ -78,7 +77,7 @@ internal fun HomeDayActivityDialog(
     onDismiss: () -> Unit,
 ) {
     val palette = LocalVibePalette.current
-    val date = LocalDate.ofEpochDay(day).format(DateTimeFormatter.ofPattern("d MMMM yyyy"))
+    val date = formatDisplayDate(LocalDate.ofEpochDay(day))
     val matchingDetail = detail?.takeIf { it.epochDay == day }
     HomeGlassDialog(
         title = date,
@@ -165,10 +164,10 @@ internal fun HomeMuscleActivityDialog(
     val average = recency?.weeklyAverageRpe?.let { "%.1f".format(it) } ?: "Not recorded"
     val count = recency?.weeklyWorkingSets ?: 0
     val contributions = recency?.weeklyContributions.orEmpty()
-    val viewingDate = date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    val viewingDate = formatDisplayDate(date)
     HomeGlassDialog(
         title = name,
-        paneLabel = "$name activity on ${date.format(DateTimeFormatter.ofPattern("d MMMM yyyy"))}",
+        paneLabel = "$name activity on ${formatDisplayDate(date)}",
         testTag = "Home muscle activity",
         closeLabel = "Close muscle activity",
         bounds = bounds,
