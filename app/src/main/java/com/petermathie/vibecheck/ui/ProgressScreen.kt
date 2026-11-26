@@ -1,270 +1,285 @@
 package com.petermathie.vibecheck.ui
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.ExerciseVariationEntity
 import com.petermathie.vibecheck.domain.progress.SessionProgress
 import com.petermathie.vibecheck.domain.progress.PersonalRecords
 import com.petermathie.vibecheck.domain.progress.PersonalRecordVisibility
+import com.petermathie.vibecheck.domain.progress.AggregateProgressPoint
 import com.petermathie.vibecheck.domain.model.ActivityDay
 import com.petermathie.vibecheck.ui.theme.VibeSpacing
+import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.components.VibeGraph
 import com.petermathie.vibecheck.ui.components.VibeGraphStyle
-import com.petermathie.vibecheck.ui.components.VibeSurface
-import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
+import com.petermathie.vibecheck.ui.components.VibeGraphState
+import com.petermathie.vibecheck.ui.components.progressDateRange
 import java.time.Instant
 import java.time.ZoneId
-import java.io.File
+import java.time.ZoneOffset
 import java.time.LocalDate
 
 @Composable
 fun ProgressScreen(vm:EditorViewModel) {
     val exercises by vm.exercises.collectAsStateWithLifecycle();val workouts by vm.workouts.collectAsStateWithLifecycle();val rows by vm.workoutExercises.collectAsStateWithLifecycle()
     val sets by vm.sets.collectAsStateWithLifecycle();val links by vm.setBands.collectAsStateWithLifecycle();val bands by vm.bands.collectAsStateWithLifecycle();val variations by vm.variations.collectAsStateWithLifecycle()
-    val measurements by vm.measurements.collectAsStateWithLifecycle()
-    val context=LocalContext.current
-    var exerciseId by remember { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by remember { mutableStateOf<String?>(null) };var selected by remember { mutableStateOf<Int?>(null) }
+    var exerciseId by rememberSaveable { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by rememberSaveable { mutableStateOf<String?>(null) }
     var variationMenu by remember { mutableStateOf(false) };var methodology by remember { mutableStateOf(false) }
-    var selectedWeight by remember { mutableStateOf<Int?>(null) };var selectedPhoto by remember { mutableStateOf<File?>(null) }
-    var collapsedCards by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var rpeHelp by remember { mutableStateOf(false) }
+    var rangeMonths by rememberSaveable { mutableIntStateOf(1) }
+    var customRange by rememberSaveable { mutableStateOf(false) }
+    var customStart by rememberSaveable { mutableLongStateOf(LocalDate.now().minusMonths(1).toEpochDay()) }
+    var customEnd by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
+    var rangeDialog by remember { mutableStateOf(false) }
+    val dateRange = if (customRange) {
+        progressDateRange(LocalDate.ofEpochDay(customStart), LocalDate.ofEpochDay(customEnd), ZoneId.systemDefault())
+    } else progressDateRange(rangeMonths, LocalDate.now(), ZoneId.systemDefault())
     val points=exerciseId?.let { SessionProgress.points(it,workouts,rows,sets,links,bands,filter,variations) }.orEmpty()
     val finishedIds=workouts.filter { it.status=="FINISHED" }.map { it.id }.toSet()
     val trackableSetRowIds = sets.filter { SessionProgress.valid(it) || it.romValue != null }.map { it.workoutExerciseId }.toSet()
     val eligibleExerciseIds = rows.filter { it.workoutId in finishedIds && it.id in trackableSetRowIds }.map { it.actualExerciseId }.toSet()
-    val aggregate = remember(eligibleExerciseIds, workouts, rows, sets, links, bands, variations) {
-        SessionProgress.aggregate(
-            eligibleExerciseIds.associateWith { id ->
-                SessionProgress.points(id, workouts, rows, sets, links, bands, null, variations)
-            },
-        )
+    val allPoints = remember(eligibleExerciseIds, workouts, rows, sets, links, bands, variations) {
+        eligibleExerciseIds.associateWith { id ->
+            SessionProgress.points(id, workouts, rows, sets, links, bands, null, variations)
+        }
     }
-    val bodyweights = measurements.filter { it.metric.equals("Bodyweight", true) }.sortedBy { it.recordedAt }
-    val progressPhotos = remember(context) {
-        File(context.filesDir, "progress-photos").listFiles().orEmpty()
-            .mapNotNull { file -> file.name.substringBefore('.').toLongOrNull()?.let { it to file } }
-    }
+    val aggregate = remember(allPoints) { SessionProgress.aggregate(allPoints) }
     val exerciseRows=rows.filter { it.actualExerciseId==exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
     val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
     val records=SessionProgress.records(valid,points)
+    val visiblePoints = points.filter { it.date in dateRange }
     val recordVisibility=SessionProgress.recordVisibility(exercises.find { it.id==exerciseId }?.trackingType)
-    val availableCardKeys = buildList {
-        if (aggregate.isNotEmpty()) add("overall")
-        if (bodyweights.isNotEmpty()) add("bodyweight")
-        add("training")
+    val selectedDay = rememberSaveable { mutableStateOf<Long?>(LocalDate.now().toEpochDay()) }
+    var selectedWorkoutId by remember { mutableStateOf<String?>(null) }
+    var exerciseDetailsDay by remember { mutableStateOf<Long?>(null) }
+    val listState = rememberLazyListState()
+    val romRowIds = rows.filter { it.actualExerciseId == exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
+    val romSeries = SessionProgress.romSeries(sets.filter { it.workoutExerciseId in romRowIds })
+    LaunchedEffect(exerciseId, filter) {
+        selectedDay.value = if (exerciseId == null) LocalDate.now().toEpochDay() else null
+        listState.scrollToItem(0)
     }
-    val layoutPreferences = remember(context) {
-        context.getSharedPreferences("progress-layout", android.content.Context.MODE_PRIVATE)
-    }
-    var progressCardKeys by remember { mutableStateOf(emptyList<String>()) }
-    LaunchedEffect(availableCardKeys) {
-        val saved = layoutPreferences.getString("card-order", "").orEmpty()
-            .split('|')
-            .filter(String::isNotBlank)
-        val reconciled = if (layoutPreferences.getBoolean("card-order-customized", false)) {
-            saved.filter { it in availableCardKeys } + availableCardKeys.filterNot { it in saved }
-        } else {
-            availableCardKeys.sortedBy { cardKey ->
-                when {
-                    cardKey == "overall" -> 0
-                    cardKey == "bodyweight" -> 1
-                    else -> 1_000
-                }
+    LaunchedEffect(dateRange) {
+        selectedDay.value?.let { day ->
+            if (LocalDate.ofEpochDay(day).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() !in dateRange) {
+                selectedDay.value = null
             }
         }
-        progressCardKeys = reconciled
-        layoutPreferences.edit().putString("card-order", reconciled.joinToString("|")).apply()
     }
-    val progressOrder = rememberReorderState(progressCardKeys) { _, from, to ->
-        val reordered = progressCardKeys.toMutableList()
-        if (from in reordered.indices && to in reordered.indices) {
-            val moved = reordered.removeAt(from)
-            reordered.add(to, moved)
-            progressCardKeys = reordered
-            layoutPreferences.edit()
-                .putString("card-order", reordered.joinToString("|"))
-                .putBoolean("card-order-customized", true)
-                .apply()
-        }
-    }
-    ScreenList {
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(VibeSpacing.medium)) {
-                Row(Modifier.fillMaxWidth(),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
-                    Text("Progress",style=MaterialTheme.typography.headlineSmall,modifier=Modifier.weight(1f))
-                    IconButton(onClick={methodology=true}) { Icon(Icons.Outlined.Info,contentDescription="How progress works") }
-                }
-                progressOrder.ordered(progressCardKeys) { it }.forEachIndexed { cardIndex, cardKey ->
-                    key(cardKey) {
-                        val title = when {
-                            cardKey == "overall" -> "Overall training trend"
-                            cardKey == "bodyweight" -> "Bodyweight"
-                            cardKey == "training" -> "Training progress"
-                            else -> cardKey
-                        }
-                        val expanded = !collapsedCards.contains(cardKey)
-                        val toggleExpanded = {
-                            collapsedCards = if (expanded) collapsedCards + cardKey else collapsedCards.filterNot { it == cardKey }
-                        }
-                        when {
-                            cardKey == "overall" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
-                                Text("Average normalized score across ${aggregate.last().exerciseCount} exercises")
-                                MiniChart(values = aggregate.map { it.averageIndex }, dates = aggregate.map { it.date }, unit = "index") {}
-                            }
-                            cardKey == "bodyweight" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
-                                MiniChart(
-                                    values = bodyweights.map { if (it.unit.equals("lb", true)) it.value / 2.2046226218 else it.value },
-                                    dates = bodyweights.map { it.recordedAt },
-                                    unit = "kg",
-                                ) { index ->
-                                    selectedWeight = index
-                                    val day = Instant.ofEpochMilli(bodyweights[index].recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()
-                                    selectedPhoto = progressPhotos.firstOrNull { (timestamp, _) ->
-                                        Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate() == day
-                                    }?.second
-                                }
-                                selectedWeight?.let { bodyweights.getOrNull(it) }?.let {
-                                    Text("${Instant.ofEpochMilli(it.recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()} · ${formatBodyweight(it.value)} ${it.unit}")
-                                }
-                            }
-                            cardKey == "training" -> ProgressCardShell(progressOrder, cardKey, cardIndex, title, expanded, toggleExpanded) {
-                                ExerciseProgressSelectors(exercises = exercises, exerciseId = exerciseId, variations = variations, filter = filter, eligible = eligibleExerciseIds.isNotEmpty(), variationMenu = variationMenu, onChooseExercise = { picker = true }, onVariationMenu = { variationMenu = it }, onFilter = { filter = it; selected = null })
-                                if (eligibleExerciseIds.isEmpty()) {
-                                    Text("Complete a working set before an exercise appears here.")
-                                } else if (points.isEmpty()) {
-                                    Text("Choose an exercise to see its progress.")
-                                } else {
-                                    MiniChart(points.map { it.index ?: it.score }, points.map { it.trend }, points.map { it.date }, if(points.any { it.index!=null }) "index" else "score") { selected = it }
-                                    PersonalRecordsContent(records, recordVisibility)
-                                    val last=points.mapNotNull { it.trend }.takeLast(2)
-                                    if(last.size==2) Text(if(last[1]>last[0]*1.01)"Rising" else if(last[1]<last[0]*0.99)"Falling" else "Flat")
-                                    Text("RPE")
-                                    RpeBarChart(values = points.map { it.performance.rpe ?: Double.NaN }, dates = points.map { it.date }) { selected = it }
-                                    selected?.let { points.getOrNull(it) }?.let { p ->
-                                        Text("${Instant.ofEpochMilli(p.date).atZone(ZoneId.systemDefault()).toLocalDate()} · ${setDescription(p.performance)}")
-                                        Text("Bands: ${p.bands.joinToString().ifBlank { "None" }} · RPE ${p.performance.rpe ?: "not recorded"}")
-                                        Text(p.notes.ifBlank { "No exercise notes" })
-                                    }
-                                    ActivityHeatmap(days = points.groupBy { Instant.ofEpochMilli(it.date).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() }.map { ActivityDay(it.key,it.value.size) }, onDayClick = { day -> selected=points.indexOfFirst { Instant.ofEpochMilli(it.date).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()==day }.takeIf { it>=0 } })
-                                }
-                            }
+    HabitGlassDialogHost(constrainToContent = true) { backdrop, _ ->
+        val palette = LocalVibePalette.current
+        Box(
+            Modifier.fillMaxSize().then(backdrop).habitGlow(palette.accent, palette.isDark).semantics {
+                contentDescription = if (exerciseId == null) "Overall progress" else "Exercise progress"
+            },
+        ) {
+            val plotHeight = 200.dp
+            ScreenList(
+                listState = listState,
+                itemSpacing = VibeSpacing.small,
+                modifier = Modifier.semantics {
+                    contentDescription = "Progress sections"
+                },
+            ) {
+                fun calendarItem() {
+                    item(key = "calendar") {
+                        key(exerciseId, filter) {
+                            val calendarDays = if (exerciseId == null) {
+                                workouts.filter { it.status == "FINISHED" }
+                                    .groupingBy { workoutLocalDay(it, ZoneId.systemDefault()) }.eachCount()
+                            } else points.groupingBy {
+                                Instant.ofEpochMilli(it.date).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()
+                            }.eachCount()
+                            ActivityHeatmap(
+                                days = calendarDays.map { ActivityDay(it.key, it.value) },
+                                onDayClick = {},
+                                itemLabel = if (exerciseId == null) "workouts" else "exercise sessions",
+                                singularItemLabel = if (exerciseId == null) null else "exercise session",
+                                selection = selectedDay,
+                                reserveEmptyReadoutSpace = exerciseId != null,
+                                opaqueCells = true,
+                                onEntryClick = if (exerciseId == null) null else { day -> exerciseDetailsDay = day },
+                            )
                         }
                     }
                 }
-            }
-        }
-        val ids=rows.filter { it.actualExerciseId==exerciseId && workouts.any { w -> w.id==it.workoutId && w.status=="FINISHED" } }.map { it.id }.toSet()
-        val romSeries=SessionProgress.romSeries(sets.filter { it.workoutExerciseId in ids })
-        if(romSeries.isNotEmpty()) item {
-            Text("Flexibility / ROM (separate from frequency)")
-            romSeries.forEach { (unit,series) ->
-                Text("ROM · $unit",style=MaterialTheme.typography.titleSmall)
-                MiniChart(series.map { it.romValue!! },dates=series.map { it.loggedAt },unit=unit) { }
-                series.forEach { Text("${it.romValue} $unit") }
-            }
-        }
-        items(points.reversed()) { p -> TextButton(onClick={selected=points.indexOf(p)}){Text("${Instant.ofEpochMilli(p.date).atZone(ZoneId.systemDefault()).toLocalDate()} · ${setDescription(p.performance)}")} }
-    }
-    if(picker)ProgressExercisePicker(vm,eligibleExerciseIds,{picker=false}){exerciseId=it.id;filter=null;selected=null;picker=false}
-    if(methodology)AlertDialog(
-        onDismissRequest={methodology=false},
-        title={Text("How progress works")},
-        text={Text("The first three valid sessions establish a personal baseline of 100. Before that, charts show raw performance. Skill index is a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")},
-        confirmButton={TextButton(onClick={methodology=false}){Text("Close")}},
-    )
-    selectedPhoto?.let { file ->
-        val bitmap = remember(file) {
-            android.graphics.BitmapFactory.decodeFile(
-                file.path,
-                android.graphics.BitmapFactory.Options().apply { inSampleSize = 2 },
-            )
-        }
-        AlertDialog(
-            onDismissRequest = { selectedPhoto = null },
-            title = { Text("Progress photo") },
-            text = {
-                bitmap?.let {
-                    Image(
-                        bitmap = it.asImageBitmap(),
-                        contentDescription = "Progress photo for selected bodyweight day",
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp),
+                item(key = "header") {
+                    ExerciseProgressHeader(
+                        exercises, exerciseId, variations, filter, variationMenu,
+                        onChooseExercise = { picker = true },
+                        onVariationMenu = { variationMenu = it },
+                        onFilter = { filter = it },
                     )
-                } ?: Text("Photo could not be opened")
-            },
-            confirmButton = { TextButton(onClick = { selectedPhoto = null }) { Text("Close") } },
-        )
-    }
-}
-
-@Composable
-private fun ProgressCardHeader(
-    order: ReorderState,
-    cardKey: String,
-    title: String,
-    expanded: Boolean,
-    onToggleExpanded: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClickLabel = if (expanded) "Collapse $title" else "Expand $title") { onToggleExpanded() },
-        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-        ReorderHandle(order, cardKey, title)
-    }
-}
-
-@Composable
-private fun ProgressCardShell(
-    order: ReorderState,
-    cardKey: String,
-    cardIndex: Int,
-    title: String,
-    expanded: Boolean,
-    onToggleExpanded: () -> Unit,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    ReorderItem(order, cardKey, cardIndex, Modifier.fillMaxWidth()) {
-        VibeCard {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                ProgressCardHeader(order, cardKey, title, expanded, onToggleExpanded)
-                if (expanded) content()
+                }
+                item(key = "points") {
+                    Column(
+                        Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(VibeSpacing.small),
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (exerciseId == null) "Overall training trend" else "Training trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            ProgressRangeSelector(rangeMonths, customRange, onCustom = { rangeDialog = true }) {
+                                rangeMonths = it
+                                customRange = false
+                            }
+                        }
+                        if (exerciseId == null) {
+                            val visibleAggregate = visibleAggregateProgress(aggregate, dateRange)
+                            Text("Weekly average points", style = MaterialTheme.typography.labelSmall)
+                            VibeGraph(
+                                values = visibleAggregate.map { it.averageIndex }, dates = visibleAggregate.map { it.date },
+                                unit = "points", dateRange = dateRange, readoutBelow = true, edgeToEdge = true,
+                                plotHeight = 200.dp, compactLayout = true, onValueHelp = { methodology = true },
+                                valueFormatter = ::formatProgressValue,
+                                selectedDate = selectedDay.value?.let { LocalDate.ofEpochDay(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() },
+                                onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
+                                graphState = if (visibleAggregate.isEmpty()) VibeGraphState.Empty("No training points recorded in this date range.") else VibeGraphState.Data,
+                            )
+                        } else if (points.isEmpty()) Text("Complete a working set for this exercise to see its progress.")
+                        else VibeGraph(
+                                values = visiblePoints.map { it.index ?: it.score },
+                                secondaryValues = visiblePoints.map { it.trend },
+                                dates = visiblePoints.map { it.date },
+                                unit = "points",
+                                dateRange = dateRange,
+                                readoutBelow = true,
+                                edgeToEdge = true,
+                                plotHeight = plotHeight,
+                                compactLayout = true,
+                                onValueHelp = { methodology = true },
+                                valueFormatter = ::formatProgressValue,
+                                selectedDate = selectedDay.value?.let { LocalDate.ofEpochDay(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() },
+                                onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
+                                graphState = if (visiblePoints.isEmpty()) VibeGraphState.Empty("No points recorded in this date range.") else VibeGraphState.Data,
+                            )
+                    }
+                }
+                if (exerciseId != null && points.isNotEmpty()) {
+                    item(key = "effort") {
+                        Column(
+                            Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(VibeSpacing.small),
+                        ) {
+                            Text("Effort (RPE)", style = MaterialTheme.typography.titleMedium)
+                            VibeGraph(
+                                values = visiblePoints.map { it.performance.rpe ?: Double.NaN },
+                                dates = visiblePoints.map { it.date },
+                                unit = "RPE",
+                                style = VibeGraphStyle.BARS,
+                                fixedRange = 0.0..10.0,
+                                dateRange = dateRange,
+                                readoutBelow = true,
+                                edgeToEdge = true,
+                                plotHeight = plotHeight,
+                                compactLayout = true,
+                                valueFormatter = ::formatProgressValue,
+                                onValueHelp = { rpeHelp = true },
+                                valueHelpDescription = "About RPE",
+                                selectedDate = selectedDay.value?.let { LocalDate.ofEpochDay(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() },
+                                onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
+                                graphState = if (visiblePoints.any { it.performance.rpe?.isFinite() == true }) VibeGraphState.Data else VibeGraphState.Empty("No effort recorded in this date range."),
+                            )
+                        }
+                    }
+                }
+                if(romSeries.isNotEmpty()) item(key = "rom") {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("Flexibility / ROM (separate from frequency)")
+                        romSeries.forEach { (unit,series) ->
+                            Text("ROM · $unit",style=MaterialTheme.typography.titleSmall)
+                            MiniChart(series.map { it.romValue!! },dates=series.map { it.loggedAt },unit=unit, valueFormatter=::formatProgressValue, plotHeight=plotHeight) { }
+                            series.forEach { Text("${formatProgressValue(it.romValue!!)} $unit") }
+                        }
+                    }
+                }
+                calendarItem()
+                if (exerciseId != null && points.isNotEmpty()) item(key = "records") {
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(VibeSpacing.small)) {
+                        PersonalRecordsContent(records, recordVisibility)
+                    }
+                }
+                if (exerciseId == null) item(key = "day-workouts") {
+                    val day = selectedDay.value ?: LocalDate.now().toEpochDay()
+                    ProgressDayWorkouts(day, workoutsOnDay(workouts, day, ZoneId.systemDefault())) { selectedWorkoutId = it }
+                }
             }
         }
+        selectedWorkoutId?.let { id ->
+            val workout = workouts.find { it.id == id && it.status == "FINISHED" }
+            if (workout == null) HabitGlassDialog("Workout unavailable", onDismiss = { selectedWorkoutId = null }) {
+                Text("This workout is no longer available.")
+            } else ProgressWorkoutDialog(workout, vm) { selectedWorkoutId = null }
+        }
+        exerciseDetailsDay?.let { day ->
+            exerciseId?.let { id ->
+                val sessionWorkoutIds = points.mapNotNull { point ->
+                    rows.find { it.id == point.performance.workoutExerciseId }?.workoutId
+                }.toSet()
+                ProgressExerciseDayDialog(
+                    day = day,
+                    exerciseId = id,
+                    variationFilter = filter,
+                    workouts = workoutsOnDay(workouts.filter { it.id in sessionWorkoutIds }, day, ZoneId.systemDefault()),
+                    vm = vm,
+                    onDismiss = { exerciseDetailsDay = null },
+                )
+            }
+        }
+        if(picker)ProgressExercisePicker(vm,{picker=false}){exerciseId=it?.id;filter=null;picker=false}
+        if (rangeDialog) ProgressCustomRangeDialog(
+            start = if (customRange) LocalDate.ofEpochDay(customStart) else LocalDate.now().minusMonths(rangeMonths.toLong()),
+            end = if (customRange) LocalDate.ofEpochDay(customEnd) else LocalDate.now(),
+            onDismiss = { rangeDialog = false },
+        ) { start, end ->
+            customStart = start.toEpochDay()
+            customEnd = end.toEpochDay()
+            customRange = true
+            rangeDialog = false
+        }
+        if(methodology)HabitGlassDialog(title="How points are calculated",onDismiss={methodology=false}) {
+            if (exerciseId == null) Text("Overall training trend averages each exercise's personal points for the week, using UTC weeks. Weeks overlapping the date range remain visible, with partial weeks positioned at the range boundary without changing their averages. Weekly points are separate from the selected local day and its workout list. The date range only changes what is shown, not the personal baselines.")
+            Text("The strongest valid working set supplies each session's points. The first three valid sessions establish a personal baseline of 100 points. Before that, points reflect raw performance. For skills, points are a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")
+            Text("RPE is perceived effort on a 0–10 scale: how hard the working set felt, not a measure of progress.")
+        }
+        if (rpeHelp) RpeInformationDialog { rpeHelp = false }
     }
 }
 
+internal fun visibleAggregateProgress(
+    points: List<AggregateProgressPoint>,
+    range: LongRange,
+): List<AggregateProgressPoint> = points.mapNotNull { point ->
+    val weekEnd = Instant.ofEpochMilli(point.date).atZone(ZoneOffset.UTC).toLocalDate()
+    val first = weekEnd.minusDays(6).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    val endExclusive = weekEnd.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    point.takeIf { first <= range.last && endExclusive > range.first }
+        ?.copy(date = point.date.coerceIn(range))
+}
+
 @Composable
-private fun ExerciseProgressSelectors(
+private fun ExerciseProgressHeader(
     exercises: List<ExerciseEntity>,
     exerciseId: String?,
     variations: List<ExerciseVariationEntity>,
     filter: String?,
-    eligible: Boolean,
     variationMenu: Boolean,
     onChooseExercise: () -> Unit,
     onVariationMenu: (Boolean) -> Unit,
@@ -275,31 +290,28 @@ private fun ExerciseProgressSelectors(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
     ) {
-        OutlinedButton(
+        TextButton(
             onClick = onChooseExercise,
-            enabled = eligible,
+            enabled = exercises.any { !it.isArchived },
             modifier = Modifier.weight(1f),
-            shape = MaterialTheme.shapes.medium,
+            contentPadding = PaddingValues(0.dp),
         ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                exercises.find { it.id == exerciseId }?.canonicalName ?: "Choose exercise",
-                maxLines = 1,
+                exercises.find { it.id == exerciseId }?.canonicalName?.let { "Track progress of $it" } ?: "Track progress of...",
+                modifier = Modifier.weight(1f, fill = false),
+                style = MaterialTheme.typography.titleLarge,
+                color = LocalVibePalette.current.textPrimary,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            Icon(Icons.Outlined.ExpandMore, "Choose exercise", tint = if (LocalVibePalette.current.isDark) Color.White else LocalVibePalette.current.textPrimary)
+            }
         }
-        Box(Modifier.weight(1f)) {
-            val exerciseVariations = variations.filter { it.exerciseId == exerciseId }
-            OutlinedButton(
-                onClick = { onVariationMenu(true) },
-                enabled = exerciseVariations.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.medium,
-            ) {
-                Text(
-                    exerciseVariations.find { it.id == filter }?.name ?: "Variations",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        val exerciseVariations = variations.filter { it.exerciseId == exerciseId }
+        if (exerciseVariations.isNotEmpty()) Box {
+            IconButton(onClick = { onVariationMenu(true) }) {
+                Icon(Icons.Outlined.ExpandMore, "Variations: ${exerciseVariations.find { it.id == filter }?.name ?: "All variations"}")
             }
             DropdownMenu(
                 expanded = variationMenu,
@@ -327,42 +339,52 @@ private fun ExerciseProgressSelectors(
 }
 
 @Composable
-private fun PersonalRecordsContent(
-    records: PersonalRecords,
-    visibility: PersonalRecordVisibility,
-) {
-    Text("Personal records", style = MaterialTheme.typography.titleLarge)
-    records.scoredPerformance?.let { record ->
-        PersonalRecordValue(
-            "Best performance",
-            "${formatAxis(record.score)} score",
-            setDescription(record.performance),
-        )
-    }
-    if (visibility.weight) records.weightKg?.let {
-        PersonalRecordValue("Heaviest weight", "${formatAxis(it)} kg")
-    }
-    if (visibility.hold) records.holdMillis?.let {
-        PersonalRecordValue("Longest hold", "${formatAxis(it / 1000.0)} sec")
-    }
-    if (visibility.estimatedOneRepMax) records.estimatedOneRepMaxKg?.let {
-        PersonalRecordValue("Estimated 1RM", "${formatAxis(it)} kg")
+private fun ProgressRangeSelector(months: Int, custom: Boolean, onCustom: () -> Unit, onChange: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }, modifier = Modifier.semantics {
+            contentDescription = "Progress date range"
+            stateDescription = if (custom) "Custom" else if (months == 12) "1 year" else if (months == 1) "1 month" else "$months months"
+        }, contentPadding = PaddingValues(horizontal = 4.dp)) {
+            Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = LocalVibePalette.current.textPrimary)
+            Icon(Icons.Outlined.ExpandMore, null, tint = LocalVibePalette.current.textPrimary)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        listOf(1 to ("1m" to "1 month"), 3 to ("3m" to "3 months"), 6 to ("6m" to "6 months"), 12 to ("1y" to "1 year")).forEach { (value, labels) ->
+            DropdownMenuItem(
+                text = { Text(labels.second) },
+                onClick = { expanded = false; onChange(value) },
+                modifier = Modifier.semantics { contentDescription = labels.second },
+            )
+        }
+        DropdownMenuItem(text = { Text("Custom") }, onClick = { expanded = false; onCustom() })
+        }
     }
 }
 
 @Composable
-private fun PersonalRecordValue(label:String,value:String,detail:String?=null) {
-    VibeSurface(VibeSurfaceLevel.INSET, Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.padding(horizontal=14.dp,vertical=10.dp),
-            horizontalArrangement=Arrangement.spacedBy(12.dp),
-            verticalAlignment=androidx.compose.ui.Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(label,style=MaterialTheme.typography.labelLarge)
-                detail?.let { Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant) }
+internal fun PersonalRecordsContent(
+    records: PersonalRecords,
+    visibility: PersonalRecordVisibility,
+) {
+    Text("Personal records", style = MaterialTheme.typography.titleLarge)
+    val values = buildList {
+        records.scoredPerformance?.let { add("Best performance" to "${formatAxis(it.score)} points") }
+        if (visibility.weight) records.weightKg?.let { add("Heaviest weight" to "${formatAxis(it)} kg") }
+        if (visibility.hold) records.holdMillis?.let { add("Longest hold" to "${formatAxis(it / 1000.0)} sec") }
+        if (visibility.estimatedOneRepMax) records.estimatedOneRepMaxKg?.let { add("Estimated 1RM" to "${formatAxis(it)} kg") }
+    }
+    Column(Modifier.fillMaxWidth().semantics { contentDescription = "Personal records" }) {
+        values.forEachIndexed { index, (label, value) ->
+            if (index > 0) HorizontalDivider(color = LocalVibePalette.current.border.copy(alpha = 0.3f))
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = VibeSpacing.small),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+                Text(value, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.End)
             }
-            Text(value,style=MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -370,9 +392,8 @@ private fun PersonalRecordValue(label:String,value:String,detail:String?=null) {
 @Composable
 private fun ProgressExercisePicker(
     vm: EditorViewModel,
-    eligibleExerciseIds: Set<String>,
     onDismiss: () -> Unit,
-    onChoose: (com.petermathie.vibecheck.data.local.ExerciseEntity) -> Unit,
+    onChoose: (ExerciseEntity?) -> Unit,
 ) {
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     val aliases by vm.aliases.collectAsStateWithLifecycle()
@@ -383,62 +404,38 @@ private fun ProgressExercisePicker(
     val muscleIds = muscles.filter { it.displayName.contains(query, true) }.map { it.id }.toSet()
     val mappedIds = mappings.filter { it.muscleId in muscleIds }.map { it.exerciseId }.toSet()
     val available = exercises.filter {
-        it.id in eligibleExerciseIds &&
-            !it.isArchived &&
+        !it.isArchived &&
             (it.canonicalName.contains(query, true) || it.id in aliasIds || it.id in mappedIds)
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Choose exercise") },
-        text = {
-            Column {
-                OutlinedTextField(query, { query = it }, label = { Text("Name, alias or muscle") })
-                LazyColumn(
-                    Modifier
-                        .heightIn(max = 420.dp)
-                        .semantics { contentDescription = "Eligible progress exercises" },
-                ) {
-                    if (available.isEmpty()) {
-                        item { Text("No matching exercises with progress data") }
-                    }
-                    items(available, key = { it.id }) { exercise ->
-                        Text(
-                            exercise.canonicalName,
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { onChoose(exercise) }
-                                .padding(vertical = 14.dp),
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+    HabitGlassDialog(title = "Choose exercise", onDismiss = onDismiss) {
+        HabitTextField("Name, alias or muscle", query, { query = it })
+        Text(
+            "Overall training trend",
+            Modifier.fillMaxWidth().clickable { onChoose(null) }.padding(vertical = 8.dp),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        if (available.isEmpty()) Text("No matching exercises.")
+        available.sortedBy { it.canonicalName }.forEach { exercise ->
+            Text(
+                exercise.canonicalName,
+                Modifier.fillMaxWidth().clickable { onChoose(exercise) }.padding(vertical = 8.dp),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+    }
 }
 
 @Composable
-fun MiniChart(values:List<Double>,smooth:List<Double?> = emptyList(),dates:List<Long> = emptyList(),unit:String = "",onSelect:(Int)->Unit) {
+fun MiniChart(values:List<Double>,smooth:List<Double?> = emptyList(),dates:List<Long> = emptyList(),unit:String = "",valueFormatter:((Double)->String)? = null,plotHeight:Dp = 138.dp,onSelect:(Int)->Unit) {
     VibeGraph(
         values = values,
         secondaryValues = smooth,
         dates = dates,
         unit = unit,
         onSelect = onSelect,
+        valueFormatter = valueFormatter,
+        plotHeight = plotHeight,
     )
 }
 
-@Composable
-private fun RpeBarChart(values: List<Double>, dates: List<Long>, onSelect: (Int) -> Unit) {
-    VibeGraph(
-        values = values,
-        dates = dates,
-        unit = "RPE",
-        style = VibeGraphStyle.BARS,
-        fixedRange = 0.0..10.0,
-        onSelect = onSelect,
-    )
-}
-
-private fun formatChartDate(value:Long?):String=value?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toString() }.orEmpty()
-private fun formatAxis(value:Double):String=if(value%1.0==0.0)value.toLong().toString() else "%.1f".format(value)
+private fun formatAxis(value:Double):String=formatProgressValue(value)

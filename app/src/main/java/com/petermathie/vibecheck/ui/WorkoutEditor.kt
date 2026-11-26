@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import androidx.compose.runtime.*
@@ -42,6 +43,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.selected
@@ -831,21 +833,11 @@ private fun WorkoutExerciseCard(
                                 onChange = { if (acceptsRpeEdit(draft.rpe, it)) updateDraft(draft.copy(rpe = it)) },
                             )
                             if (!isLocked || draft.rpe.isNotBlank()) {
-                                CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
-                                    IconButton(
-                                        onClick = { rpeHelpOpen = true },
-                                        modifier = Modifier.align(Alignment.TopEnd)
-                                            .offset(x = 8.dp, y = (-8).dp).size(16.dp),
-                                    ) {
-                                        Icon(
-                                            Icons.Outlined.Info,
-                                            contentDescription = "About RPE for $identity",
-                                            tint = palette.textSecondary,
-                                            modifier = Modifier.size(12.dp)
-                                                .background(badgeFill, CircleShape),
-                                        )
-                                    }
-                                }
+                                MetricInformationButton(
+                                    description = "About RPE for $identity", background = badgeFill,
+                                    onClick = { rpeHelpOpen = true },
+                                    modifier = Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp),
+                                )
                             }
                         }
                     },
@@ -1003,20 +995,36 @@ private fun WorkoutExerciseCard(
     if (rpeHelpOpen) RpeInformationDialog { rpeHelpOpen = false }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun RpeInformationDialog(onDismiss: () -> Unit) {
-    AlertDialog(
+internal fun RpeInformationDialog(onDismiss: () -> Unit) {
+    BasicAlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(240.dp),
         properties = DialogProperties(usePlatformDefaultWidth = false),
-        text = {
+    ) {
+        Surface(
+            shape = AlertDialogDefaults.shape,
+            color = AlertDialogDefaults.containerColor,
+            contentColor = AlertDialogDefaults.textContentColor,
+            tonalElevation = AlertDialogDefaults.TonalElevation,
+        ) {
             Column(
-                Modifier.verticalScroll(rememberScrollState()),
+                Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("RPE", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                    Text("RIR", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                Box(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("RPE", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                        Text("RIR", Modifier.weight(1f).padding(end = 48.dp), style = MaterialTheme.typography.titleSmall)
+                    }
+                    IconButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd)) {
+                        Icon(Icons.Outlined.Close, "Close")
+                    }
                 }
                 HorizontalDivider()
                 listOf(
@@ -1029,14 +1037,30 @@ private fun RpeInformationDialog(onDismiss: () -> Unit) {
                     "0-4" to "Many",
                 ).forEach { (level, reserve) ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(level, Modifier.weight(1f))
-                        Text(reserve, Modifier.weight(1f))
+                        Text(level, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                        Text(reserve, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Got it") } },
-    )
+        }
+    }
+}
+
+@Composable
+internal fun MetricInformationButton(
+    description: String,
+    background: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+        IconButton(onClick = onClick, modifier = modifier.size(16.dp)) {
+            Icon(
+                Icons.Outlined.Info, description, tint = LocalVibePalette.current.textSecondary,
+                modifier = Modifier.size(12.dp).background(background, CircleShape),
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

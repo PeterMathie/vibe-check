@@ -82,7 +82,8 @@ class WorkoutLoggingUiTest {
         compose.onNodeWithText("~2").assertIsDisplayed()
         compose.onNodeWithText("0-4").assertIsDisplayed()
         compose.onNodeWithText("Many").assertIsDisplayed()
-        compose.onNodeWithText("Got it").performClick()
+        compose.onNodeWithText("Got it").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Close").assertIsDisplayed().performClick()
         compose.onNodeWithText("RIR").assertDoesNotExist()
         rpe.performScrollTo().assertExists()
     }

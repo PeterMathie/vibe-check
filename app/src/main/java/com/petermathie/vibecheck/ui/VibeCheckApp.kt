@@ -892,7 +892,7 @@ private fun MonthlyActivityHeatmap(
                                 cellModifier
                                     .semantics {
                                         selected = date == selectedDate
-                                        contentDescription = "$date: $count activities" +
+                                        contentDescription = "${formatDisplayDate(date)}: $count activities" +
                                             when {
                                                 future -> ", future date"
                                                 date == selectedDate -> ", selected freshness date"
@@ -928,61 +928,6 @@ private fun MonthlyActivityHeatmap(
                             Spacer(cellModifier)
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ActivityHeatmap(
-    days: List<ActivityDay>,
-    onDayClick: (Long) -> Unit,
-    activityColor: androidx.compose.ui.graphics.Color? = null,
-    itemLabel: String = "activities",
-    compact: Boolean = false,
-) {
-    val palette = LocalVibePalette.current
-    val heatmapColors = palette.habitHeatmapColors(activityColor)
-    val counts = days.associate { it.epochDay to it.activityCount }
-    var offset by rememberSaveable { mutableStateOf(0L) }
-    val today = LocalDate.now().toEpochDay() + offset
-    val start = today - 34
-    val cellSpacing = if (compact) 4.dp else 6.dp
-    val cellHeight = if (compact) 14.dp else 22.dp
-    Row(
-        Modifier.fillMaxWidth().semantics { contentDescription = "$itemLabel date navigation" },
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        VibeActionButton("Earlier", { offset -= 35 }, importance = ActionImportance.COMPACT)
-        Text(
-            "${LocalDate.ofEpochDay(start).format(DateTimeFormatter.ofPattern("d MMM"))} – ${LocalDate.ofEpochDay(today).format(DateTimeFormatter.ofPattern("d MMM"))}",
-            Modifier.weight(1f),
-            style = MaterialTheme.typography.labelSmall,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-        VibeActionButton("Later", { offset = (offset + 35).coerceAtMost(0) }, importance = ActionImportance.COMPACT, enabled = offset < 0)
-    }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(cellSpacing)) {
-        repeat(5) { week ->
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(cellSpacing)) {
-                repeat(7) { day ->
-                    val epochDay = start + week * 7 + day
-                    val count = counts[epochDay] ?: 0
-                    val color = heatmapColors.forLevel(count.coerceAtMost(3))
-                    val isToday = epochDay == LocalDate.now().toEpochDay()
-                    Box(
-                        Modifier.fillMaxWidth().height(cellHeight)
-                            .semantics { contentDescription = "${LocalDate.ofEpochDay(epochDay)}: $count $itemLabel" }
-                            .background(color, RoundedCornerShape(VibeShapes.tooltip))
-                            .border(
-                                width = 1.dp,
-                                color = if (isToday) palette.heatmapOutlineColor(color) else Color.Transparent,
-                                shape = RoundedCornerShape(VibeShapes.tooltip),
-                            )
-                            .clickable { onDayClick(epochDay) },
-                    )
                 }
             }
         }
@@ -1032,16 +977,19 @@ internal fun VibeCard(
 @Composable
 internal fun ScreenList(
     modifier: Modifier = Modifier,
+    listState: androidx.compose.foundation.lazy.LazyListState = androidx.compose.foundation.lazy.rememberLazyListState(),
+    flingBehavior: androidx.compose.foundation.gestures.FlingBehavior = androidx.compose.foundation.gestures.ScrollableDefaults.flingBehavior(),
+    itemSpacing: androidx.compose.ui.unit.Dp = VibeSpacing.medium,
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit,
 ) {
     androidx.compose.foundation.layout.BoxWithConstraints(modifier.fillMaxSize()) {
         val sidePadding = ((maxWidth - 840.dp) / 2).coerceAtLeast(VibeSpacing.medium)
-        val listState = androidx.compose.foundation.lazy.rememberLazyListState()
         val reorderContext = rememberReorderScrollContext(listState)
         ReorderOverlayHost(Modifier.fillMaxSize()) {
             androidx.compose.runtime.CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
                 LazyColumn(
                     state = listState,
+                    flingBehavior = flingBehavior,
                     modifier = Modifier
                         .fillMaxSize()
                         .reorderScrollViewport(reorderContext),
@@ -1051,7 +999,7 @@ internal fun ScreenList(
                         end = sidePadding,
                         bottom = VibeSpacing.medium + LocalAppFabClearance.current,
                     ),
-                    verticalArrangement = Arrangement.spacedBy(VibeSpacing.medium),
+                    verticalArrangement = Arrangement.spacedBy(itemSpacing),
                     content = content,
                 )
             }

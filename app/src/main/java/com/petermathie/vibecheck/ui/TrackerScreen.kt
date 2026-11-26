@@ -1,8 +1,6 @@
 package com.petermathie.vibecheck.ui
 
 import android.content.SharedPreferences
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -13,7 +11,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -33,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.tracker.habitMeasurement
-import com.petermathie.vibecheck.ui.theme.LocalVibeMotion
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import java.time.LocalDate
 import java.time.YearMonth
@@ -143,10 +139,6 @@ fun TrackerScreen(
     val epoch = today.toEpochDay()
     var editor by remember { mutableStateOf<HabitEditorSeed?>(null) }
     var deleteCandidate by remember { mutableStateOf<TrackerEntity?>(null) }
-    var overlay by remember { mutableStateOf(false) }
-    val blur by animateFloatAsState(
-        if (overlay) 12f else 0f, tween(LocalVibeMotion.current.expandMillis), label = "Habit modal blur",
-    )
     val trackers = data?.trackers.orEmpty()
     val fields = data?.fields.orEmpty()
     val values = data?.values.orEmpty()
@@ -166,10 +158,8 @@ fun TrackerScreen(
             creating = true,
         )
     }
-    CompositionLocalProvider(
-        LocalHabitOverlay provides { overlay = it },
-    ) {
-        Box(Modifier.fillMaxSize().blur(blur.dp)) {
+    HabitGlassDialogHost { backdrop, overlay ->
+        Box(Modifier.fillMaxSize().then(backdrop)) {
             ScreenList {
                 item { Text("Habits", style = MaterialTheme.typography.headlineSmall) }
                 if (data == null) {

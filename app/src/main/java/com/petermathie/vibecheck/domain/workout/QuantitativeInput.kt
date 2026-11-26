@@ -33,8 +33,12 @@ fun quantitativeInput(
     return QuantitativeInput(value = value)
 }
 
-fun formatQuantitative(value: Double): String =
-    java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
+fun formatQuantitative(value: Double, maximumFractionDigits: Int? = null): String {
+    val decimal = java.math.BigDecimal.valueOf(value)
+    if (maximumFractionDigits != null) require(maximumFractionDigits >= 0)
+    return (maximumFractionDigits?.let { decimal.setScale(it, java.math.RoundingMode.HALF_UP) } ?: decimal)
+        .stripTrailingZeros().toPlainString()
+}
 
 fun hasInvalidQuantitativeInput(draft: WorkoutEntryDraftEntity): Boolean {
     if (draft.performance.isNotEmpty()) {

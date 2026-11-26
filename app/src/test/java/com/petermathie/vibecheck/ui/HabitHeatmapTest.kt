@@ -6,6 +6,8 @@ import com.petermathie.vibecheck.data.local.TrackerFieldEntity
 import com.petermathie.vibecheck.domain.tracker.habitMonthHeatmap
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -14,23 +16,30 @@ class HabitHeatmapTest {
     private val tracker = TrackerEntity("tracker", "Mood", false)
 
     @Test
-    fun calendarDatesUseWeekdaysAndOrdinalsWithoutRepeatingTheYear() {
+    fun displayDatesUseOrdinalsWithMonthAndYear() {
         mapOf(
-            1 to "Sunday, 1st November",
-            2 to "Monday, 2nd November",
-            3 to "Tuesday, 3rd November",
-            11 to "Wednesday, 11th November",
-            12 to "Thursday, 12th November",
-            13 to "Friday, 13th November",
-            19 to "Thursday, 19th November",
-            21 to "Saturday, 21st November",
-            22 to "Sunday, 22nd November",
-            23 to "Monday, 23rd November",
+            1 to "1st of November 2026",
+            2 to "2nd of November 2026",
+            3 to "3rd of November 2026",
+            11 to "11th of November 2026",
+            12 to "12th of November 2026",
+            13 to "13th of November 2026",
+            19 to "19th of November 2026",
+            21 to "21st of November 2026",
+            22 to "22nd of November 2026",
+            23 to "23rd of November 2026",
         ).forEach { (day, expected) ->
             assertEquals(expected, habitCalendarDate(LocalDate.of(2026, 11, day), Locale.UK))
         }
-        assertEquals("Saturday, 31st October", habitCalendarDate(LocalDate.of(2026, 10, 31), Locale.UK))
-        assertEquals("jeudi, 19 novembre", habitCalendarDate(LocalDate.of(2026, 11, 19), Locale.FRENCH))
+        assertEquals("31st of October 2026", habitCalendarDate(LocalDate.of(2026, 10, 31), Locale.UK))
+        assertEquals("19 novembre 2026", habitCalendarDate(LocalDate.of(2026, 11, 19), Locale.FRENCH))
+    }
+
+    @Test
+    fun timestampDisplayRespectsTheViewingTimezone() {
+        val time = Instant.parse("2026-10-16T00:30:00Z").toEpochMilli()
+        assertEquals("15th of October 2026", formatDisplayDate(time, ZoneId.of("America/Los_Angeles"), Locale.UK))
+        assertEquals("16th of October 2026", formatDisplayDate(time, ZoneId.of("UTC"), Locale.UK))
     }
 
     @Test

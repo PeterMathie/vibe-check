@@ -46,6 +46,7 @@ import com.petermathie.vibecheck.ui.theme.freshnessColors
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.petermathie.vibecheck.ui.formatDisplayDate
 
 internal data class MuscleDetailsUiState(
     val title: String,
@@ -81,7 +82,7 @@ internal fun muscleDetailsUiState(
         "$event $bandLabel ago"
     }
     val lastEvent = recency?.lastTrainedAt?.let {
-        "Last $event: ${Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM yyyy HH:mm"))}"
+        "Last $event: ${formatDisplayDate(it)} ${Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("HH:mm"))}"
     } ?: "Last $event: No data"
     return MuscleDetailsUiState(
         title = "$name $modeLabel details",
