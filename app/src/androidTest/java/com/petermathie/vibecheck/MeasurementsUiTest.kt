@@ -66,7 +66,7 @@ class MeasurementsUiTest {
         assertEquals("Morning check-in", saved.notes)
         compose.onNodeWithContentDescription("Add body entry dialog").assertDoesNotExist()
         compose.onNodeWithContentDescription("Bodyweight calendar card").assertExists()
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Bodyweight trend"))
+        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Bodyweight trend"))
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
         compose.onNodeWithText("Photos").assertDoesNotExist()
     }

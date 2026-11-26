@@ -84,9 +84,9 @@ class HistoryUiTest {
             }
         }
         compose.waitUntil(15_000) {
-            compose.onAllNodesWithContentDescription("$date: 3 activities", substring = true).fetchSemanticsNodes().isNotEmpty()
+            compose.onAllNodesWithContentDescription("${formatDisplayDate(date)}: 3 activities, selected freshness date").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithContentDescription("$date:", substring = true).performTouchInput { doubleClick() }
+        compose.onNodeWithContentDescription("${formatDisplayDate(date)}: 3 activities, selected freshness date").performTouchInput { doubleClick() }
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("Protein. Protein: 50.0 g").fetchSemanticsNodes().isNotEmpty()
         }
