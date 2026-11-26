@@ -1,6 +1,6 @@
 # Structured import — format version 1
 
-This format currently targets database schema 17. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
+This format currently targets database schema 18. Historical notes must be converted into these structured records before import; the app does not parse prose. [historical-workout.json](examples/historical-workout.json) is an executable, fictional example tested by Android CI. It imports a custom exercise, structured variation, finished session, 10-second hold, exercise notes and a Yellow + Black + Purple band stack. Durable unfinished workout-entry drafts are included in backups. App-private exercise reference videos are deliberately separate from JSON backup data.
 
 ## Envelope and merge rules
 
@@ -15,6 +15,20 @@ Rows merge by stable primary key: an existing row is updated; a new row is inser
 All database writes occur in one transaction. Invalid types, values, references or catalogue changes cause rollback of the whole import. Preference validation occurs before database writes; the Settings screen applies valid preferences after the database transaction succeeds. File size is limited to 50 million characters.
 
 ## Primitive values
+
+Schema 18 adds `body_measurements.isWeightCleared` (Boolean/0/1, default false).
+Older version-1 body rows missing this column import as active. Clearing a Body
+calendar date marks every bodyweight row on that local date cleared, retaining
+IDs, values, units, timestamps and legacy notes; photos and standalone note files
+are untouched. Cleared weights are excluded from the Body calendar/trend and new
+nearest-weight lookup, not from backups. Only Bodyweight rows may carry a true
+flag. Backups preserve the flag and require an updated app; older apps reject the
+extra column. Importing an older, explicitly included row can restore its active
+state under the existing merge-by-ID rules; omission still is not deletion.
+
+Body's Settings kg/lb preference converts presentation and input, not backup data.
+Switching it never rewrites measurements. Actual edits preserve an existing row's
+storage unit; new Body rows store kg after converting pounds input when needed.
 
 - Text must be a JSON string; numeric strings are not silently converted.
 - Integer columns require whole numbers within their storage range. Counts, positions and other Int-backed fields cannot exceed 2,147,483,647.

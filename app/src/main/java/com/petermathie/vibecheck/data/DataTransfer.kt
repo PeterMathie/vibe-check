@@ -57,6 +57,7 @@ object DataTransfer {
                 val seen=mutableSetOf<List<Any>>()
                 repeat(rows.length()) { i ->
                     val row=rows.getJSONObject(i)
+                    if (table == "body_measurements" && !row.has("isWeightCleared")) row.put("isWeightCleared", 0)
                     if (table == "trackers") {
                         if (!row.has("heatmapFieldId")) row.put("heatmapFieldId", JSONObject.NULL)
                         if (!row.has("heatmapMode")) row.put("heatmapMode", "RELATIVE")

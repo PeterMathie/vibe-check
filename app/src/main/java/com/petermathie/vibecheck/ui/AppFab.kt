@@ -58,9 +58,9 @@ internal sealed interface AppFabDestination {
         override val accessibilityLabel = "Add exercise to workout"
     }
 
-    data object AddBodyEntry : AppFabDestination {
-        override val label = "Add body entry"
-        override val accessibilityLabel = "Add body entry"
+    data object AddBodyPhoto : AppFabDestination {
+        override val label = "Add photo"
+        override val accessibilityLabel = "Add photo"
     }
 }
 

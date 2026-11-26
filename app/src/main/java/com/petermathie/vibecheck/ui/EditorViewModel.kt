@@ -6,6 +6,8 @@ import androidx.room.withTransaction
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.data.TrackerEditorStore
 import com.petermathie.vibecheck.domain.editor.moveItem
+import com.petermathie.vibecheck.domain.body.BodyweightUnit
+import com.petermathie.vibecheck.domain.body.convertBodyweight
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.*
@@ -17,6 +19,8 @@ import java.util.UUID
 import android.content.Context
 import android.net.Uri
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 
 fun newId(): String = UUID.randomUUID().toString()
 
@@ -73,6 +77,8 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         dao.trackers(), dao.fields(), dao.values(), ::HabitEditorData,
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val measurements = dao.measurements().live()
+    internal val bodyMeasurements: StateFlow<List<BodyMeasurementEntity>?> = dao.measurements()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
     private fun write(onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}, block: suspend () -> Unit) =
@@ -171,6 +177,35 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun save(row: TrackerFieldEntity) = write { trackerStore.saveField(row) }
     fun save(row: TrackerDailyValueEntity, onSaved: () -> Unit = {}) = write(onSaved) { trackerStore.saveValue(row) }
     fun save(row: BodyMeasurementEntity) = write { dao.measurement(row) }
+    internal fun setBodyweight(
+        day: LocalDate,
+        value: Double?,
+        displayUnit: BodyweightUnit,
+        zone: ZoneId = ZoneId.systemDefault(),
+        onSaved: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onSaved, onFailure) {
+        require(value == null || value.isFinite() && value > 0.0) { "Enter a finite bodyweight greater than zero" }
+        val start = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        db.withTransaction {
+            if (value == null) {
+                dao.clearBodyweightsForDay(start, end)
+            } else {
+                val existing = dao.bodyweightsForDay(start, end).firstOrNull()
+                val storageUnit = existing?.let { BodyweightUnit.stored(it.unit) } ?: BodyweightUnit.KILOGRAMS
+                val storedValue = convertBodyweight(value, displayUnit, storageUnit)
+                require(storedValue > 0.0) { "Bodyweight is outside the supported numeric range" }
+                dao.measurement(
+                    existing?.copy(value = storedValue, isWeightCleared = false)
+                        ?: BodyMeasurementEntity(
+                            newId(), day.atTime(12, 0).atZone(zone).toInstant().toEpochMilli(),
+                            "Bodyweight", storedValue, storageUnit.symbol, "", false,
+                        ),
+                )
+            }
+        }
+    }
     fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }
     fun saveBand(row: BandEntity, onSaved: () -> Unit, onFailure: () -> Unit) = write(onSaved, onFailure) {
         require(!isSeededBandId(row.id)) { "Built-in band definitions cannot be changed" }

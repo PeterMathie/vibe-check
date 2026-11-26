@@ -6,11 +6,13 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.content.SharedPreferences
 import android.os.Build
 import com.petermathie.vibecheck.BuildConfig
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,8 +25,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
@@ -32,11 +35,23 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.BodyMeasurementEntity
+import com.petermathie.vibecheck.domain.body.BodyweightUnit
+import com.petermathie.vibecheck.domain.body.bodyweightInputError
+import com.petermathie.vibecheck.domain.body.convertBodyweight
+import com.petermathie.vibecheck.domain.tracker.habitMonthCells
+import com.petermathie.vibecheck.ui.components.DateValueReadout
+import com.petermathie.vibecheck.ui.components.VibeGraph
+import com.petermathie.vibecheck.ui.components.VibeGraphState
+import com.petermathie.vibecheck.ui.components.progressDateRange
+import com.petermathie.vibecheck.ui.theme.LocalVibePalette
+import com.petermathie.vibecheck.ui.theme.habitHeatmapColors
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -44,8 +59,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.io.File
+import java.io.InputStream
 import com.petermathie.vibecheck.data.BackupPreferences
 import com.petermathie.vibecheck.data.DemoRemovalSummary
 
@@ -349,326 +364,251 @@ private fun SettingToggle(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MeasurementsScreen(vm:EditorViewModel) {
-    val rows by vm.measurements.collectAsStateWithLifecycle()
+fun MeasurementsScreen(
+    vm: EditorViewModel,
+    preferences: SharedPreferences = LocalContext.current.getSharedPreferences("settings", 0),
+) {
+    val rows by vm.bodyMeasurements.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
+    val palette = LocalVibePalette.current
+    val shades = palette.habitHeatmapColors()
     val today = LocalDate.now()
+    val zone = ZoneId.systemDefault()
     var selectedDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
-    var displayedMonth by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
-    var addPhotoDialog by rememberSaveable { mutableStateOf(false) }
-    var photoDatePicker by rememberSaveable { mutableStateOf(false) }
-    var pendingPhotoDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
-    var importPhotoDay by remember { mutableStateOf<Long?>(null) }
-    var value by remember { mutableStateOf("") }
-    var unit by remember { mutableStateOf("kg") }
-    var note by remember { mutableStateOf("") }
+    var displayedMonth by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
+    var importPhotoDay by rememberSaveable { mutableStateOf<Long?>(null) }
+    var rangeMonths by rememberSaveable { mutableIntStateOf(1) }
+    var customRange by rememberSaveable { mutableStateOf(false) }
+    var customStart by rememberSaveable { mutableLongStateOf(today.minusMonths(1).toEpochDay()) }
+    var customEnd by rememberSaveable { mutableLongStateOf(today.toEpochDay()) }
+    var rangeDialog by remember { mutableStateOf(false) }
+    val dateRange = if (customRange) {
+        progressDateRange(LocalDate.ofEpochDay(customStart), LocalDate.ofEpochDay(customEnd), zone)
+    } else progressDateRange(rangeMonths, today, zone)
     var message by remember { mutableStateOf("") }
-    val directory = File(context.filesDir, "progress-photos")
-    val notesDirectory = File(context.filesDir, "body-notes")
+    var pounds by remember(preferences) { mutableStateOf(preferences.getBoolean("lb", false)) }
+    DisposableEffect(preferences) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "lb" || key == null) pounds = prefs.getBoolean("lb", false)
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    val displayUnit = if (pounds) BodyweightUnit.POUNDS else BodyweightUnit.KILOGRAMS
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        val targetDay = importPhotoDay ?: selectedDay
+        val targetDay = importPhotoDay
         importPhotoDay = null
         if (uri != null) scope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    directory.mkdirs()
-                    val start = LocalDate.ofEpochDay(targetDay).atTime(8, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                    val timestamp = start + System.currentTimeMillis() % (12 * 60 * 60 * 1000)
-                    requireNotNull(context.contentResolver.openInputStream(uri)).use { input ->
-                        File(directory, "$timestamp.jpg").outputStream().use { input.copyTo(it) }
+                    requireNotNull(targetDay) { "Selected photo date was lost; choose the date and try again" }
+                    copyBodyPhoto(File(context.filesDir, "progress-photos"), LocalDate.ofEpochDay(targetDay), zone) {
+                        requireNotNull(context.contentResolver.openInputStream(uri)) { "Could not open selected photo" }
                     }
                 }
                 message = "Photo added"
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                message = "Could not add photo: ${e.message}"
+                vm.error.value = "Could not add photo: ${e.message}"
             }
         }
     }
-    val bodyweights = rows.filter { it.metric.equals("Bodyweight", true) }.sortedBy { it.recordedAt }
-    val weightsByDay = bodyweights.groupBy {
-        Instant.ofEpochMilli(it.recordedAt).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay()
-    }.mapValues { (_, values) -> values.maxBy { it.recordedAt } }
+    val bodyweights = rows.orEmpty().filter { it.metric.equals("Bodyweight", true) }
+        .sortedWith(compareBy<BodyMeasurementEntity> { it.recordedAt }.thenBy { it.id })
+    val weightsByDay = remember(bodyweights, zone) {
+        bodyweights.groupBy { Instant.ofEpochMilli(it.recordedAt).atZone(zone).toLocalDate().toEpochDay() }
+            .mapValues { (_, values) -> values.last() }
+    }
+    val converted = remember(bodyweights, displayUnit) {
+        bodyweights.associate { row ->
+            row.id to try {
+                Result.success(convertBodyweight(row.value, BodyweightUnit.stored(row.unit), displayUnit))
+            } catch (e: IllegalArgumentException) {
+                Result.failure(e)
+            }
+        }
+    }
     val selectedMeasurement = weightsByDay[selectedDay]
+    val selectedValue = selectedMeasurement?.let { converted.getValue(it.id) }
+    val trendRows = bodyweights.filter { it.recordedAt in dateRange }
+    val trendError = trendRows.firstNotNullOfOrNull { converted.getValue(it.id).exceptionOrNull()?.message }
     val month = YearMonth.parse(displayedMonth)
-    val entryWeight = value.trim().toDoubleOrNull()
-    val entryWeightValid = value.isBlank() || entryWeight?.let { it.isFinite() && it > 0.0 } == true
-    fun saveBodyEntry(addPhoto: Boolean) {
-        val date = LocalDate.ofEpochDay(pendingPhotoDay)
-        val timestamp = date.atTime(12, 0).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val existingWeight = weightsByDay[pendingPhotoDay]
-        val noteFile = File(notesDirectory, "$pendingPhotoDay.txt")
-        if (entryWeight != null) {
-            vm.save(
-                existingWeight?.copy(
-                    recordedAt = timestamp,
-                    value = entryWeight,
-                    unit = unit.trim().ifBlank { "kg" },
-                    notes = note.trim(),
-                ) ?: BodyMeasurementEntity(
-                    newId(),
-                    timestamp,
-                    "Bodyweight",
-                    entryWeight,
-                    unit.trim().ifBlank { "kg" },
-                    note.trim(),
-                    false,
-                ),
-            )
-            if (noteFile.exists() && !noteFile.delete()) {
-                message = "Bodyweight saved, but an older standalone note could not be removed"
-            }
-        } else if (note.isNotBlank()) {
-            scope.launch {
-                try {
-                    withContext(Dispatchers.IO) {
-                        check(notesDirectory.exists() || notesDirectory.mkdirs()) { "Could not create body note storage" }
-                        noteFile.writeText(note.trim())
-                    }
-                    message = "Body entry saved"
-                } catch (e: Exception) {
-                    message = "Could not save note: ${e.message}"
-                }
-            }
-        }
-        addPhotoDialog = false
-        if (addPhoto) {
-            importPhotoDay = pendingPhotoDay
-            picker.launch(arrayOf("image/*"))
-        } else {
-            message = "Body entry saved"
-        }
+    val cells = remember(month) { habitMonthCells(month) }
+    fun dayValue(epochDay: Long): String {
+        val row = weightsByDay[epochDay] ?: return "No entry"
+        val result = converted.getValue(row.id)
+        return result.getOrNull()?.let { "${formatBodyweight(it)} ${displayUnit.symbol}" }
+            ?: "${row.value} ${row.unit}: ${result.exceptionOrNull()?.message}"
     }
     RegisterAppFabAction(
         owner = Destination.MEASUREMENTS,
-        destination = AppFabDestination.AddBodyEntry,
-        visible = !addPhotoDialog && !photoDatePicker,
+        destination = AppFabDestination.AddBodyPhoto,
+        visible = importPhotoDay == null && !rangeDialog,
     ) {
-        pendingPhotoDay = selectedDay
-        value = selectedMeasurement?.value?.toString().orEmpty()
-        unit = selectedMeasurement?.unit ?: "kg"
-        note = selectedMeasurement?.notes.orEmpty().ifBlank {
-            File(notesDirectory, "$selectedDay.txt").takeIf(File::isFile)?.readText().orEmpty()
-        }
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
-        addPhotoDialog = true
+        message = ""
+        importPhotoDay = selectedDay
+        try {
+            picker.launch(arrayOf("image/*"))
+        } catch (e: android.content.ActivityNotFoundException) {
+            importPhotoDay = null
+            vm.error.value = "Could not open photo picker: ${e.message}"
+        }
     }
-    ScreenList(
-        modifier = Modifier.semantics { contentDescription = "Body page" },
-    ) {
-        listOf("calendar", "trend").forEach { cardKey ->
-            when (cardKey) {
-                "trend" -> item {
-                    VibeCard {
-                        Text("Bodyweight trend", style = MaterialTheme.typography.titleLarge)
-                            if (bodyweights.isEmpty()) {
-                                Text("No bodyweight entries yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            } else {
-                                MiniChart(values = bodyweights.map { if (it.unit.equals("lb", true)) it.value / 2.2046226218 else it.value }, dates = bodyweights.map { it.recordedAt }, unit = "kg") { idx ->
-                                    val day = Instant.ofEpochMilli(bodyweights[idx].recordedAt).atZone(ZoneId.systemDefault()).toLocalDate()
-                                    selectedDay = day.toEpochDay(); displayedMonth = YearMonth.from(day).toString()
-                                }
+    HabitGlassDialogHost(constrainToContent = true) { backdrop, _ ->
+        ScreenList(modifier = backdrop.semantics { contentDescription = "Body page" }) {
+            item(key = "calendar") {
+                Column(
+                    Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark)
+                        .semantics { contentDescription = "Bodyweight calendar" },
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    HabitHeadingAndEntry(
+                        heading = { Text("Bodyweight", style = MaterialTheme.typography.titleLarge) },
+                    ) {
+                        if (rows == null) {
+                            Text("Loading bodyweight...", color = palette.textSecondary)
+                        } else key(selectedDay, displayUnit) {
+                            val inputDay = LocalDate.ofEpochDay(selectedDay)
+                            val loadedText = selectedValue?.getOrNull()?.let(::formatBodyweight)
+                                ?: selectedMeasurement?.value?.let(::formatBodyweight).orEmpty()
+                            var text by remember { mutableStateOf(loadedText) }
+                            var focused by remember { mutableStateOf(false) }
+                            LaunchedEffect(loadedText, selectedMeasurement, focused) {
+                                if (!focused) text = loadedText
                             }
-                    }
-                }
-                "calendar" -> item {
-                    VibeCard(modifier = Modifier.semantics { contentDescription = "Bodyweight calendar card" }) {
-                            Row(
-                                modifier = Modifier.semantics { contentDescription = "Bodyweight calendar heading" },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text("Calendar", style = MaterialTheme.typography.titleLarge)
-                            }
-                            Row(
-                                modifier = Modifier.semantics { contentDescription = "Bodyweight calendar month controls" },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                VibeActionButton("‹", { displayedMonth = month.minusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Previous month" }, importance = ActionImportance.COMPACT)
-                                Text(month.format(DateTimeFormatter.ofPattern("MMMM yyyy")), modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.titleMedium)
-                                VibeActionButton("›", { displayedMonth = month.plusMonths(1).toString() }, modifier = Modifier.semantics { contentDescription = "Next month" }, importance = ActionImportance.COMPACT)
-                            }
-                            BoxWithConstraints {
-                                val fontScale = LocalDensity.current.fontScale
-                                val cellHeight = if (fontScale >= 1.8f) 64.dp else 54.dp
-                                val rowSpacing = if (fontScale >= 1.8f) 6.dp else 5.dp
-                                val showMeasurementText = maxWidth / 7 >= 48.dp && fontScale < 1.8f
-                                val leading = month.atDay(1).dayOfWeek.value - 1
-                                val cellCount = ((leading + month.lengthOfMonth() + 6) / 7) * 7
-                                Column(verticalArrangement = Arrangement.spacedBy(rowSpacing)) {
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .semantics { contentDescription = "Bodyweight calendar weekday labels" },
+                            val error = selectedValue?.exceptionOrNull()?.message ?: bodyweightInputError(text)
+                            HabitTextField(
+                                label = displayUnit.symbol,
+                                value = text,
+                                onValueChange = { input ->
+                                    text = input
+                                    if (bodyweightInputError(input) == null &&
+                                        (input.isBlank() || selectedValue?.isFailure != true)
                                     ) {
-                                        listOf("M", "T", "W", "T", "F", "S", "S").forEach {
-                                            Text(it, Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                                        }
+                                        vm.setBodyweight(
+                                            inputDay, input.trim().toDoubleOrNull(), displayUnit, zone,
+                                        )
                                     }
-                                    repeat(cellCount / 7) { week ->
-                                        Row(
-                                            Modifier
-                                                .fillMaxWidth()
-                                                .semantics { contentDescription = "Bodyweight calendar week ${week + 1}" },
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                        ) {
-                                            repeat(7) { weekday ->
-                                                val dayNumber = week * 7 + weekday - leading + 1
-                                                if (dayNumber !in 1..month.lengthOfMonth()) {
-                                                    Spacer(Modifier.weight(1f).height(cellHeight))
-                                                } else {
-                                                    val date = month.atDay(dayNumber)
-                                                    val epochDay = date.toEpochDay()
-                                                    val measurement = weightsByDay[epochDay]
-                                                    val measurementDescription = measurement?.let {
-                                                        ", bodyweight ${formatBodyweight(it.value)} ${it.unit}"
-                                                    }.orEmpty()
-                                                    Surface(
-                                                        onClick = {
-                                                            selectedDay = epochDay
-                                                            displayedMonth = YearMonth.from(date).toString()
-                                                        },
-                                                        color = if (epochDay == selectedDay) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                                                        shape = MaterialTheme.shapes.small,
-                                                        modifier = Modifier
-                                                            .weight(1f)
-                                                            .height(cellHeight)
-                                                            .semantics {
-                                                                contentDescription = "${formatDisplayDate(date)}$measurementDescription"
-                                                            },
-                                                    ) {
-                                                        Column(
-                                                            Modifier.padding(5.dp),
-                                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                                        ) {
-                                                            Text(dayNumber.toString(), style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                                                            if (showMeasurementText) {
-                                                                measurement?.let {
-                                                                    Text(
-                                                                        formatBodyweight(it.value),
-                                                                        style = MaterialTheme.typography.labelSmall,
-                                                                        maxLines = 1,
-                                                                    )
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                                },
+                                modifier = Modifier.onFocusChanged { focused = it.isFocused }
+                                    .semantics { contentDescription = "Bodyweight for selected date" },
+                                numeric = true,
+                                error = error,
+                                plain = true,
+                                textAlign = TextAlign.End,
+                            )
                         }
                     }
-                }
-        }
-        if (message.isNotBlank()) item { Text(message) }
-    }
-    if (addPhotoDialog) {
-        AlertDialog(
-            onDismissRequest = { addPhotoDialog = false },
-            modifier = Modifier.semantics { contentDescription = "Add body entry dialog" },
-            title = { Text("Add body entry") },
-            text = {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text("Date", style = MaterialTheme.typography.titleMedium)
-                    OutlinedButton(
-                        onClick = {
-                            addPhotoDialog = false
-                            photoDatePicker = true
+                    Column(
+                        Modifier.pointerInput(month) {
+                            var drag = 0f
+                            detectHorizontalDragGestures(
+                                onDragStart = { drag = 0f },
+                                onHorizontalDrag = { change, amount -> change.consume(); drag += amount },
+                                onDragEnd = {
+                                    if (drag != 0f) displayedMonth = month.plusMonths(if (drag < 0f) -1 else 1).toString()
+                                }
+                            )
                         },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .semantics { contentDescription = "Choose body entry date" },
                     ) {
-                        Text(
-                            formatDisplayDate(LocalDate.ofEpochDay(pendingPhotoDay)),
+                        CalendarMonthHeader(month, null, null, "Bodyweight") {
+                            displayedMonth = month.plusMonths(it.toLong()).toString()
+                        }
+                        CalendarHeatmapGrid(
+                            cells, today, selectedDay,
+                            colorForDay = { shades.forLevel(if (weightsByDay.containsKey(it.toEpochDay())) 3 else 0) },
+                            descriptionForDay = { "${formatDisplayDate(it)}: ${dayValue(it.toEpochDay())}" },
+                            onDayClick = { selectedDay = it.toEpochDay() },
+                            allowFutureDates = true,
                         )
                     }
-                    EditField("Bodyweight (optional)", value) { value = it }
-                    EditField("Unit", unit) { unit = it }
-                    EditField("Notes (optional)", note) { note = it }
-                    Text("A selected photo is copied into private app storage and associated with this date.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    DateValueReadout(
+                        LocalDate.ofEpochDay(selectedDay), dayValue(selectedDay),
+                        modifier = Modifier.semantics { contentDescription = "Bodyweight selected entry" },
+                    )
                 }
-            },
-            confirmButton = {
+            }
+            item(key = "trend") {
                 Column(
-                    Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Button(
-                        onClick = {
-                            saveBodyEntry(addPhoto = true)
-                        },
-                        enabled = entryWeightValid,
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Add photo${if (entryWeight != null || note.isNotBlank()) " and save" else ""}") }
-                    Button(
-                        onClick = { saveBodyEntry(addPhoto = false) },
-                        enabled = entryWeightValid && (entryWeight != null || note.isNotBlank()),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Save without photo") }
-                    TextButton(
-                        onClick = { addPhotoDialog = false },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    ) { Text("Cancel") }
-                }
-            },
-        )
-    }
-    if (photoDatePicker) {
-        val datePickerState = rememberDatePickerState(
-            initialSelectedDateMillis = pendingPhotoDay * 86_400_000L,
-        )
-        DatePickerDialog(
-            onDismissRequest = {
-                photoDatePicker = false
-                addPhotoDialog = true
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        datePickerState.selectedDateMillis?.let {
-                            val chosenDay = Math.floorDiv(it, 86_400_000L)
-                            pendingPhotoDay = chosenDay
-                            val existing = weightsByDay[chosenDay]
-                            value = existing?.value?.toString().orEmpty()
-                            unit = existing?.unit ?: "kg"
-                            note = existing?.notes.orEmpty().ifBlank {
-                                File(notesDirectory, "$chosenDay.txt").takeIf(File::isFile)?.readText().orEmpty()
-                            }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Bodyweight trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        ProgressRangeSelector(
+                            rangeMonths, customRange, onCustom = { rangeDialog = true },
+                            description = "Bodyweight date range",
+                        ) {
+                            rangeMonths = it
+                            customRange = false
                         }
-                        photoDatePicker = false
-                        addPhotoDialog = true
-                    },
-                ) { Text("Use date") }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        photoDatePicker = false
-                        addPhotoDialog = true
-                    },
-                ) { Text("Cancel") }
-            },
-        ) {
-            DatePicker(
-                state = datePickerState,
-                title = { Text("Select body entry date", Modifier.padding(start = 24.dp, top = 16.dp)) },
-            )
+                    }
+                    VibeGraph(
+                        values = if (trendError == null) trendRows.map { converted.getValue(it.id).getOrThrow() } else emptyList(),
+                        dates = if (trendError == null) trendRows.map { it.recordedAt } else emptyList(),
+                        unit = displayUnit.symbol,
+                        dateRange = dateRange,
+                        readoutBelow = true,
+                        edgeToEdge = true,
+                        compactLayout = true,
+                        plotHeight = 200.dp,
+                        valueFormatter = ::formatBodyweight,
+                        graphState = when {
+                            rows == null -> VibeGraphState.Loading
+                            trendError != null -> VibeGraphState.Error(trendError)
+                            trendRows.isEmpty() -> VibeGraphState.Empty("No bodyweight entries in this date range.")
+                            else -> VibeGraphState.Data
+                        },
+                        onSelect = { index ->
+                            val day = Instant.ofEpochMilli(trendRows[index].recordedAt).atZone(zone).toLocalDate()
+                            selectedDay = day.toEpochDay()
+                            displayedMonth = YearMonth.from(day).toString()
+                        },
+                    )
+                }
+            }
+            if (message.isNotBlank()) item { Text(message) }
         }
+        if (rangeDialog) ProgressCustomRangeDialog(
+            start = if (customRange) LocalDate.ofEpochDay(customStart) else today.minusMonths(rangeMonths.toLong()),
+            end = if (customRange) LocalDate.ofEpochDay(customEnd) else today,
+            onDismiss = { rangeDialog = false },
+        ) { start, end ->
+            customStart = start.toEpochDay()
+            customEnd = end.toEpochDay()
+            customRange = true
+            rangeDialog = false
+        }
+    }
+}
+
+@Synchronized
+internal fun copyBodyPhoto(
+    directory: File,
+    day: LocalDate,
+    zone: ZoneId,
+    openInput: () -> InputStream,
+): File {
+    check(directory.isDirectory || directory.mkdirs()) { "Could not create photo storage" }
+    val pending = File.createTempFile("photo-", ".tmp", directory)
+    try {
+        openInput().use { input -> pending.outputStream().use { input.copyTo(it) } }
+        val start = day.atTime(8, 0).atZone(zone).toInstant().toEpochMilli()
+        var timestamp = start + Math.floorMod(System.currentTimeMillis(), 12 * 60 * 60 * 1000L)
+        var destination = File(directory, "$timestamp.jpg")
+        while (destination.exists()) destination = File(directory, "${++timestamp}.jpg")
+        check(pending.renameTo(destination)) { "Could not finish saving photo" }
+        return destination
+    } catch (e: Exception) {
+        if (pending.exists() && !pending.delete()) e.addSuppressed(IllegalStateException("Could not remove incomplete photo"))
+        throw e
     }
 }
 

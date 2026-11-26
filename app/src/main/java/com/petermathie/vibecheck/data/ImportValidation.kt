@@ -13,7 +13,7 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
     data class Column(val name: String, val type: String, val required: Boolean, val key: Boolean)
-    private val booleanFields = setOf("isCustom", "isArchived", "isSeeded", "isDemo", "booleanValue", "targetMet")
+    private val booleanFields = setOf("isCustom", "isArchived", "isSeeded", "isDemo", "booleanValue", "targetMet", "isWeightCleared")
     private val nonNegative = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "widthCentimetresSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "reps", "leftReps", "rightReps", "legacyReps", "legacyLeftReps", "legacyRightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "weightKg", "addedWeightKg", "assistanceKg", "startedAt", "finishedAt", "loggedAt", "updatedAt", "recordedAt")
     private val intFields = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "legacyReps", "legacyLeftReps", "legacyRightReps", "version")
     private val boundedQuantitative = setOf("reps", "leftReps", "rightReps", "weightKg", "addedWeightKg", "assistanceKg", "romValue")
@@ -69,6 +69,11 @@ internal object ImportValidation {
         oneOf("heatmapMode", setOf("RELATIVE", "GOAL"))
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
+        if (table == "body_measurements") {
+            require(row.getInt("isWeightCleared") == 0 || row.getString("metric").equals("Bodyweight", ignoreCase = true)) {
+                "Only bodyweight measurements can have a cleared weight"
+            }
+        }
         if (table == "bands") {
             require(row.getString("name").isNotBlank()) { "Band name cannot be blank" }
             require(row.getDouble("widthCentimetres") > 0) { "Band width must be positive" }

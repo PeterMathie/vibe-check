@@ -6,6 +6,12 @@ import com.petermathie.vibecheck.domain.tracker.encodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoiceSnapshot
 
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE body_measurements ADD COLUMN isWeightCleared INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 val MIGRATION_16_17 = object : Migration(16, 17) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE trackers ADD COLUMN heatmapFieldId TEXT")

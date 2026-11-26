@@ -102,12 +102,12 @@ class NavigationUiTest {
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("Body").assertIsDisplayed()
         compose.onNodeWithText("Body").performClick()
-        compose.onNodeWithContentDescription("Add body entry").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Add photo").assertIsDisplayed()
         compose.onNodeWithText("More").assertIsDisplayed()
         compose.onNodeWithText("More").performClick()
         compose.onNodeWithText("Exercises").performClick()
         compose.onNodeWithContentDescription("Add custom exercise").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Add body entry").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Add photo").assertDoesNotExist()
     }
 
     @Test

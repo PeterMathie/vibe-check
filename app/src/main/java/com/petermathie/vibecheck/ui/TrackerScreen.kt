@@ -94,7 +94,7 @@ internal fun Modifier.habitGlow(
 }
 
 @Composable
-private fun HabitHeadingAndEntry(
+internal fun HabitHeadingAndEntry(
     heading: @Composable () -> Unit,
     entry: @Composable () -> Unit,
 ) {

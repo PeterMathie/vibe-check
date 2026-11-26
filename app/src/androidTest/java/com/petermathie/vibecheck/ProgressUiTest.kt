@@ -64,7 +64,10 @@ class ProgressUiTest {
 
     private fun isolatedContext(): Context {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferenceName = "progress-presentation-fixture-${java.util.UUID.randomUUID()}"
+        val runId = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("bodyFixtureRunId")
+            ?: java.util.UUID.randomUUID().toString()
+        require(runId.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Invalid presentation fixture run ID" }
+        val preferenceName = "progress-presentation-fixture-$runId"
         fixturePreferenceName = preferenceName
         val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
         val directory = File(context.cacheDir, preferenceName)
@@ -113,7 +116,7 @@ class ProgressUiTest {
         compose.runOnIdle { showBody.value = true }
         compose.onNodeWithText("Bodyweight trend").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
-        compose.onNode(hasText("75 kg") and hasAnyAncestor(hasContentDescription("Graph readout"))).assertIsDisplayed()
+        compose.onNode(hasText("75.00 kg") and hasAnyAncestor(hasContentDescription("Graph readout"))).assertIsDisplayed()
         assertEquals(retained, runBlocking { database.editorDao().measurements().first().single() })
     }
 

@@ -18,6 +18,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_13_14
 import com.petermathie.vibecheck.data.local.MIGRATION_14_15
 import com.petermathie.vibecheck.data.local.MIGRATION_15_16
 import com.petermathie.vibecheck.data.local.MIGRATION_16_17
+import com.petermathie.vibecheck.data.local.MIGRATION_17_18
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -27,13 +28,36 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class VibeDatabaseMigrationTest {
-    private val databaseName = "migration-test"
+    private val databaseName = InstrumentationRegistry.getArguments().getString("bodyFixtureRunId")?.let {
+        require(it.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Invalid migration fixture run ID" }
+        "migration-test-$it"
+    } ?: "migration-test"
 
     @get:Rule
     val helper = MigrationTestHelper(
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate17To18RetainsBodyweightValuesUnitsAndLegacyNotes() {
+        helper.createDatabase(databaseName, 17).apply {
+            execSQL("INSERT INTO body_measurements (id,recordedAt,metric,value,unit,notes,isDemo) VALUES ('weight',123,'Bodyweight',176.369809744,'lb','Legacy note',0)")
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 18, true, MIGRATION_17_18).use { migrated ->
+            migrated.query("SELECT id,recordedAt,value,unit,notes,isDemo,isWeightCleared FROM body_measurements").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("weight", it.getString(0))
+                assertEquals(123L, it.getLong(1))
+                assertEquals(176.369809744, it.getDouble(2), 0.0)
+                assertEquals("lb", it.getString(3))
+                assertEquals("Legacy note", it.getString(4))
+                assertEquals(0, it.getInt(5))
+                assertEquals(0, it.getInt(6))
+            }
+        }
+    }
 
     @Test
     fun migrate16To17PreservesHabitConfigurationAndHistoricalValues() {

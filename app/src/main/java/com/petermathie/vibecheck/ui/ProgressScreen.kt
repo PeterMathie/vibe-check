@@ -339,11 +339,17 @@ private fun ExerciseProgressHeader(
 }
 
 @Composable
-private fun ProgressRangeSelector(months: Int, custom: Boolean, onCustom: () -> Unit, onChange: (Int) -> Unit) {
+internal fun ProgressRangeSelector(
+    months: Int,
+    custom: Boolean,
+    onCustom: () -> Unit,
+    description: String = "Progress date range",
+    onChange: (Int) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         TextButton(onClick = { expanded = true }, modifier = Modifier.semantics {
-            contentDescription = "Progress date range"
+            contentDescription = description
             stateDescription = if (custom) "Custom" else if (months == 12) "1 year" else if (months == 1) "1 month" else "$months months"
         }, contentPadding = PaddingValues(horizontal = 4.dp)) {
             Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = LocalVibePalette.current.textPrimary)

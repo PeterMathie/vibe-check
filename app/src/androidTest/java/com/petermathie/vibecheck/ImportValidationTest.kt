@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck
 
 import android.content.Context
+import android.content.ContextWrapper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,23 +19,74 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class ImportValidationTest {
     private lateinit var db: VibeDatabase
     private lateinit var exported: JSONObject
+    private var fixtureDirectory: File? = null
+    private var fixturePreferenceName: String? = null
 
     @Before fun setup() = runBlocking {
-        val context = ApplicationProvider.getApplicationContext<Context>()
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val runId = InstrumentationRegistry.getArguments().getString("bodyFixtureRunId")
+        val context = if (runId == null) application else {
+            require(runId.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Invalid import fixture run ID" }
+            val name = "import-fixture-$runId"
+            val directory = File(application.cacheDir, name)
+            fixtureDirectory = directory
+            fixturePreferenceName = name
+            val preferences = application.getSharedPreferences(name, 0)
+            object : ContextWrapper(application) {
+                override fun getFilesDir() = directory
+                override fun getSharedPreferences(name: String, mode: Int) = preferences
+            }
+        }
         db = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
         DatabaseSeeder(context, db).seedIfNeeded()
         exported = JSONObject(DataTransfer.export(db)).getJSONObject("tables")
     }
-    @After fun close() = db.close()
+    @After fun close() {
+        db.close()
+        fixturePreferenceName?.let {
+            assertTrue(ApplicationProvider.getApplicationContext<Context>().deleteSharedPreferences(it))
+        }
+        fixtureDirectory?.let { assertTrue(!it.exists() || it.deleteRecursively()) }
+    }
 
     private fun fixture(table: String): JSONObject = JSONObject(exported.getJSONArray(table).getJSONObject(0).toString())
     private fun rows(table: String, row: JSONObject): JSONObject = JSONObject().put(table, JSONArray().put(row))
     private fun document(tables: JSONObject): String = JSONObject().put("format", "vibe-trainer").put("version", 1).put("tables", tables).toString()
+
+    @Test
+    fun legacyBodyweightsDefaultToActiveAndClearedRowsRoundTripWithNotes() = runBlocking {
+        val legacy = JSONObject()
+            .put("id", "legacy-bodyweight").put("recordedAt", 123)
+            .put("metric", "Bodyweight").put("value", 176.369809744)
+            .put("unit", "lb").put("notes", "Legacy note").put("isDemo", 0)
+        DataTransfer.import(db, document(rows("body_measurements", legacy)))
+        val original = db.editorDao().measurements().first().single { it.id == "legacy-bodyweight" }
+        assertFalse(original.isWeightCleared)
+        db.editorDao().measurement(original.copy(isWeightCleared = true))
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertFalse(db.editorDao().measurements().first().any { it.id == original.id })
+        val retained = db.editorDao().bodyweightsForDay(0, 1000).single { it.id == original.id }
+        assertEquals(original.copy(isWeightCleared = true), retained)
+    }
+
+    @Test
+    fun invalidBodyweightClearFlagsRollBackRatherThanCoerceOrHideOtherMetrics() = runBlocking {
+        val row = JSONObject()
+            .put("id", "invalid-bodyweight").put("recordedAt", 123)
+            .put("metric", "Bodyweight").put("value", 80.0)
+            .put("unit", "kg").put("notes", "Keep").put("isDemo", 0)
+            .put("isWeightCleared", 2)
+        rejected(rows("body_measurements", row), "isWeightCleared")
+        row.put("isWeightCleared", true).put("metric", "Waist")
+        rejected(rows("body_measurements", row), "Only bodyweight")
+    }
 
     @Test
     fun vibeTrainerBackupIdentityRemainsImportCompatible() = runBlocking {

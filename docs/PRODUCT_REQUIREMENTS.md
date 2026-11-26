@@ -141,7 +141,7 @@ Finishing a valid strength or stretching session persists it before returning Ho
 - Progress contains training trends only; bodyweight remains on Body with its measurements, calendar, photos and history unchanged.
 - Training sections reuse Home/Habits' borderless presentation, subtle dividers and restrained palette glow. The left-aligned **Track progress of...** header and neutral white chevron open the picker; **Overall training trend** labels the graph itself. Choosing an exercise replaces the overview and names the tracked exercise in the header; the picker offers a return to the overview. Reordering handles and the generic Progress heading are removed.
 - The tracking header opens the complete non-archived exercise catalogue in the existing centred Habits glass dialog, with search and its thin draggable scrollbar. Progress dialogs stay inside the measured content viewport, clear of bottom navigation and screen edges. A small variation chevron appears only when variations exist. Small superscript-style information icons sit at the upper-right of the selected Points and RPE values, using the logger's existing icon treatment. Points retains its existing explanation; RPE opens the exact RPE/RIR reference dialog used by the workout logger, without new explanatory copy. The points explanation and custom range use the glass dialog and animated backdrop-blur host, leaving modal content sharp.
-- Progress graphs show one stationary readout below the plot: selected full date on the left, value and unit on the right. It initially selects the latest finite datum; taps, horizontal scrubbing and accessible previous/next actions update it. No duplicate today/latest values, interpretive trend labels or session-detail list is shown. Body retains its stationary above-plot readout.
+- Progress graphs show one stationary readout below the plot: selected full date on the left, value and unit on the right. It initially selects the latest finite datum; taps, horizontal scrubbing and accessible previous/next actions update it. No duplicate today/latest values, interpretive trend labels or session-detail list is shown. Body uses the same below-plot readout.
 - A compact range dropdown on the right of the trend-title row offers **1m**, **3m**, **6m**, **1y** and **Custom**, with full accessible labels and a default past-calendar-month range. **Custom** has separate Beginning/End rows, each opening a single-date glass subview with year selection and a quick month chooser. Subview Apply stages that date and returns to the range page; only the outer Apply commits both inclusive local dates. Cancel preserves the active range, and reversed ranges are visibly invalid. Presets replace the custom range. Sessions retain their actual temporal spacing; calendar-aligned date ticks adapt to the span, available width and text size. Full-history baselines and all-time PRs are calculated before range filtering.
 - Overall points retain the existing UTC weekly averages and a fixed date/value readout without an extra caption or reserved caption row. Tapping/scrubbing either an overall or exercise trend selects its local calendar day and synchronizes the calendar. The overview calendar sits below the graph, directly above the always-present **Workouts** heading and selected day's named completed-workout rows. The list defaults to today; an empty day leaves just its heading, without an empty-state sentence. A row opens a strictly read-only glass dialog with one compact date/time header, for example **17th Nov 2026, 10:50am - 11:50am**. Exercise headings and separators remain; each set is a unit-only row such as **45 kg · 5 reps · 7 RPE**, without set numbers or column headings. Its first value is left-aligned, middle value centred and last value right-aligned, with centred product dots between columns. Absent or zero resistance is omitted. Bands show only the logger's colour circles, with saved names retained for accessibility; widths and assistance are hidden here without deleting stored values or changing scoring. Unknown colour metadata is explicitly indicated. Sets are grouped by saved variation name in first-appearance order, with one heading per group and set order preserved within each group. Bilateral values, ROM and timing attempts remain represented; a hold and its total time share one expression such as **21 s / 33 s**. Notes use an inline bold **Notes:** prefix and wrap as needed. Every recorded set, including warm-ups and failures, and its separators remains. Missing finish times are not fabricated and cross-midnight sessions retain both dates. It never enters the editing logger or writes workout data.
 - Full displayed dates use **16th of October 2026** in English (localized day/month/year elsewhere). Workout detail headers and compact graph ticks use abbreviated months; calendar month headings remain month/year. Progress values show at most two decimal places, without unnecessary trailing zeros. Input precision, calculations and ISO date-entry/storage/import/export protocols are unchanged.
@@ -195,6 +195,45 @@ Creation and editing use the same complete, centred, margin-preserving glass mod
 Type and unit are editable only before a measurement's first save; saved values are read-only and identified by their locks, without explanatory copy or apparently editable boxes. The unit remains an optional string, with no new unit lifecycle or conversion. Names, goals and list choices remain editable. Only numbers show Unit (optional), with just the e.g. min placeholder, and Goal (optional), defaulting to None. Selecting a comparison reveals its labelled required value fields; selecting None clears the goal. None is a form state, not a persisted comparison. The enabled goal-shading switch has a clearly visible off thumb/outline in either theme. Toggling it adds no explanation or dialog height; the existing relative fallback without a usable goal is unchanged. Type changes preserve the pending name and type-specific drafts while hiding irrelevant controls. List measurements retain their shade-grouped choice editor, with occupied groups marked by clearly visible 8dp, 80%-opaque colour bands; empty groups retain their larger drop targets. Done returns to habit settings without persistence; Save commits the complete habit atomically. There is no second-measurement, measurement-reorder or heatmap-measurement-selection action. Threshold controls are removed, while legacy stored thresholds remain portable. The modal animates both growth and shrinkage, respects reduced motion, scrolls when constrained by the keyboard/viewport, and keeps actions reachable. A slim right-hand scrollbar remains visible whenever the modal content overflows, tracks its scroll position, and disappears when everything fits without shifting the content. Dirty exit uses an ordinary Save changes confirmation with Keep editing and Discard on the same horizontal action row; Save appears alongside them only for a complete draft. Incomplete exit does not show a red validation warning. Creation/configuration stays open on save error. Archiving remains a whole-habit action; a legacy archived measurement can be restored only when no active measurement exists.
 
 The modal scrollbar's thumb can be grabbed and dragged in either direction, with a wider invisible touch area and an accessible adjustable position. Its slim appearance, content width and ordinary content scrolling remain unchanged.
+
+## Body
+
+Body uses the shared Habits-style month calendar above a Progress-style bodyweight
+trend. Calendar and trend each reuse the subtle palette-accent section glow,
+fading to transparent at every edge without enclosing card fills.
+The compact top-right numeric field edits the selected local date, initially
+today. Selecting a day loads its latest weight or an empty field; finite positive
+numbers save as typed, while invalid input stays visible without overwriting the
+stored value. Month browsing alone does not change the write date. Earlier empty
+months and future dates remain selectable.
+
+Input, calendar values and the graph follow Settings' kg/lb preference with real
+conversion (80 kg is approximately 176.37 lb). There is no separate Body unit
+selector. Calendar/graph readouts and the unfocused weight input display at most
+two decimal places. An active edit keeps the typed precision; formatting or
+focusing a field never rounds the saved measurement. Switching units only changes
+presentation, not stored precision or historical rows. Actual edits preserve an
+existing row's storage unit; new rows
+store kg. Historical points are retained, converting mixed kg/lb source rows into
+the display unit. Unsupported legacy units surface a conversion error rather
+than being silently interpreted as kg.
+
+The Bodyweight trend reuses Progress' exact range dropdown: 1 month by default,
+3 months, 6 months, 1 year and Custom. Its shared glass custom-date dialog stages
+Beginning/End changes until the outer Apply, includes both local boundary dates,
+rejects reversed dates and preserves the active range on Cancel. Presets replace
+the custom range. Only the graph is filtered, with the same date axis and temporal
+spacing as Progress; calendar browsing, the selected input date and stored history
+are unchanged. Future weights remain editable through the calendar and can be
+shown by a custom range.
+
+Clearing the field clears all weights on that local date, so an older same-day
+entry cannot reappear. Rows are retained with a cleared-weight flag to preserve
+legacy notes and backup compatibility; other dates, metrics, photos, standalone
+notes and existing workout snapshots are unchanged. Body has no notes field,
+note-only entry or notes workflow. Its separate Add photo action copies a selected
+image into private app storage for the date captured when the picker opened;
+it does not save or clear weight. The old combined Add body entry dialog is removed.
 
 ## Data and platform
 

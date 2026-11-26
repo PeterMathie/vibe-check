@@ -157,7 +157,12 @@ interface EditorDao {
     @Upsert suspend fun field(row: TrackerFieldEntity)
     @Query("SELECT * FROM tracker_fields WHERE id = :id") suspend fun fieldById(id: String): TrackerFieldEntity?
     @Query("DELETE FROM tracker_daily_values WHERE fieldId = :id AND epochDay = :day") suspend fun clearValue(id: String, day: Long)
-    @Query("SELECT * FROM body_measurements ORDER BY recordedAt DESC") fun measurements(): Flow<List<BodyMeasurementEntity>>
+    @Query("SELECT * FROM body_measurements WHERE isWeightCleared = 0 OR LOWER(metric) != 'bodyweight' ORDER BY recordedAt DESC, id DESC")
+    fun measurements(): Flow<List<BodyMeasurementEntity>>
+    @Query("SELECT * FROM body_measurements WHERE LOWER(metric) = 'bodyweight' AND recordedAt >= :start AND recordedAt < :end ORDER BY isWeightCleared, recordedAt DESC, id DESC")
+    suspend fun bodyweightsForDay(start: Long, end: Long): List<BodyMeasurementEntity>
+    @Query("UPDATE body_measurements SET isWeightCleared = 1 WHERE LOWER(metric) = 'bodyweight' AND recordedAt >= :start AND recordedAt < :end")
+    suspend fun clearBodyweightsForDay(start: Long, end: Long)
     @Upsert suspend fun measurement(row: BodyMeasurementEntity)
     @Query("DELETE FROM body_measurements WHERE id = :id") suspend fun deleteMeasurement(id: String)
     @Query("DELETE FROM body_measurements WHERE isDemo = 1") suspend fun deleteDemoMeasurements(): Int

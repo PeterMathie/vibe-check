@@ -9,6 +9,7 @@ import org.junit.runner.Description
 
 class DeviceConfigurationRule(
     private val instrumentation: Instrumentation = InstrumentationRegistry.getInstrumentation(),
+    private val restoreAfterTest: Boolean = true,
 ) : TestWatcher() {
     private lateinit var baseline: DeviceConfiguration
 
@@ -18,7 +19,7 @@ class DeviceConfigurationRule(
 
     override fun finished(description: Description) {
         try {
-            restoreConfiguration(baseline)
+            if (restoreAfterTest) restoreConfiguration(baseline)
         } finally {
             assertEquals("Instrumentation test leaked global device configuration", baseline, readConfiguration())
         }
