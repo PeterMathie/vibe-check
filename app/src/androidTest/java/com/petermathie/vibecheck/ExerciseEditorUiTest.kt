@@ -14,6 +14,19 @@ import com.petermathie.vibecheck.domain.programme.ExerciseMeasurement
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import com.petermathie.vibecheck.ui.AppFabHostState
+import com.petermathie.vibecheck.ui.LocalAppFabHost
 import com.petermathie.vibecheck.ui.BandSettingsDialog
 import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.ExerciseEditor
@@ -88,24 +101,26 @@ class ExerciseEditorUiTest {
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Handstand"))
         assertTrue(compose.onAllNodesWithText("Primary", substring = true).fetchSemanticsNodes().isNotEmpty())
         assertTrue(compose.onAllNodesWithText("Secondary", substring = true).fetchSemanticsNodes().isNotEmpty())
-        compose.onNodeWithContentDescription("Edit Handstand").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Settings for Handstand").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Duplicate Handstand").assertIsDisplayed()
-        assertTrue(compose.onAllNodesWithText("Attach reference video").fetchSemanticsNodes().isNotEmpty())
-        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
-        compose.onNodeWithContentDescription("Bodyweight").assertIsSelected()
-        compose.onNodeWithContentDescription("Skill hold").assertIsSelected()
+        compose.onNodeWithText("Handstand").assertHasClickAction()
+        compose.onNodeWithContentDescription("Settings for Handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Duplicate Handstand").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Next variant for Handstand").performClick()
+        compose.onNodeWithText("Wall handstand").performTouchInput { doubleClick() }
+        compose.onNodeWithText("New variant").assertIsDisplayed()
+        compose.onNodeWithText("Modify measurements").performClick()
+        compose.onNodeWithContentDescription("Skill hold").performScrollTo().assertIsSelected()
         compose.onNodeWithText("Cancel").performClick()
-        compose.onNodeWithContentDescription("Settings for Freestanding handstand").performClick()
-        compose.onNodeWithContentDescription("Skill hold").assertIsSelected()
-        compose.onNodeWithText("Cancel").performClick()
+        compose.onNodeWithContentDescription("Next variant for Handstand").performClick()
+        compose.onNodeWithText("Freestanding handstand").performTouchInput { doubleClick() }
+        compose.onNodeWithText("Reference video").performClick()
+        compose.onNodeWithText("Attach reference video").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Close", substring = true).performClick()
 
-        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Stretch"))
-        compose.onNodeWithText("Stretch").performClick()
+        compose.onNode(hasScrollAction()).performScrollToNode(hasContentDescription("Stretch"))
+        compose.onNodeWithContentDescription("Stretch").performClick()
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Front split"))
-        compose.onNodeWithContentDescription("Edit Front split").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Settings for Front split").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Duplicate Front split").assertIsDisplayed()
+        compose.onNodeWithText("Front split").assertHasClickAction()
+        compose.onNodeWithContentDescription("Duplicate Front split").assertDoesNotExist()
     }
 
     @Test
@@ -128,7 +143,7 @@ class ExerciseEditorUiTest {
             }
         }
         compose.onNodeWithContentDescription("Bodyweight").performScrollTo().performClick()
-        compose.onNodeWithContentDescription("Range of motion").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("ROM (degrees)").performScrollTo().performClick()
         compose.onNodeWithText("Save").performClick()
         assertEquals(
             listOf(ExerciseMeasurement.RPE),
@@ -136,7 +151,7 @@ class ExerciseEditorUiTest {
         )
         compose.onNodeWithText("Reopen").performClick()
         compose.onNodeWithContentDescription("Bodyweight").assertIsSelected()
-        compose.onNodeWithContentDescription("Range of motion").performScrollTo().assertIsSelected()
+        compose.onNodeWithContentDescription("ROM (degrees)").performScrollTo().assertIsSelected()
     }
 
     @Test
@@ -148,15 +163,112 @@ class ExerciseEditorUiTest {
         val viewModel = lifecycle.own(EditorViewModel(database))
         compose.setContent { VibeCheckTheme { ExerciseEditor(viewModel) } }
         compose.onNode(hasScrollAction()).performScrollToNode(hasText("Handstand"))
-        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
-        compose.onNodeWithContentDescription("Range of motion").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Next variant for Handstand").performClick()
+        compose.onNodeWithText("Wall handstand").performTouchInput { doubleClick() }
+        compose.onNodeWithText("Modify measurements").performClick()
+        compose.onNodeWithContentDescription("ROM (degrees)").performScrollTo().performClick()
         compose.onNodeWithText("Save").performClick()
         compose.waitUntil(15_000) {
             runBlocking { ExerciseInputConfig.decode(database.editorDao().variationById("handstand-wall")!!.inputConfig, "SKILL_HOLD").loggingMeasurement() == MeasurementMetric.RANGE_OF_MOTION }
         }
         assertEquals(parentBefore, runBlocking { database.editorDao().exerciseById("core:handstand")!!.inputConfig })
-        compose.onNodeWithContentDescription("Settings for Wall handstand").performClick()
-        compose.onNodeWithContentDescription("Range of motion").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("Wall handstand").performTouchInput { doubleClick() }
+        compose.onNodeWithText("Modify measurements").performClick()
+        compose.onNodeWithContentDescription("ROM (degrees)").performScrollTo().assertIsSelected()
+    }
+
+    @Test
+    fun tileSurfaceDoubleTapCreatesIndependentDistanceSiblingWithoutCopyingExercise() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking { DatabaseSeeder(context, database).seedIfNeeded() }
+        val vm = lifecycle.own(EditorViewModel(database))
+        val exerciseCount = runBlocking { database.editorDao().exercises().first().size }
+        compose.setContent { VibeCheckTheme { ExerciseEditor(vm) } }
+        compose.onNode(hasScrollAction()).performScrollToNode(hasText("Handstand"))
+        compose.onNodeWithContentDescription("Next variant for Handstand").performClick()
+        compose.onNodeWithTag("Exercise tile core:handstand").performScrollTo()
+            .performTouchInput { doubleClick(Offset(center.x, height.toFloat() - 16f)) }
+        compose.onNodeWithText("New variant").performClick()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("Variant name").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Variant name").performTextInput("Independent reach")
+        compose.onNodeWithText("Tap muscle to cycle: none → primary → secondary").assertExists()
+        compose.onNodeWithContentDescription("Distance (cm)").performScrollTo().performClick()
+        compose.onNodeWithText("Create").performClick()
+        compose.waitUntil(15_000) { vm.variations.value.any { it.name == "Independent reach" } }
+        val created = vm.variations.value.single { it.name == "Independent reach" }
+        assertEquals("core:handstand", created.exerciseId)
+        assertEquals(MeasurementMetric.DISTANCE, ExerciseInputConfig.decode(created.inputConfig, created.trackingType).loggingMeasurement())
+        assertEquals(exerciseCount, runBlocking { database.editorDao().exercises().first().size })
+        assertTrue(vm.referenceVideos.value.none { it.variationId == created.id })
+        compose.onNodeWithText("Independent reach").assertHasClickAction()
+        compose.onNodeWithContentDescription("Duplicate Independent reach").assertDoesNotExist()
+    }
+
+    @Test
+    fun baseCreationSharesMetricEditorAndModalClearsAppTabs() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        runBlocking { DatabaseSeeder(context, database).seedIfNeeded() }
+        val vm = lifecycle.own(EditorViewModel(database))
+        val fab = AppFabHostState()
+        compose.setContent {
+            VibeCheckTheme {
+                CompositionLocalProvider(LocalAppFabHost provides fab) {
+                    Scaffold(bottomBar = {
+                        Box(Modifier.fillMaxWidth().height(72.dp).semantics { contentDescription = "Test app tabs" }) {
+                            Text("Tabs")
+                        }
+                    }) { padding ->
+                        Box(Modifier.fillMaxSize().padding(padding)) { ExerciseEditor(vm) }
+                    }
+                }
+            }
+        }
+        compose.waitUntil(15_000) { vm.exercises.value.isNotEmpty() && fab.action != null }
+        compose.onNodeWithContentDescription("Back to More").assertIsDisplayed()
+        val title = compose.onNodeWithText("Exercises").fetchSemanticsNode().boundsInRoot
+        val mode = compose.onNodeWithContentDescription("Strength").fetchSemanticsNode().boundsInRoot
+        assertEquals(title.center.y, mode.center.y, 1f)
+        val before = vm.exercises.value.size
+        compose.runOnIdle { fab.invoke(requireNotNull(fab.action)) }
+        val pane = compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "New exercise"),
+            useUnmergedTree = true).fetchSemanticsNode().layoutInfo.coordinates.boundsInWindow()
+        val tabs = compose.onNodeWithContentDescription("Test app tabs")
+            .fetchSemanticsNode().layoutInfo.coordinates.boundsInWindow()
+        assertTrue("Exercise modal leaves at least24dp above app tabs",
+            pane.bottom <= tabs.top - with(compose.density) { 24.dp.toPx() } + 1f)
+        compose.onNodeWithText("Name").performTextInput("New base")
+        val top = { label: String ->
+            compose.onNodeWithText(label).fetchSemanticsNode().layoutInfo.coordinates
+                .localToWindow(Offset.Zero).y
+        }
+        val musclesLabel = "Tap muscle to cycle: none → primary → secondary"
+        assertTrue(top("Name") < top("Resistance"))
+        assertTrue(top("Resistance") < top("Measurement"))
+        assertTrue(top("Measurement") < top(musclesLabel))
+        assertTrue(top(musclesLabel) < top("Aliases separated by commas"))
+        compose.onNodeWithText("Aliases separated by commas").performScrollTo().performTextInput("Base alias")
+        compose.onNodeWithText("Resistance").assertExists()
+        compose.onNodeWithContentDescription("Distance (cm)").performScrollTo().performClick()
+        val muscle = vm.muscles.value.first()
+        compose.onNodeWithText("${muscle.displayName}: none").performScrollTo().performClick()
+        compose.onNodeWithText("Create").performClick()
+        compose.waitUntil(15_000) {
+            vm.exercises.value.any { it.canonicalName == "New base" } &&
+                vm.aliases.value.any { it.alias == "Base alias" } &&
+                vm.mappings.value.any { it.muscleId == muscle.id && it.role == "PRIMARY" &&
+                    vm.exercises.value.any { exercise -> exercise.id == it.exerciseId && exercise.canonicalName == "New base" } }
+        }
+        val created = vm.exercises.value.single { it.canonicalName == "New base" }
+        assertEquals(before + 1, vm.exercises.value.size)
+        assertEquals(MeasurementMetric.DISTANCE,
+            ExerciseInputConfig.decode(created.inputConfig, created.trackingType).loggingMeasurement())
+        assertTrue(vm.aliases.value.any { it.exerciseId == created.id && it.alias == "Base alias" })
+        assertTrue(vm.variations.value.none { it.name == "New base" })
+        assertTrue(vm.mappings.value.any { it.exerciseId == created.id && it.muscleId == muscle.id && it.role == "PRIMARY" })
     }
 
     @Test

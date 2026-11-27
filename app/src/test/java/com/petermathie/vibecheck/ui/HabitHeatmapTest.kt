@@ -83,6 +83,15 @@ class HabitHeatmapTest {
     }
 
     @Test
+    fun historyWorkoutDateUsesShortMonthAndViewingDayWithoutChangingOtherDates() {
+        val time = Instant.parse("2026-11-03T00:30:00Z").toEpochMilli()
+        assertEquals("3rd Nov 2026", formatHistoryWorkoutDate(time, ZoneId.of("UTC"), Locale.UK))
+        assertEquals("2nd Nov 2026", formatHistoryWorkoutDate(time, ZoneId.of("America/Los_Angeles"), Locale.UK))
+        assertEquals("3rd of November 2026", formatDisplayDate(time, ZoneId.of("UTC"), Locale.UK))
+        assertEquals("3 nov. 2026", formatHistoryWorkoutDate(time, ZoneId.of("UTC"), Locale.FRENCH))
+    }
+
+    @Test
     fun orderedChoicesMapFromLightToDark() {
         val field = field(
             "CHOICE",

@@ -11,6 +11,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.awaitHorizontalDragOrCancellation
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
@@ -20,6 +26,8 @@ import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.*
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import androidx.compose.runtime.*
@@ -28,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -50,6 +60,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
@@ -75,9 +86,14 @@ import com.petermathie.vibecheck.domain.workout.*
 import java.time.Instant
 import java.time.ZoneId
 import java.time.Duration
+import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import org.json.JSONArray
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.window.DialogProperties
@@ -100,6 +116,7 @@ private data class SetScrollRequest(
 private fun WorkoutEntryDraftEntity.isEntirelyEmpty(): Boolean =
     !warmUp && !failed && listOf(
         performance, rpe, leftValue, rightValue, addedWeight, assistance, romValue,
+        distanceValue,
         timeHeld, timeUnderTension,
     ).all(String::isEmpty) && attemptsFor(this).all(String::isEmpty) && bandIds(bandIds).isEmpty()
 
@@ -163,7 +180,7 @@ private fun WorkoutTiming(workout: WorkoutEntity) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun WorkoutEditor(
     vm: EditorViewModel,
@@ -173,6 +190,7 @@ fun WorkoutEditor(
     onDoneEditing: () -> Unit = onChoose,
     showWorkoutTiming: Boolean = false,
     onDeleted: () -> Unit = onChoose,
+    historyContext: Boolean = false,
 ) {
     val workouts by vm.workouts.collectAsStateWithLifecycle()
     val loggingData by vm.workoutLoggingData.collectAsStateWithLifecycle()
@@ -212,6 +230,13 @@ fun WorkoutEditor(
     var add by remember { mutableStateOf(false) }
     var editDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var timeEndpoint by remember(workoutId) { mutableStateOf<Boolean?>(null) }
+    var timingSaving by remember(workoutId) { mutableStateOf(false) }
+    var timingError by remember(workoutId) { mutableStateOf<String?>(null) }
+    var returning by remember(workoutId) { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
     if (workout == null) {
         Button(
             onClick = onChoose,
@@ -251,6 +276,41 @@ fun WorkoutEditor(
     val observedDrafts = remember(workout.id) { mutableStateMapOf<String, List<WorkoutEntryDraftEntity>>() }
     val editedSetIds = remember(workout.id) { mutableSetOf<String>() }
     val persistedDraftIds = entryDrafts.mapTo(mutableSetOf()) { it.setId }
+    fun hasDraftError(draft: WorkoutEntryDraftEntity): Boolean {
+        val row = rows.find { it.id == draft.workoutExerciseId } ?: return false
+        val variation = loggingData?.variations?.find { it.id == draft.variationId }
+        val recorded = sets.find { it.id == draft.setId && it.variationId == draft.variationId }
+        val cached = decodeVariantDraftCache(draft.variantDraftCache)[variantDraftKey(draft.setId, draft.variationId)]
+            ?.let(::variantDraftMetadata)
+        val config = resolveSetInputConfig(
+            row, definitions.find { it.id == row.actualExerciseId }?.trackingType.orEmpty(),
+            variation, recorded, cached, null,
+        )
+        return WorkoutSetDraftLogic(config, recorded, variation, cached).inputError(draft) != null
+    }
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    fun returnFromHistory() {
+        if (returning || timingSaving || add || editDate || confirmDelete || timeEndpoint != null) return
+        if (imeVisible) {
+            focusManager.clearFocus()
+            keyboard?.hide()
+            return
+        }
+        if (observedDrafts.values.flatten().any { it.setId in editedSetIds && hasDraftError(it) } ||
+            entryDrafts.any { it.workoutExerciseId in rows.map { row -> row.id } && hasDraftError(it) }) {
+            vm.error.value = "Complete or correct the highlighted numbers before leaving History."
+            return
+        }
+        focusManager.clearFocus()
+        returning = true
+        vm.flushWorkoutWrites(
+            onSaved = { returning = false; onDoneEditing() },
+            onFailure = { returning = false; vm.error.value = it },
+            workoutId = workoutId,
+        )
+    }
+    BackHandler(historyContext) { returnFromHistory() }
+    val requestHistoryBack = { backDispatcher?.onBackPressed() ?: returnFromHistory() }
     LaunchedEffect(workout.id, loggingData, rows.map { it.id }) {
         if (!initialSelectionResolved && loggingData != null && rows.isNotEmpty()) {
             activeSet = firstUntickedWorkoutSet(rows, sets, entryDrafts, lockedSetIds)?.let { target ->
@@ -361,9 +421,31 @@ fun WorkoutEditor(
         }.join()
     }
     val palette = LocalVibePalette.current
-    HabitGlassDialogHost { backdrop, _ ->
-    CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
-    Box(Modifier.fillMaxSize().imePadding().then(backdrop)) {
+    HabitGlassDialogHost(constrainToContent = historyContext) { backdrop, _ ->
+    CompositionLocalProvider(
+        LocalReorderScrollContext provides reorderContext,
+        LocalWorkoutDisplayFractionDigits provides if (historyContext) 2 else null,
+    ) {
+    val historyGesture = if (!historyContext) Modifier else Modifier.pointerInput(backDispatcher) {
+        val edge = 24.dp.toPx()
+        val threshold = 80.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown()
+            if (down.position.x > edge) return@awaitEachGesture
+            var distance = 0f
+            var drag = awaitHorizontalTouchSlopOrCancellation(down.id) { change, over ->
+                if (over > 0) { distance = over; change.consume() }
+            } ?: return@awaitEachGesture
+            while (drag.pressed) {
+                val next = awaitHorizontalDragOrCancellation(drag.id) ?: return@awaitEachGesture
+                distance += next.positionChange().x
+                next.consume()
+                drag = next
+            }
+            if (distance >= threshold) requestHistoryBack()
+        }
+    }
+    Box(Modifier.fillMaxSize().imePadding().then(backdrop).then(historyGesture)) {
     LazyColumn(
         Modifier
             .fillMaxSize()
@@ -381,13 +463,35 @@ fun WorkoutEditor(
         state = listState,
     ) {
         item {
-            Text(workout.name, style = MaterialTheme.typography.headlineSmall)
-            if (showWorkoutTiming) WorkoutTiming(workout)
+            if (historyContext) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    VibeBackChevron(requestHistoryBack, "Back to history", enabled = !returning)
+                    Text(workout.name, Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
+                }
+                HistoryWorkoutTimes(
+                    workout, enabled = !returning && !timingSaving,
+                    onDate = { timingError = null; editDate = true },
+                ) {
+                    timingError = null
+                    timeEndpoint = it
+                }
+            } else Text(workout.name, style = MaterialTheme.typography.headlineSmall)
+            if (historyContext) {
+                val duration = workoutDurationText(workout.startedAt, workout.finishedAt, false, 0L)
+                Text(
+                    "Logged duration: $duration",
+                    style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Workout duration"
+                        stateDescription = duration
+                    },
+                )
+            } else if (showWorkoutTiming) WorkoutTiming(workout)
             else if (logged.isNotEmpty()) Text(
                 "Logged duration: ${((logged.maxOf { it.loggedAt } - logged.minOf { it.loggedAt }) / 60000)} min",
                 style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
             )
-            if(workout.status=="FINISHED") VibeActionButton("Change workout date", { editDate=true }, importance = ActionImportance.COMPACT)
+            if(workout.status=="FINISHED" && !historyContext) VibeActionButton("Change workout date", { editDate=true }, importance = ActionImportance.COMPACT)
         }
         rows.forEachIndexed { index, row ->
             val exercise = definitions.find { it.id == row.actualExerciseId }?.let { if(row.exerciseName.isNotBlank())it.copy(canonicalName=row.exerciseName,trackingType=row.trackingType) else it }
@@ -428,6 +532,7 @@ fun WorkoutEditor(
                                 exercise,
                                 sets.filter { it.workoutExerciseId == row.id },
                                 previous,
+                                historyContext = historyContext,
                                 variations = loggingData?.variations.orEmpty(),
                                 availableBands = loggingData?.bands.orEmpty(),
                                 recoveredDrafts = observedDrafts[row.id]
@@ -466,8 +571,8 @@ fun WorkoutEditor(
         }
         item {
             val workoutRowIds = rows.mapTo(mutableSetOf()) { it.id }
-            val canFinish = validEntryRows.values.none { !it } &&
-                entryDrafts.none { it.workoutExerciseId in workoutRowIds && hasInvalidQuantitativeInput(it) } &&
+            val canFinish =             rows.none { validEntryRows[it.id] == false } &&
+                entryDrafts.none { it.workoutExerciseId in workoutRowIds && hasDraftError(it) } &&
                 logged.any { set ->
                 set.result == "COMPLETED" && listOf(
                     set.reps,
@@ -477,6 +582,7 @@ fun WorkoutEditor(
                     set.leftHoldMillis?.toDouble(),
                     set.rightHoldMillis?.toDouble(),
                     set.romValue,
+                    set.distanceValue,
                 ).any { (it ?: 0.0) > 0.0 }
             }
             TextButton(
@@ -490,8 +596,11 @@ fun WorkoutEditor(
                 Text("Add exercise")
             }
             Button(
-                onClick = { if (workout.status == "FINISHED") onDoneEditing() else onFinish(workout.id) },
-                enabled = workout.status == "FINISHED" || canFinish,
+                onClick = {
+                    if (historyContext) requestHistoryBack()
+                    else if (workout.status == "FINISHED") onDoneEditing() else onFinish(workout.id)
+                },
+                enabled = !returning && (workout.status == "FINISHED" || canFinish),
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
             ) { Text(if (workout.status == "FINISHED") "Done editing" else "Finish workout") }
@@ -554,7 +663,42 @@ fun WorkoutEditor(
     }
     }
     }
-    if(editDate)NameDialog("Workout date (YYYY-MM-DD)",Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),{editDate=false}, glass = true) { value ->
+    if (editDate && historyContext) CalendarDateDialog(
+        "Workout date",
+        Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate(),
+        {
+            vm.cancelHistoryWorkoutDate(workout.id)
+            timingError = null
+            editDate = false
+        }, busy = timingSaving, error = timingError,
+    ) { date ->
+        timingSaving = true
+        vm.changeHistoryWorkoutDate(
+            workout.id, date,
+            onSaved = { timingSaving = false; editDate = false },
+            onFailure = { timingSaving = false; timingError = it },
+        )
+    }
+    if (historyContext && timeEndpoint != null) {
+        val start = checkNotNull(timeEndpoint)
+        val timestamp = if (start) workout.startedAt else workout.finishedAt
+        if (timestamp != null) HistoryClockDialog(
+            if (start) "Started" else "Finished", timestamp,
+            onDismiss = {
+                vm.cancelHistoryWorkoutTime(workout.id, start)
+                timingError = null
+                timeEndpoint = null
+            }, busy = timingSaving, error = timingError,
+        ) { time ->
+            timingSaving = true
+            vm.changeHistoryWorkoutTime(
+                workout.id, start, time,
+                onSaved = { timingSaving = false; timeEndpoint = null },
+                onFailure = { timingSaving = false; timingError = it },
+            )
+        }
+    }
+    if(editDate && !historyContext)NameDialog("Workout date (YYYY-MM-DD)",Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),{editDate=false}, glass = true) { value ->
         runCatching { java.time.LocalDate.parse(value) }.getOrNull()?.let { date ->
             val old=Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault())
             val end=date.atTime(old.toLocalTime()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -620,6 +764,7 @@ private fun WorkoutExerciseCard(
     exercise: ExerciseEntity?,
     sets: List<WorkoutSetEntity>,
     previous: List<WorkoutSetEntity>,
+    historyContext: Boolean,
     variations: List<ExerciseVariationEntity>,
     availableBands: List<BandEntity>,
     recoveredDrafts: List<WorkoutEntryDraftEntity>,
@@ -646,6 +791,7 @@ private fun WorkoutExerciseCard(
     val drafts = remember(row.id, row.actualExerciseId) { mutableStateMapOf<Int, WorkoutEntryDraftEntity>() }
     var variantDrafts by rememberSaveable(row.id) { mutableStateOf(mapOf<String, String>()) }
     val context = LocalContext.current
+    val displayDigits = LocalWorkoutDisplayFractionDigits.current
     val preferredWeightUnit = if (context.getSharedPreferences("settings", 0).getBoolean("lb", false)) "lb" else "kg"
     val exerciseVariations = variations.filter { it.exerciseId == row.actualExerciseId }.sortedBy { it.progressionRank }
     val defaultVariation = exerciseVariations.firstOrNull()
@@ -674,6 +820,9 @@ private fun WorkoutExerciseCard(
     val targetSets = row.configuredSetCount()
     LaunchedEffect(row.id, row.actualExerciseId) {
         val recovered = recoveredDrafts
+        variantDrafts = variantDrafts + recovered.flatMap {
+            decodeVariantDraftCache(it.variantDraftCache).entries.map { entry -> entry.key to entry.value }
+        }
         val restoredVariations = restoredWorkoutVariationIds(sets, recovered, exerciseVariations)
         val savedBands = vm.bandsForExercise(row.id)
         sets.forEach { set ->
@@ -687,7 +836,15 @@ private fun WorkoutExerciseCard(
             )
         }
         recovered.sortedBy { it.ordinal }.forEach { draft ->
-            if (draft.setId in persistedDraftIds) editedSetIds.add(draft.setId)
+            val recorded = sets.find { it.id == draft.setId }
+            val logic = WorkoutSetDraftLogic(
+                configFor(draft.variationId, draft.ordinal), recorded,
+                variationFor(draft.variationId), cachedVariant(draft.setId, draft.variationId), preferredWeightUnit,
+            )
+            if (draft.setId in persistedDraftIds && recoveredDraftNeedsSave(draft, recorded,
+                    savedBands.filter { it.setId == draft.setId }.sortedBy { it.ordinal }.map { it.bandId }, logic)) {
+                editedSetIds.add(draft.setId)
+            }
             drafts[draft.ordinal] = draft.copy(detailsOpen = false)
         }
         drafts.keys.sorted().forEach { ordinal ->
@@ -723,7 +880,12 @@ private fun WorkoutExerciseCard(
         onSetActivated(draft)
     }
     fun updateDraft(next: WorkoutEntryDraftEntity) {
-        val updated = next.copy(updatedAt = System.currentTimeMillis())
+        val updated = next.copy(
+            variantDraftCache = encodeVariantDraftCache(variantDrafts.filterKeys {
+                JSONArray(it).getString(0) == next.setId
+            }),
+            updatedAt = System.currentTimeMillis(),
+        )
         editedSetIds.add(updated.setId)
         activateSet(updated)
         drafts[updated.ordinal] = updated
@@ -735,6 +897,7 @@ private fun WorkoutExerciseCard(
             vm.submitEntryDraft(
                 parsed, bandIds(updated.bandIds),
                 inputConfigOverride = logic.snapshotConfig(),
+                entryDraft = updated,
             ) {}
         }
     }
@@ -789,7 +952,7 @@ private fun WorkoutExerciseCard(
             val previousSummary = previousSet?.let {
                 previousSetSummary(it, inputConfig, preferredWeightUnit,
                     recordedBands.filter { band -> band.setId == it.id }.sortedBy { band -> band.ordinal },
-                    availableBands)
+                    availableBands, maximumFractionDigits = displayDigits)
             }
             val palette = LocalVibePalette.current
             val fill = when {
@@ -873,6 +1036,7 @@ private fun WorkoutExerciseCard(
                 }
                 WorkoutSetTile(
                     identity = identity,
+                    dotSeparators = historyContext,
                     showResistance = resistanceMetric != null && resistanceMetric != ResistanceMetric.BODYWEIGHT,
                     minimumMeasurementWidth = measurementMinimumWidth(measurementMetric),
                     resistanceLayout = SetGroupLayout(large = resistanceMetric == ResistanceMetric.BANDS),
@@ -955,6 +1119,7 @@ private fun WorkoutExerciseCard(
                                             vm.submitEntryDraft(
                                                 set, bandIds(draft.bandIds),
                                                 inputConfigOverride = snapshotConfig(draft),
+                                                entryDraft = draft,
                                                 onSaved = ::complete,
                                             ).join()
                                         } finally {
@@ -1227,6 +1392,8 @@ internal fun QuantitativeTextField(
     }
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val displayDigits = LocalWorkoutDisplayFractionDigits.current
+    val displayedValue = if (focused || displayDigits == null) value else quantitativeDisplayText(value, displayDigits)
     val palette = LocalVibePalette.current
     val fill = metricFieldFill(focused)
     val outline = when {
@@ -1240,9 +1407,11 @@ internal fun QuantitativeTextField(
         value = value,
         onValueChange = onValueChange,
         enabled = enabled,
+        visualTransformation = if (focused || displayDigits == null) VisualTransformation.None
+            else HistoryNumberTransformation(displayDigits),
         textStyle = metricNumberStyle(compactText).copy(
             color = if (secondary) palette.textPrimary.copy(alpha = 0.95f) else palette.textPrimary,
-            textAlign = TextAlign.Center,
+            textAlign = TextAlign.Start,
         ),
         interactionSource = interaction,
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -1255,7 +1424,7 @@ internal fun QuantitativeTextField(
         },
         decorationBox = { inner ->
             MetricValueContent(
-                value = value, label = label, unit = unit, compact = compact,
+                value = displayedValue, label = label, unit = unit, compact = compact,
                 compactText = compactText,
                 minimumHeight = minimumHeight, editable = true,
                 trailing = trailingIcon,
@@ -1282,38 +1451,118 @@ internal fun QuantitativeTextField(
     }
 }
 
-fun setDescription(s: WorkoutSetEntity, includeTimingAttempts: Boolean = true, labelTimingTotal: Boolean = false): String {
+internal class HistoryNumberTransformation(private val digits: Int) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val shown = AnnotatedString(quantitativeDisplayText(text.text, digits))
+        if (shown == text) return TransformedText(text, OffsetMapping.Identity)
+        return TransformedText(shown, object : OffsetMapping {
+            override fun originalToTransformed(offset: Int) =
+                if (offset == text.length) shown.length else offset.coerceIn(0, shown.length)
+            override fun transformedToOriginal(offset: Int) =
+                if (offset == shown.length) text.length else offset.coerceIn(0, text.length)
+        })
+    }
+}
+
+internal fun quantitativeDisplayText(value: String, digits: Int): String {
+    if (value.endsWith('.') || value.endsWith(',')) return value
+    return value.replace(',', '.').toDoubleOrNull()?.takeIf(Double::isFinite)
+        ?.let { formatQuantitative(it, digits) } ?: value
+}
+
+fun setDescription(
+    s: WorkoutSetEntity,
+    includeTimingAttempts: Boolean = true,
+    labelTimingTotal: Boolean = false,
+    maximumFractionDigits: Int? = null,
+): String {
+    fun number(value: Double) = formatQuantitative(value, maximumFractionDigits)
+    fun legacyNumber(value: Double) = if (maximumFractionDigits == null) value.toString() else number(value)
     val config = ExerciseInputConfig.decode(s.variationInputConfigSnapshot, s.variationTrackingTypeSnapshot)
     if ("measurementMetric=" in s.variationInputConfigSnapshot) {
         val primary = when (config.measurementMetric) {
-            MeasurementMetric.REPETITIONS -> "${s.reps?.let(::formatQuantitative) ?: "—"} reps"
-            MeasurementMetric.RANGE_OF_MOTION -> "${s.romValue?.let(::formatQuantitative) ?: "—"} ${if (s.romUnit == "degrees") "°" else s.romUnit.orEmpty()}"
+            MeasurementMetric.REPETITIONS -> "${s.reps?.let(::number) ?: "—"} reps"
+            MeasurementMetric.RANGE_OF_MOTION -> "${s.romValue?.let(::number) ?: "—"} ${if (s.romUnit == "degrees") "°" else s.romUnit.orEmpty()}"
+            MeasurementMetric.DISTANCE -> "${s.distanceValue?.let(::number) ?: "—"} ${s.distanceUnit.orEmpty()}"
             MeasurementMetric.HOLD -> if (!config.timeHeld && config.timeUnderTension) {
-                "Total ${s.timeUnderTensionMillis?.let { formatQuantitative(it / 1000.0) } ?: "—"}s"
-            } else "${s.holdMillis?.let { formatQuantitative(it / 1000.0) } ?: "—"}s"
+                "Total ${s.timeUnderTensionMillis?.let { number(it / 1000.0) } ?: "—"}s"
+            } else "${s.holdMillis?.let { number(it / 1000.0) } ?: "—"}s"
             MeasurementMetric.SKILL_HOLD -> {
                 val attempts = timingMillis(s.tutEntriesMillis)
-                val held = "${s.holdMillis?.let { formatQuantitative(it / 1000.0) } ?: "—"}s"
+                val held = "${s.holdMillis?.let { number(it / 1000.0) } ?: "—"}s"
                 (if (includeTimingAttempts && attempts.size > 1) {
-                    attempts.joinToString(" + ") { "${formatQuantitative(it / 1000.0)}s" } + " = $held"
-                } else held) + (s.timeUnderTensionMillis?.let { " · Total ${formatQuantitative(it / 1000.0)}s" } ?: "")
+                    attempts.joinToString(" + ") { "${number(it / 1000.0)}s" } + " = $held"
+                } else held) + (s.timeUnderTensionMillis?.let { " · Total ${number(it / 1000.0)}s" } ?: "")
             }
             null -> error("A recorded metric configuration requires a measurement type")
         }
         return (if (config.loggingResistance() == ResistanceMetric.KILOGRAMS) {
-            if (config.addedWeight) s.addedWeightKg?.let { "+${formatQuantitative(it)} kg · " }.orEmpty()
-            else s.weightKg?.let { "${formatQuantitative(it)} kg × " }.orEmpty()
+            if (config.addedWeight) s.addedWeightKg?.let { "+${number(it)} kg · " }.orEmpty()
+            else s.weightKg?.let { "${number(it)} kg × " }.orEmpty()
         } else "") + primary + if (s.setType == "WARM_UP") " · warm-up" else ""
     }
     return when {
-    s.romValue != null -> "ROM ${s.romValue} ${s.romUnit.orEmpty()}"
-    s.leftReps != null || s.rightReps != null -> "L ${s.leftReps?.let(::formatQuantitative) ?: "0"} / R ${s.rightReps?.let(::formatQuantitative) ?: "0"} reps"
-    s.leftHoldMillis != null || s.rightHoldMillis != null -> "L ${(s.leftHoldMillis ?: 0)/1000.0} / R ${(s.rightHoldMillis ?: 0)/1000.0}s"
+    s.romValue != null -> "ROM ${legacyNumber(s.romValue)} ${s.romUnit.orEmpty()}"
+    s.distanceValue != null -> "Distance ${number(s.distanceValue)} ${s.distanceUnit.orEmpty()}"
+    s.leftReps != null || s.rightReps != null -> "L ${s.leftReps?.let(::number) ?: "0"} / R ${s.rightReps?.let(::number) ?: "0"} reps"
+    s.leftHoldMillis != null || s.rightHoldMillis != null -> "L ${legacyNumber((s.leftHoldMillis ?: 0)/1000.0)} / R ${legacyNumber((s.rightHoldMillis ?: 0)/1000.0)}s"
     includeTimingAttempts && timingMillis(s.tutEntriesMillis).size > 1 -> timingMillis(s.tutEntriesMillis)
-        .joinToString(" + ") { "${formatQuantitative(it / 1000.0)}s" } + " = ${formatQuantitative((s.holdMillis ?: 0) / 1000.0)}s"
-    s.holdMillis != null -> "${if (labelTimingTotal) "TUT " else ""}${formatQuantitative(s.holdMillis/1000.0)}s"
-    s.timeUnderTensionMillis != null -> "Total ${formatQuantitative(s.timeUnderTensionMillis/1000.0)}s"
-    else -> "${s.weightKg?.let { "${formatQuantitative(it)} kg × " }.orEmpty()}${s.reps?.let(::formatQuantitative) ?: "0"} reps"
-} + (if (s.holdMillis != null && s.timeUnderTensionMillis != null) " · Total ${formatQuantitative(s.timeUnderTensionMillis / 1000.0)}s" else "") +
-    (if (s.setType == "WARM_UP") " · warm-up" else "") + s.addedWeightKg?.let { " +${it}kg" }.orEmpty() + s.assistanceKg?.let { " −${it}kg" }.orEmpty()
+        .joinToString(" + ") { "${number(it / 1000.0)}s" } + " = ${number((s.holdMillis ?: 0) / 1000.0)}s"
+    s.holdMillis != null -> "${if (labelTimingTotal) "TUT " else ""}${number(s.holdMillis/1000.0)}s"
+    s.timeUnderTensionMillis != null -> "Total ${number(s.timeUnderTensionMillis/1000.0)}s"
+    else -> "${s.weightKg?.let { "${number(it)} kg × " }.orEmpty()}${s.reps?.let(::number) ?: "0"} reps"
+} + (if (s.holdMillis != null && s.timeUnderTensionMillis != null) " · Total ${number(s.timeUnderTensionMillis / 1000.0)}s" else "") +
+    (if (s.setType == "WARM_UP") " · warm-up" else "") + s.addedWeightKg?.let { " +${legacyNumber(it)}kg" }.orEmpty() + s.assistanceKg?.let { " −${legacyNumber(it)}kg" }.orEmpty()
+}
+
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun HistoryWorkoutTimes(workout: WorkoutEntity, enabled: Boolean, onDate: () -> Unit, onEdit: (Boolean) -> Unit) {
+    val context = LocalContext.current
+    val formatter = DateTimeFormatter.ofPattern(
+        if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "h:mm:ss a",
+        Locale.getDefault(),
+    ).withZone(ZoneId.systemDefault())
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        TextButton(
+            onClick = onDate, enabled = enabled, contentPadding = PaddingValues(horizontal = 0.dp),
+            modifier = Modifier.semantics { contentDescription = "Change workout date" },
+        ) { Text("${formatHistoryWorkoutDate(workout.finishedAt ?: workout.startedAt)},", maxLines = 1) }
+        listOf(true to workout.startedAt, false to workout.finishedAt).forEach { (start, timestamp) ->
+            if (!start) Text("–", Modifier.align(Alignment.CenterVertically))
+            TextButton(
+                onClick = { onEdit(start) }, enabled = enabled && timestamp != null,
+                contentPadding = PaddingValues(horizontal = 0.dp),
+                modifier = Modifier.semantics {
+                    contentDescription = if (start) "Change start time" else "Change finish time"
+                },
+            ) {
+                Text(timestamp?.let { formatter.format(Instant.ofEpochMilli(it)) } ?: "—", maxLines = 1)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HistoryClockDialog(
+    title: String, timestamp: Long, onDismiss: () -> Unit,
+    busy: Boolean, error: String?, onApply: (LocalTime) -> Unit,
+) {
+    val local = Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault())
+    val state = rememberTimePickerState(
+        initialHour = local.hour, initialMinute = local.minute,
+        is24Hour = android.text.format.DateFormat.is24HourFormat(LocalContext.current),
+    )
+    HabitGlassDialog(
+        title = title, onDismiss = { if (!busy) onDismiss() },
+        actions = {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+            TextButton(onClick = { onApply(LocalTime.of(state.hour, state.minute)) }, enabled = !busy) { Text("Apply") }
+        },
+    ) {
+        Text(formatDisplayDate(local.toLocalDate()))
+        TimeInput(state)
+        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
 }

@@ -1,6 +1,8 @@
 package com.petermathie.vibecheck.domain.progress
 
 import com.petermathie.vibecheck.data.local.*
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import java.time.Instant
 import java.time.ZoneId
 
@@ -35,7 +37,7 @@ object SessionProgress {
             val row = rows[set.workoutExerciseId] ?: return@mapNotNull null
             val workout = finished[row.workoutId] ?: return@mapNotNull null
             if (filter != null && (set.variationId ?: "default") != filter) return@mapNotNull null
-            if (!valid(set)) return@mapNotNull null
+            if (!valid(set, row.trackingType, row.inputConfig)) return@mapNotNull null
             val weight = set.weightKg?.takeIf { it.isFinite() && it > 0.0 } ?: return@mapNotNull null
             val reps = (set.reps ?: listOfNotNull(set.leftReps, set.rightReps).minOrNull())
                 ?.takeIf { it.isFinite() && it > 0.0 } ?: return@mapNotNull null
@@ -68,9 +70,22 @@ object SessionProgress {
         }
     }
 
-    fun valid(s: WorkoutSetEntity): Boolean = s.setType == "WORKING" && s.result == "COMPLETED" && s.romValue == null && ((s.reps ?: 0.0)>0.0 || (s.holdMillis ?: 0)>0 || (s.leftReps ?: 0.0)>0.0 || (s.rightReps ?: 0.0)>0.0 || (s.leftHoldMillis ?: 0)>0 || (s.rightHoldMillis ?: 0)>0)
-    fun score(s: WorkoutSetEntity, bodyweight: Double?, width: Double, trackingType: String? = null): Double? {
-        if(!valid(s)) return null
+    fun valid(s: WorkoutSetEntity, trackingType: String? = null, inputConfig: String = ""): Boolean {
+        val primary = ExerciseInputConfig.decode(
+            s.variationInputConfigSnapshot.ifBlank { inputConfig },
+            s.variationTrackingTypeSnapshot.ifBlank { trackingType.orEmpty() },
+        ).loggingMeasurement()
+        return s.setType == "WORKING" && s.result == "COMPLETED" &&
+            primary != MeasurementMetric.DISTANCE && primary != MeasurementMetric.RANGE_OF_MOTION &&
+            s.romValue == null && s.distanceValue == null &&
+            ((s.reps ?: 0.0)>0.0 || (s.holdMillis ?: 0)>0 || (s.leftReps ?: 0.0)>0.0 ||
+                (s.rightReps ?: 0.0)>0.0 || (s.leftHoldMillis ?: 0)>0 || (s.rightHoldMillis ?: 0)>0)
+    }
+    fun score(
+        s: WorkoutSetEntity, bodyweight: Double?, width: Double,
+        trackingType: String? = null, inputConfig: String = "",
+    ): Double? {
+        if(!valid(s, trackingType, inputConfig)) return null
         val reps = s.reps ?: listOfNotNull(s.leftReps,s.rightReps).minOrNull() ?: 0.0
         val hold = s.holdMillis ?: listOfNotNull(s.leftHoldMillis,s.rightHoldMillis).minOrNull()
         if(hold != null && hold>0) return ProgressScorer.assistedHold(hold,width)
@@ -90,7 +105,8 @@ object SessionProgress {
                 val used=links.filter { it.setId==s.id }
                 val width=used.sumOf { link -> link.widthCentimetresSnapshot.takeIf { it > 0 } ?: bands.find { it.id==link.bandId }?.widthCentimetres ?: 0.0 }
                 val names=used.map { link -> link.nameSnapshot.ifBlank { bands.find { it.id==link.bandId }?.name.orEmpty() } }
-                score(s,w.bodyweightKg,width,rows.find { it.id==s.workoutExerciseId }?.trackingType)?.let { ProgressPoint(w.finishedAt ?: w.startedAt,it,s,rows.find { it.id==s.workoutExerciseId }?.notes.orEmpty(),s.variationId,names,rank=s.variationRankSnapshot ?: variations.find { it.id==s.variationId }?.progressionRank ?: 0) }
+                val row = rows.first { it.id == s.workoutExerciseId }
+                score(s,w.bodyweightKg,width,row.trackingType,row.inputConfig)?.let { ProgressPoint(w.finishedAt ?: w.startedAt,it,s,row.notes,s.variationId,names,rank=s.variationRankSnapshot ?: variations.find { it.id==s.variationId }?.progressionRank ?: 0) }
             }.maxWithOrNull(compareBy<ProgressPoint> { it.rank }.thenBy { it.score })
         }
         val skillLevels=raw.mapNotNull { it.variation?.let { id -> id to it.rank } }.distinct().sortedBy { it.second }.map { it.first }
@@ -126,5 +142,10 @@ object SessionProgress {
     fun romSeries(sets: List<WorkoutSetEntity>): Map<String, List<WorkoutSetEntity>> =
         sets.filter { it.romValue != null }
             .groupBy { it.romUnit?.trim().orEmpty().ifBlank { "unspecified" } }
+            .mapValues { (_, values) -> values.sortedBy { it.loggedAt } }
+
+    fun distanceSeries(sets: List<WorkoutSetEntity>): Map<String, List<WorkoutSetEntity>> =
+        sets.filter { it.distanceValue != null }
+            .groupBy { it.distanceUnit?.trim().orEmpty().ifBlank { "unspecified" } }
             .mapValues { (_, values) -> values.sortedBy { it.loggedAt } }
 }

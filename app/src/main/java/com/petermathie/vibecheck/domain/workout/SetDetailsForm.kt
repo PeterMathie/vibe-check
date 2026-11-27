@@ -15,6 +15,8 @@ data class SetDetailsForm(
     val assistance: String,
     val romValue: String,
     val romUnit: String,
+    val distanceValue: String = "",
+    val distanceUnit: String = "cm",
 ) {
     fun applyTo(draft: WorkoutEntryDraftEntity): WorkoutEntryDraftEntity = draft.copy(
         performance = performance,
@@ -28,6 +30,8 @@ data class SetDetailsForm(
         assistance = assistance,
         romValue = romValue,
         romUnit = romUnit,
+        distanceValue = distanceValue,
+        distanceUnit = distanceUnit,
     )
 
     fun buildSet(
@@ -42,7 +46,7 @@ data class SetDetailsForm(
             return SetDetailsResult(error = "RPE must be 0–10")
         }
         val sideValues = listOf(leftValue, rightValue)
-        val numericValues = sideValues + listOf(addedWeight, assistance, romValue)
+        val numericValues = sideValues + listOf(addedWeight, assistance, romValue, distanceValue)
         if (numericValues.any { it.isNotBlank() && !quantitativeInput(it).isValid }) {
             return SetDetailsResult(error = "Use finite, non-negative numbers")
         }
@@ -61,6 +65,7 @@ data class SetDetailsForm(
         if (
             parsed == null &&
             quantitativeInput(romValue).value == null &&
+            quantitativeInput(distanceValue).value == null &&
             quantitativeInput(leftValue).value == null &&
             quantitativeInput(rightValue).value == null
         ) {
@@ -80,6 +85,8 @@ data class SetDetailsForm(
             assistanceKg = quantitativeInput(assistance).value,
             romValue = quantitativeInput(romValue).value,
             romUnit = romUnit,
+            distanceValue = quantitativeInput(distanceValue).value,
+            distanceUnit = distanceUnit,
             updatedAt = updatedAt,
         )
         if (failed) {
@@ -91,6 +98,7 @@ data class SetDetailsForm(
                 leftHoldMillis = 0,
                 rightHoldMillis = 0,
                 romValue = null,
+                distanceValue = null,
             )
         } else if (leftValue.isNotBlank() || rightValue.isNotBlank()) {
             saved = saved.copy(reps = null, holdMillis = null)
@@ -114,6 +122,8 @@ data class SetDetailsForm(
             assistance = draft.assistance,
             romValue = draft.romValue,
             romUnit = draft.romUnit,
+            distanceValue = draft.distanceValue,
+            distanceUnit = draft.distanceUnit,
         )
 
         fun from(set: WorkoutSetEntity, hold: Boolean, weighted: Boolean, pounds: Boolean) = SetDetailsForm(
@@ -132,6 +142,8 @@ data class SetDetailsForm(
             assistance = set.assistanceKg?.toString().orEmpty(),
             romValue = set.romValue?.toString().orEmpty(),
             romUnit = set.romUnit ?: "cm",
+            distanceValue = set.distanceValue?.toString().orEmpty(),
+            distanceUnit = set.distanceUnit ?: "cm",
         )
     }
 }

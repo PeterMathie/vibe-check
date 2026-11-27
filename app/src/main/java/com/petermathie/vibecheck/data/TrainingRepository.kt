@@ -26,12 +26,18 @@ import com.petermathie.vibecheck.domain.programme.prescriptionSummary
 import com.petermathie.vibecheck.domain.model.WorkoutSetLog
 import com.petermathie.vibecheck.domain.model.WorkoutStatus
 import com.petermathie.vibecheck.domain.recency.RecencyCalculator
-import com.petermathie.vibecheck.domain.workout.hasInvalidQuantitativeInput
+import com.petermathie.vibecheck.domain.workout.quantitativeInput
+import com.petermathie.vibecheck.domain.workout.timingInputs
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
+import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.clearedRecordedMeasurement
 import com.petermathie.vibecheck.domain.workout.configuredSetCount
 import com.petermathie.vibecheck.domain.workout.loggingMetricsError
 import com.petermathie.vibecheck.domain.workout.resolveSetInputConfig
 import com.petermathie.vibecheck.domain.workout.restoredWorkoutVariationIds
+import com.petermathie.vibecheck.domain.workout.VariantDraftMetadata
+import com.petermathie.vibecheck.data.local.WorkoutEntryDraftEntity
 import com.petermathie.vibecheck.data.seed.DemoProgressPhotos
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.time.Instant
@@ -46,6 +52,8 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class WorkoutCompletion(
     val mode: TrainingMode,
@@ -125,6 +133,7 @@ class TrainingRepository @Inject constructor(
                 notes = "",
                 bodyweightKg = null,
                 isDemo = false,
+                programmeNameSnapshot = requireNotNull(database.editorDao().programmeById(day.programmeId)).name,
             ),
         )
         exercises.forEach { row ->
@@ -185,9 +194,6 @@ class TrainingRepository @Inject constructor(
         val variations = dao.variations().first()
         dao.workoutExercisesForWorkout(workoutId).forEach { row ->
             val drafts = dao.entryDrafts(row.id)
-            require(drafts.none(::hasInvalidQuantitativeInput)) {
-                "Complete or correct the current workout's highlighted numbers before finishing."
-            }
             val sets = workoutDao.sets(row.id)
             val exerciseVariations = variations.filter { it.exerciseId == row.actualExerciseId }
             val restoredVariations = restoredWorkoutVariationIds(sets, drafts, exerciseVariations)
@@ -200,24 +206,68 @@ class TrainingRepository @Inject constructor(
             var previousVariationId: String? = null
             for (ordinal in 1..count) {
                 val set = sets.find { it.ordinal == ordinal }
+                val entryDraft = drafts.find { it.ordinal == ordinal }
                 val variationId = if (ordinal in restoredVariations) restoredVariations[ordinal]
                     else previousVariationId ?: exerciseVariations.firstOrNull()?.id
                 val config = resolveSetInputConfig(
                     row, trackingType,
                     exerciseVariations.find { it.id == variationId },
                     set?.takeIf { it.variationId == variationId },
-                    cached = null, configOverride = null,
+                    cached = entryDraft?.let(::draftMetadata), configOverride = null,
                 )
                 val error = config.loggingMetricsError()
                 require(error == null) { "Current workout: $error" }
+                entryDraft?.let { validateActiveDraft(it, config) }
                 previousVariationId = variationId
             }
         }
     }
 
-    suspend fun addSet(workoutExerciseId: String, draft: SetDraft) {
+    private fun validateActiveDraft(
+        draft: WorkoutEntryDraftEntity, config: ExerciseInputConfig,
+    ) {
+        val performance = if (config.loggingWeightUnit == null) listOf("", draft.performance)
+            else draft.performance.split(Regex("\\s*[x×]\\s*"), limit = 2)
+        val values = buildList {
+            if (config.loggingResistance() == ResistanceMetric.KILOGRAMS) {
+                add(if (config.addedWeight) draft.addedWeight else performance.getOrElse(0) { "" })
+            }
+            when (config.loggingMeasurement()) {
+                MeasurementMetric.REPETITIONS -> add(performance.getOrElse(1) { "" })
+                MeasurementMetric.RANGE_OF_MOTION -> add(draft.romValue)
+                MeasurementMetric.DISTANCE -> add(draft.distanceValue)
+                MeasurementMetric.HOLD -> if (!config.timeHeld && config.timeUnderTension) add(draft.timeUnderTension)
+                    else addAll(timingInputs(draft.tutEntries).ifEmpty { listOf(draft.timeHeld) })
+                MeasurementMetric.SKILL_HOLD -> {
+                    addAll(timingInputs(draft.tutEntries).ifEmpty { listOf(draft.timeHeld) })
+                    add(draft.timeUnderTension)
+                }
+                null -> Unit
+            }
+        }
+        require(values.none { it.isNotEmpty() && !quantitativeInput(it).isValid } &&
+            (draft.rpe.isEmpty() || quantitativeInput(draft.rpe, 10.0).isValid)) {
+            "Complete or correct the current workout's highlighted numbers before finishing."
+        }
+    }
+
+    private fun draftMetadata(draft: WorkoutEntryDraftEntity): VariantDraftMetadata? {
+        val cache = JSONObject(draft.variantDraftCache.ifBlank { "{}" })
+        val key = JSONArray().put(draft.setId).put(draft.variationId).toString()
+        if (!cache.has(key)) return null
+        val raw = cache.get(key)
+        val values = if (raw is JSONObject) raw else JSONObject(raw as String)
+        return object : VariantDraftMetadata {
+            override val inputConfig = values.getString("inputConfig")
+            override val variantName = values.getString("variantName")
+            override val trackingType = values.getString("trackingType")
+            override val rank = if (values.isNull("rank")) null else values.getInt("rank")
+        }
+    }
+
+    suspend fun addSet(workoutExerciseId: String, draft: SetDraft) = database.withTransaction {
         val now = System.currentTimeMillis()
-        workoutDao.insertSet(
+        database.editorDao().saveSetWithSnapshots(
             WorkoutSetEntity(
                 id = UUID.randomUUID().toString(),
                 workoutExerciseId = workoutExerciseId,
@@ -240,7 +290,10 @@ class TrainingRepository @Inject constructor(
                 notes = draft.notes,
                 loggedAt = now,
                 updatedAt = now,
+                distanceValue = draft.distanceValue,
+                distanceUnit = draft.distanceUnit,
             ),
+            emptyList(), consumeDraft = false,
         )
     }
 
@@ -251,13 +304,15 @@ class TrainingRepository @Inject constructor(
         val dao = database.editorDao()
         dao.workoutExercisesForWorkout(workoutId).forEach { row ->
             dao.entryDrafts(row.id).forEach draft@ { draft ->
-                val recorded = dao.setById(draft.setId) ?: return@draft
+                val recorded = dao.setById(draft.setId)
                 val config = resolveSetInputConfig(
                     row, dao.exerciseById(row.actualExerciseId)?.trackingType.orEmpty(),
                     draft.variationId?.let { dao.variationById(it) },
-                    recorded.takeIf { it.variationId == draft.variationId },
-                    cached = null, configOverride = null,
+                    recorded?.takeIf { it.variationId == draft.variationId },
+                    cached = draftMetadata(draft), configOverride = null,
                 )
+                validateActiveDraft(draft, config)
+                if (recorded == null) return@draft
                 require(config.clearedRecordedMeasurement(draft, recorded) == null) {
                     "Save or correct the cleared measurement before finishing."
                 }
@@ -268,7 +323,7 @@ class TrainingRepository @Inject constructor(
             ?: error("Workout $workoutId does not exist")
         val affectedMuscleIds = workoutDao.affectedMuscleIds(workoutId)
         if (workoutDao.finish(workoutId, System.currentTimeMillis()) != 1) return@withTransaction null
-        database.editorDao().deleteEntryDraftsForWorkout(workoutId)
+        database.editorDao().deleteUnrecordedEntryDraftsForWorkout(workoutId)
         WorkoutCompletion(mode, affectedMuscleIds)
     }
 
@@ -353,6 +408,8 @@ class TrainingRepository @Inject constructor(
                     notes = set.notes,
                     type = com.petermathie.vibecheck.domain.model.SetType.valueOf(set.setType),
                     result = com.petermathie.vibecheck.domain.model.SetResult.valueOf(set.result),
+                    distanceValue = set.distanceValue,
+                    distanceUnit = set.distanceUnit,
                 )
             }
 

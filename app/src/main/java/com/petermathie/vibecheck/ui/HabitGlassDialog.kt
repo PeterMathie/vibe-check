@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ExpandMore
@@ -171,9 +170,7 @@ internal fun HabitGlassDialog(
                         ) {
                             Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 onBack?.let { back ->
-                                    IconButton(onClick = back) {
-                                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back")
-                                    }
+                                    VibeBackChevron(back, "Back")
                                 }
                                 Text(title, Modifier.weight(1f), style = titleStyle)
                                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }

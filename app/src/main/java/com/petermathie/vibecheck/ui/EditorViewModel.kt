@@ -13,6 +13,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -20,7 +21,12 @@ import android.content.Context
 import android.net.Uri
 import java.io.File
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.ZoneId
+import com.petermathie.vibecheck.domain.workout.historyWorkoutDateChange
+import com.petermathie.vibecheck.domain.workout.historyWorkoutTimeChange
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.workout.loggingMetricsError
 
 fun newId(): String = UUID.randomUUID().toString()
 
@@ -41,6 +47,19 @@ internal data class HabitEditorData(
 
 internal data class ProgrammeEntryPrescriptionUpdate(val id: String, val sets: Int?, val restSeconds: Int)
 
+data class ExerciseVariantDefaults(
+    val exerciseId: String,
+    val sourceVariationId: String?,
+    val trackingType: String,
+    val inputConfig: String,
+    val muscleRoles: Map<String, String>,
+    val targetSets: Int?,
+    val targetRepsMin: Int?,
+    val targetRepsMax: Int?,
+    val targetRpe: Double?,
+    val restSeconds: Int,
+)
+
 @HiltViewModel
 class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewModel() {
     suspend fun exportJson() = com.petermathie.vibecheck.data.DataTransfer.export(db)
@@ -56,6 +75,7 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     val exercises = dao.exercises().live()
     val muscles = dao.muscles().live()
     val mappings = dao.mappings().live()
+    val variationMappings = dao.variationMappings().live()
     val aliases = dao.aliases().live()
     val variations = dao.variations().live()
     val referenceVideos = dao.referenceVideos().live()
@@ -83,19 +103,85 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
-    private fun write(onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}, block: suspend () -> Unit) =
+    private data class WorkoutWriteTarget(val operation: String, val id: String, val ordinal: Int? = null) {
+        val isHistoryTimingIntent: Boolean
+            get() = operation == "history-date" || operation == "history-start" || operation == "history-finish"
+    }
+    private data class WorkoutWriteFailure(val workoutId: String?, val message: String)
+    private val unresolvedWorkoutWrites = mutableMapOf<WorkoutWriteTarget, WorkoutWriteFailure>()
+    private val rejectedHistoryTimingIntents = mutableMapOf<WorkoutWriteTarget, String>()
+    private suspend fun workoutWriteOwner(
+        target: WorkoutWriteTarget, workoutId: String?, workoutExerciseId: String?,
+    ): String? {
+        if (workoutId != null) return workoutId
+        if (target.isHistoryTimingIntent || target.operation == "workout" ||
+            target.operation == "workout-date" || target.operation == "history-discard"
+        ) return target.id
+        val exerciseId = workoutExerciseId ?: when (target.operation) {
+            "exercise", "exercise-order", "draft", "set-count" -> target.id
+            else -> return null
+        }
+        return dao.workoutExerciseById(exerciseId)?.workoutId
+    }
+    private fun write(
+        onSuccess: () -> Unit = {}, onFailure: () -> Unit = {},
+        workoutTarget: WorkoutWriteTarget? = null,
+        ownerWorkoutId: String? = null, ownerWorkoutExerciseId: String? = null,
+        block: suspend () -> Unit,
+    ) =
         viewModelScope.launch {
             writes.withLock {
+                var workoutId = ownerWorkoutId
                 try {
+                    workoutTarget?.let {
+                        workoutId = workoutWriteOwner(it, ownerWorkoutId, ownerWorkoutExerciseId)
+                    }
                     block()
+                    workoutTarget?.let {
+                        if (it.isHistoryTimingIntent) rejectedHistoryTimingIntents.remove(it)
+                        else unresolvedWorkoutWrites.remove(it)
+                    }
                     onSuccess()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     error.value = e.message ?: "Could not save"
+                    workoutTarget?.let {
+                        val message = error.value ?: "Could not save"
+                        if (it.isHistoryTimingIntent) rejectedHistoryTimingIntents[it] = message
+                        else unresolvedWorkoutWrites[it] = WorkoutWriteFailure(
+                            workoutId ?: unresolvedWorkoutWrites[it]?.workoutId, message,
+                        )
+                    }
                     onFailure()
                 }
             }
+        }
+    private fun metadataWrite(
+        onSaved: () -> Unit, onFailure: (String) -> Unit,
+        workoutTarget: WorkoutWriteTarget? = null, block: suspend () -> Unit,
+    ) = write(onSaved, { onFailure(error.value ?: "Could not save") }, workoutTarget, block = block)
+    fun flushWorkoutWrites(onSaved: () -> Unit, onFailure: (String) -> Unit): Job =
+        flushWorkoutWrites(onSaved, onFailure, workoutId = null)
+    fun flushWorkoutWrites(
+        onSaved: () -> Unit, onFailure: (String) -> Unit, workoutId: String? = null,
+    ): Job =
+        viewModelScope.launch {
+            writes.withLock {
+                val failure = unresolvedWorkoutWrites.values
+                    .firstOrNull { workoutId == null || it.workoutId == null || it.workoutId == workoutId }?.message
+                    ?: rejectedHistoryTimingIntents.entries
+                        .firstOrNull { workoutId == null || it.key.id == workoutId }?.value
+                if (failure == null) onSaved() else onFailure(failure)
+            }
+        }
+    fun cancelHistoryWorkoutDate(workoutId: String): Job =
+        cancelHistoryTimingIntent(WorkoutWriteTarget("history-date", workoutId))
+    fun cancelHistoryWorkoutTime(workoutId: String, start: Boolean): Job =
+        cancelHistoryTimingIntent(WorkoutWriteTarget(if (start) "history-start" else "history-finish", workoutId))
+    private fun cancelHistoryTimingIntent(target: WorkoutWriteTarget): Job =
+        viewModelScope.launch {
+            writes.withLock { rejectedHistoryTimingIntents.remove(target) }
         }
     fun save(row: ProgrammeEntity) = write {
         require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid programme colour" }
@@ -164,7 +250,8 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             db.withTransaction { rows.forEachIndexed { i,e -> dao.entry(e.copy(position=i)) } }
         }
     }
-    fun moveWorkoutExercise(id: String, delta: Int, onFailure: () -> Unit = {}) = write(onFailure = onFailure) {
+    fun moveWorkoutExercise(id: String, delta: Int, onFailure: () -> Unit = {}) =
+        write(onFailure = onFailure, workoutTarget = WorkoutWriteTarget("exercise-order", id)) {
         db.withTransaction {
             val selected = requireNotNull(dao.workoutExerciseById(id)) { "Workout exercise no longer exists" }
             moveItem(dao.workoutExercisesForWorkout(selected.workoutId), id, delta) { it.id }?.let { rows ->
@@ -222,19 +309,60 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             }
         }
     }
-    fun save(row: WorkoutEntity) = write { dao.workout(row) }
-    fun changeWorkoutDate(row: WorkoutEntity, end: Long) = write {
-        val delta=end-(row.finishedAt ?: row.startedAt)
-        val ids=dao.workoutExercises().first().filter { it.workoutId==row.id }.map { it.id }.toSet()
-        val sets=dao.sets().first().filter { it.workoutExerciseId in ids }
+    fun save(row: WorkoutEntity) = write(workoutTarget = WorkoutWriteTarget("workout", row.id)) { dao.workout(row) }
+    fun changeWorkoutDate(row: WorkoutEntity, end: Long) = write(workoutTarget = WorkoutWriteTarget("workout-date", row.id)) {
         db.withTransaction {
-            dao.workout(row.copy(startedAt=row.startedAt+delta,finishedAt=end))
-            sets.forEach { dao.set(it.copy(loggedAt=it.loggedAt+delta,updatedAt=System.currentTimeMillis())) }
+            val current = requireNotNull(dao.workoutById(row.id)) { "Workout no longer exists" }
+            val delta = Math.subtractExact(end, current.finishedAt ?: current.startedAt)
+            val startedAt = Math.addExact(current.startedAt, delta)
+            require(startedAt >= 0 && end >= startedAt) { "Invalid workout date" }
+            val shiftedSets = dao.setsForWorkout(row.id).map { it.id to Math.addExact(it.loggedAt, delta) }
+            require(shiftedSets.all { it.second >= 0 }) { "Set time cannot be negative" }
+            require(dao.updateWorkoutTiming(row.id, startedAt, end) == 1) { "Workout no longer exists" }
+            shiftedSets.forEach { (id, timestamp) -> dao.updateSetLoggedAt(id, timestamp) }
         }
     }
-    fun save(row: WorkoutExerciseEntity) = write {
+    fun changeHistoryWorkoutDate(
+        workoutId: String, date: LocalDate, onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure, WorkoutWriteTarget("history-date", workoutId)) {
         db.withTransaction {
-            val definition=dao.exerciseById(row.actualExerciseId)
+            val current = historyWorkout(workoutId)
+            val change = historyWorkoutDateChange(current.startedAt, current.finishedAt, date, ZoneId.systemDefault())
+            val shiftedSets = dao.setsForWorkout(workoutId).map {
+                it.id to Math.addExact(it.loggedAt, change.setDelta)
+            }
+            require(shiftedSets.all { it.second >= 0 }) { "Set time cannot be negative" }
+            require(dao.updateWorkoutTiming(workoutId, change.startedAt, change.finishedAt) == 1) { "Workout no longer exists" }
+            shiftedSets.forEach { (id, timestamp) -> dao.updateSetLoggedAt(id, timestamp) }
+        }
+    }
+    fun changeHistoryWorkoutTime(
+        workoutId: String, start: Boolean, time: LocalTime, onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure, WorkoutWriteTarget(if (start) "history-start" else "history-finish", workoutId)) {
+        db.withTransaction {
+            val current = historyWorkout(workoutId)
+            val change = historyWorkoutTimeChange(current.startedAt, current.finishedAt, start, time, ZoneId.systemDefault())
+            require(dao.updateWorkoutTiming(workoutId, change.startedAt, change.finishedAt) == 1) { "Workout no longer exists" }
+        }
+    }
+    fun discardHistoryWorkout(
+        id: String, onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure, WorkoutWriteTarget("history-discard", id)) {
+        db.withTransaction {
+            historyWorkout(id)
+            require(dao.discardHistoryWorkout(id) == 1) { "Workout is no longer finished history" }
+        }
+    }
+    private suspend fun historyWorkout(id: String): WorkoutEntity {
+        val current = requireNotNull(dao.workoutById(id)) { "Workout no longer exists" }
+        require(current.status == "FINISHED") { "Only finished history workouts can be edited here" }
+        return current
+    }
+    fun save(row: WorkoutExerciseEntity) = write(
+        workoutTarget = WorkoutWriteTarget("exercise", row.id), ownerWorkoutId = row.workoutId,
+    ) {
+        db.withTransaction {
+            val definition=dao.effectiveExerciseById(row.actualExerciseId)
             val changed=row.exerciseName.isBlank()
             val current = dao.workoutExerciseById(row.id)
             dao.workoutExercise(
@@ -297,7 +425,136 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             }
         }
     }
-    fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }
+    fun save(row: ExerciseVariationEntity) = write {
+        db.withTransaction {
+            val current = dao.variationOriginalById(row.id)
+            requireNotNull(dao.exerciseById(row.exerciseId)) { "Exercise no longer exists" }
+            require(current == null || current.exerciseId == row.exerciseId) { "Variant ownership changed" }
+            if (current == null) {
+                require(!row.isSeeded) { "Cannot create a built-in variant" }
+                require(row.name.isNotBlank()) { "Variant name cannot be blank" }
+                dao.variation(row)
+                storeItemMuscles(row.exerciseId, row.id, dao.muscleMappings(row.exerciseId).associate { it.muscleId to it.role })
+            } else {
+                dao.variation(current.copy(inputConfig = row.inputConfig))
+                storeItemName(row.exerciseId, row.id, row.name)
+            }
+        }
+    }
+    fun renameExerciseItem(
+        exerciseId: String, variationId: String? = null, name: String,
+        onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
+        db.withTransaction { storeItemName(exerciseId, variationId, name) }
+    }
+    fun saveExerciseItemMuscles(
+        exerciseId: String, variationId: String? = null, muscleRoles: Map<String, String>,
+        onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
+        db.withTransaction { storeItemMuscles(exerciseId, variationId, muscleRoles) }
+    }
+    fun saveExerciseItemConfig(
+        exerciseId: String, variationId: String? = null, inputConfig: String,
+        onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
+        db.withTransaction {
+            validateItemOwner(exerciseId, variationId)
+            val exercise = requireNotNull(dao.exerciseById(exerciseId))
+            if (variationId == null) {
+                ExerciseInputConfig.decode(inputConfig, exercise.trackingType, exerciseId)
+                dao.exercise(exercise.copy(inputConfig = inputConfig))
+            } else {
+                val variation = requireNotNull(dao.variationOriginalById(variationId))
+                ExerciseInputConfig.decode(inputConfig, variation.trackingType, exerciseId)
+                dao.variation(variation.copy(inputConfig = inputConfig))
+            }
+        }
+    }
+    fun prepareExerciseVariant(
+        exerciseId: String, sourceVariationId: String? = null,
+        onReady: (ExerciseVariantDefaults) -> Unit, onFailure: (String) -> Unit = {},
+    ) = metadataWrite({}, onFailure) {
+        val defaults = db.withTransaction { variantDefaults(exerciseId, sourceVariationId) }
+        onReady(defaults)
+    }
+    fun createExerciseVariant(
+        exerciseId: String, sourceVariationId: String? = null, name: String,
+        defaults: ExerciseVariantDefaults? = null,
+        onCreated: (String) -> Unit, onFailure: (String) -> Unit = {},
+    ) = metadataWrite({}, onFailure) {
+        val id = db.withTransaction {
+            validateItemOwner(exerciseId, sourceVariationId)
+            require(name.isNotBlank()) { "Variant name cannot be blank" }
+            val selected = defaults ?: variantDefaults(exerciseId, sourceVariationId)
+            require(selected.exerciseId == exerciseId && selected.sourceVariationId == sourceVariationId) { "Variant source changed" }
+            val config = ExerciseInputConfig.decode(selected.inputConfig, selected.trackingType, exerciseId)
+            require(config.loggingMetricsError() == null) { config.loggingMetricsError().orEmpty() }
+            val rank = (dao.variations().first().filter { it.exerciseId == exerciseId }.maxOfOrNull { it.progressionRank } ?: -1) + 1
+            require(rank >= 0) { "Too many variants" }
+            val id = newId()
+            dao.variation(ExerciseVariationEntity(
+                id, exerciseId, name.trim(), rank, false, selected.trackingType, config.encode(),
+                selected.targetSets, selected.targetRepsMin, selected.targetRepsMax, selected.targetRpe, selected.restSeconds,
+            ))
+            storeItemMuscles(exerciseId, id, selected.muscleRoles)
+            id
+        }
+        onCreated(id)
+    }
+    private suspend fun validateItemOwner(exerciseId: String, variationId: String?) {
+        requireNotNull(dao.exerciseById(exerciseId)) { "Exercise no longer exists" }
+        if (variationId != null) {
+            require(dao.variationOriginalById(variationId)?.exerciseId == exerciseId) { "Variant no longer belongs to this exercise" }
+        }
+    }
+    private suspend fun storeItemName(exerciseId: String, variationId: String?, name: String) {
+        validateItemOwner(exerciseId, variationId)
+        require(name.isNotBlank()) { "Name cannot be blank" }
+        if (variationId == null) {
+            val current = dao.exerciseOverrideById(exerciseId) ?: ExerciseOverrideEntity(exerciseId)
+            dao.exerciseOverride(current.copy(name = name.trim()))
+        } else {
+            val current = dao.variationOverrideById(variationId) ?: VariationOverrideEntity(variationId)
+            dao.variationOverride(current.copy(name = name.trim()))
+        }
+    }
+    private suspend fun storeItemMuscles(exerciseId: String, variationId: String?, roles: Map<String, String>) {
+        validateItemOwner(exerciseId, variationId)
+        val known = dao.muscles().first().map { it.id }.toSet()
+        require(roles.keys.all { it in known }) { "Unknown muscle" }
+        require(roles.values.all { it in setOf("PRIMARY", "SECONDARY") }) { "Invalid muscle role" }
+        if (variationId == null) {
+            val current = dao.exerciseOverrideById(exerciseId) ?: ExerciseOverrideEntity(exerciseId)
+            dao.exerciseOverride(current.copy(musclesPresent = true))
+            dao.clearMuscleOverrides(exerciseId)
+            dao.muscleOverrides(roles.map { ExerciseMuscleOverrideEntity(exerciseId, it.key, it.value) })
+        } else {
+            val current = dao.variationOverrideById(variationId) ?: VariationOverrideEntity(variationId)
+            dao.variationOverride(current.copy(musclesPresent = true))
+            dao.clearVariationMuscles(variationId)
+            dao.variationMuscles(roles.map { VariationMuscleEntity(variationId, it.key, it.value) })
+        }
+    }
+    private suspend fun variantDefaults(exerciseId: String, variationId: String?): ExerciseVariantDefaults {
+        validateItemOwner(exerciseId, variationId)
+        val exercise = requireNotNull(dao.effectiveExerciseById(exerciseId))
+        val base = ExerciseInputConfig.decode(exercise.inputConfig, exercise.trackingType, exerciseId)
+        val variant = variationId?.let { requireNotNull(dao.variationById(it)) }
+        val config = variant?.let {
+            ExerciseInputConfig.decode(
+                it.inputConfig.ifBlank { exercise.inputConfig }, it.trackingType, exerciseId,
+                defaultManyTuts = base.manyTuts, defaultMeasurementOrder = base.measurementOrder,
+            )
+        } ?: base
+        val roles = if (variationId == null) dao.muscleMappings(exerciseId).associate { it.muscleId to it.role }
+            else dao.variationMuscleMappings(variationId).associate { it.muscleId to it.role }
+        return ExerciseVariantDefaults(
+            exerciseId, variationId, variant?.trackingType ?: exercise.trackingType, config.encode(), roles,
+            variant?.targetSets ?: exercise.targetSets, variant?.targetRepsMin ?: exercise.targetRepsMin,
+            variant?.targetRepsMax ?: exercise.targetRepsMax, variant?.targetRpe ?: exercise.targetRpe,
+            variant?.restSeconds ?: exercise.restSeconds,
+        )
+    }
     fun saveBand(row: BandEntity, onSaved: () -> Unit, onFailure: () -> Unit) = write(onSaved, onFailure) {
         require(!isSeededBandId(row.id)) { "Built-in band definitions cannot be changed" }
         require(row.name.isNotBlank()) { "Enter a band name" }
@@ -310,7 +567,10 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             dao.band(row)
         }
     }
-    fun attachReferenceVideo(context: Context, exerciseId: String, uri: Uri, displayName: String) = write {
+    fun attachReferenceVideo(
+        context: Context, exerciseId: String, uri: Uri, displayName: String,
+        variationId: String? = null, onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
         val id = newId()
         val directory = File(context.filesDir, "exercise-reference-videos")
         check(directory.exists() || directory.mkdirs()) { "Could not create reference video storage" }
@@ -318,55 +578,88 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         try {
             requireNotNull(context.contentResolver.openInputStream(uri)) { "Could not open selected video" }
                 .use { input -> file.outputStream().use(input::copyTo) }
-            dao.referenceVideo(
-                ExerciseReferenceVideoEntity(id, exerciseId, displayName.ifBlank { "Reference video" }, file.name, System.currentTimeMillis()),
-            )
+            db.withTransaction {
+                validateItemOwner(exerciseId, variationId)
+                dao.referenceVideo(
+                    ExerciseReferenceVideoEntity(id, exerciseId, displayName.ifBlank { "Reference video" }, file.name, System.currentTimeMillis(), variationId),
+                )
+            }
         } catch (error: Exception) {
             if (file.exists() && !file.delete()) error.addSuppressed(IllegalStateException("Could not remove incomplete video"))
             throw error
         }
     }
-    fun deleteReferenceVideo(context: Context, row: ExerciseReferenceVideoEntity) = write {
-        val file = File(File(context.filesDir, "exercise-reference-videos"), row.fileName)
-        if (file.exists()) check(file.delete()) { "Could not delete ${row.displayName}" }
-        dao.deleteReferenceVideo(row.id)
+    fun deleteReferenceVideo(
+        context: Context, row: ExerciseReferenceVideoEntity,
+        onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
+        db.withTransaction {
+            val current = requireNotNull(dao.referenceVideoById(row.id)) { "Reference video no longer exists" }
+            require(current.exerciseId == row.exerciseId && current.variationId == row.variationId && current.fileName == row.fileName) { "Reference video target changed" }
+            require(File(current.fileName).name == current.fileName) { "Invalid reference video file" }
+            val file = File(File(context.filesDir, "exercise-reference-videos"), current.fileName)
+            if (file.exists()) check(file.delete()) { "Could not delete ${current.displayName}" }
+            dao.deleteReferenceVideo(current.id)
+        }
     }
     suspend fun entryDraft(workoutExerciseId: String) = dao.entryDraft(workoutExerciseId)
     suspend fun entryDrafts(workoutExerciseId: String) = dao.entryDrafts(workoutExerciseId)
     suspend fun bandsForExercise(workoutExerciseId: String) = dao.bandsForExercise(workoutExerciseId)
-    fun saveEntryDraft(row: WorkoutEntryDraftEntity) = write {
-        db.withTransaction {
-            if (!dao.belongsToDraftWorkout(row.workoutExerciseId)) return@withTransaction
-            if (
-                !dao.hasSet(row.setId) &&
-                !row.detailsOpen &&
-                row.variationId == null &&
-                row.performance.isBlank() &&
-                row.rpe.isBlank() &&
-                row.leftValue.isBlank() &&
-                row.rightValue.isBlank() &&
-                row.addedWeight.isBlank() &&
-                row.assistance.isBlank() &&
-                row.romValue.isBlank() &&
-                row.timeHeld.isBlank() &&
-                row.timeUnderTension.isBlank() &&
-                row.tutEntries.isBlank() &&
-                row.bandIds == "[]"
-            ) {
-                dao.deleteEntryDraft(row.workoutExerciseId, row.ordinal)
-            } else {
-                dao.entryDraft(row)
+    fun saveEntryDraft(row: WorkoutEntryDraftEntity): Job {
+        val target = WorkoutWriteTarget("draft", row.workoutExerciseId, row.ordinal)
+        var persisted = false
+        var workoutId: String? = null
+        return write(
+            onSuccess = { if (persisted) unresolvedWorkoutWrites.remove(target) },
+            onFailure = {
+                unresolvedWorkoutWrites[target] = WorkoutWriteFailure(
+                    workoutId ?: unresolvedWorkoutWrites[target]?.workoutId, error.value ?: "Could not save",
+                )
+            },
+        ) {
+            workoutId = workoutWriteOwner(target, null, null)
+            db.withTransaction {
+                if (!dao.canPersistEntryDraft(row.workoutExerciseId, row.setId, row.ordinal)) return@withTransaction
+                if (
+                    !dao.hasSet(row.setId) &&
+                    !row.detailsOpen &&
+                    row.variationId == null &&
+                    row.performance.isBlank() &&
+                    row.rpe.isBlank() &&
+                    row.leftValue.isBlank() &&
+                    row.rightValue.isBlank() &&
+                    row.addedWeight.isBlank() &&
+                    row.assistance.isBlank() &&
+                    row.romValue.isBlank() &&
+                    row.distanceValue.isBlank() &&
+                    row.variantDraftCache == "{}" &&
+                    row.timeHeld.isBlank() &&
+                    row.timeUnderTension.isBlank() &&
+                    row.tutEntries.isBlank() &&
+                    row.bandIds == "[]"
+                ) {
+                    dao.deleteEntryDraft(row.workoutExerciseId, row.ordinal)
+                } else {
+                    dao.entryDraft(row)
+                }
+                persisted = true
             }
         }
     }
-    fun discardEntryDraft(workoutExerciseId: String, ordinal: Int) = write { dao.deleteEntryDraft(workoutExerciseId, ordinal) }
+    fun discardEntryDraft(workoutExerciseId: String, ordinal: Int) =
+        write(workoutTarget = WorkoutWriteTarget("draft", workoutExerciseId, ordinal)) { dao.deleteEntryDraft(workoutExerciseId, ordinal) }
     fun moveVariation(id: String, delta: Int) = write {
-        val all=dao.variations().first()
-        val selected=all.find { it.id==id && !it.isSeeded } ?: return@write
-        val siblings=all.filter { it.exerciseId==selected.exerciseId && !it.isSeeded }.sortedBy { it.progressionRank }
-        val start=(all.filter { it.exerciseId==selected.exerciseId && it.isSeeded }.maxOfOrNull { it.progressionRank } ?: -1)+1
-        moveItem(siblings, id, delta) { it.id }?.let { rows ->
-            db.withTransaction { rows.forEachIndexed { i,v -> dao.variation(v.copy(progressionRank=start+i)) } }
+        db.withTransaction {
+            val all=dao.variations().first()
+            val selected=all.find { it.id==id && !it.isSeeded } ?: return@withTransaction
+            val siblings=all.filter { it.exerciseId==selected.exerciseId && !it.isSeeded }.sortedBy { it.progressionRank }
+            val start=(all.filter { it.exerciseId==selected.exerciseId && it.isSeeded }.maxOfOrNull { it.progressionRank } ?: -1)+1
+            moveItem(siblings, id, delta) { it.id }?.let { rows ->
+                rows.forEachIndexed { i,v ->
+                    val original = requireNotNull(dao.variationOriginalById(v.id))
+                    dao.variation(original.copy(progressionRank=start+i))
+                }
+            }
         }
     }
     fun removeProgramme(
@@ -387,22 +680,29 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun removeSet(id: String) = write { dao.deleteSet(id) }
     fun removeWorkoutSet(id: String, ordinal: Int, remaining: Int, onRemoved: () -> Unit) =
         write(onRemoved) { dao.deleteWorkoutSet(id, ordinal, remaining) }
-    fun setWorkoutSetCount(id: String, count: Int) = write { dao.setWorkoutSetCount(id, count) }
+    fun setWorkoutSetCount(id: String, count: Int) =
+        write(workoutTarget = WorkoutWriteTarget("set-count", id)) { dao.setWorkoutSetCount(id, count) }
     fun removeWorkoutExercise(id: String, onRemoved: () -> Unit = {}) =
         write(onRemoved) { dao.deleteWorkoutExercise(id) }
     fun removeWorkout(id: String, onRemoved: () -> Unit = {}) = write(onRemoved) { dao.deleteWorkout(id) }
     fun clearValue(id: String, day: Long) = write { trackerStore.clearValue(id, day) }
     fun removeMeasurement(id: String) = write { dao.deleteMeasurement(id) }
-    fun saveSet(row: WorkoutSetEntity, bandIds: List<String>) = write {
+    fun saveSet(row: WorkoutSetEntity, bandIds: List<String>) = write(
+        workoutTarget = WorkoutWriteTarget("set", row.id), ownerWorkoutExerciseId = row.workoutExerciseId,
+    ) {
         dao.saveSetWithSnapshots(row, bandIds, consumeDraft = false)
     }
     fun submitEntryDraft(
         row: WorkoutSetEntity,
         bandIds: List<String>,
         inputConfigOverride: String? = null,
+        entryDraft: WorkoutEntryDraftEntity? = null,
         onSaved: () -> Unit,
-    ) = write {
-        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true, inputConfigOverride = inputConfigOverride)
+    ) = write(
+        workoutTarget = WorkoutWriteTarget("set", row.id), ownerWorkoutExerciseId = row.workoutExerciseId,
+    ) {
+        dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true, inputConfigOverride = inputConfigOverride, entryDraft = entryDraft)
+        entryDraft?.let { unresolvedWorkoutWrites.remove(WorkoutWriteTarget("draft", it.workoutExerciseId, it.ordinal)) }
         onSaved()
     }
     fun duplicate(
@@ -425,15 +725,34 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             }
         }
     }
-    fun saveExercise(row: ExerciseEntity, names: List<String>, muscleRoles: Map<String, String>) = write {
-        require(row.isCustom) { "Duplicate seeded exercises before editing" }
+    fun saveExercise(
+        row: ExerciseEntity, names: List<String>, muscleRoles: Map<String, String>,
+        onSaved: () -> Unit = {}, onFailure: (String) -> Unit = {},
+    ) = metadataWrite(onSaved, onFailure) {
         db.withTransaction {
-            dao.exercise(row)
-            dao.clearAliases(row.id)
-            dao.clearMappings(row.id)
-            db.catalogueDao().insertAliases(names.filter { it.isNotBlank() }.distinct().map { ExerciseAliasEntity(row.id, it.trim(), it.trim().lowercase()) })
-            db.catalogueDao().insertExerciseMuscles(muscleRoles.map { ExerciseMuscleEntity(row.id, it.key, it.value) })
+            val current = dao.exerciseById(row.id)
+            require(row.canonicalName.isNotBlank()) { "Exercise name cannot be blank" }
+            if (current == null) {
+                require(row.isCustom && !row.id.startsWith("core:") && !row.id.startsWith("free:")) { "Cannot create a built-in exercise" }
+                dao.exercise(row)
+            } else if (current.isCustom) {
+                dao.exercise(row.copy(canonicalName = current.canonicalName, isCustom = true))
+            } else {
+                dao.exercise(current.copy(inputConfig = row.inputConfig))
+            }
+            if (current == null || current.isCustom) {
+                dao.clearAliases(row.id)
+                db.catalogueDao().insertAliases(names.filter { it.isNotBlank() }.distinct().map { ExerciseAliasEntity(row.id, it.trim(), it.trim().lowercase()) })
+            }
+            storeItemName(row.id, null, row.canonicalName)
+            storeItemMuscles(row.id, null, muscleRoles)
         }
     }
-    fun saveExerciseSettings(row: ExerciseEntity) = write { dao.exercise(row) }
+    fun saveExerciseSettings(row: ExerciseEntity) = write {
+        db.withTransaction {
+            val current = requireNotNull(dao.exerciseById(row.id)) { "Exercise no longer exists" }
+            ExerciseInputConfig.decode(row.inputConfig, current.trackingType, current.id)
+            dao.exercise(current.copy(inputConfig = row.inputConfig))
+        }
+    }
 }

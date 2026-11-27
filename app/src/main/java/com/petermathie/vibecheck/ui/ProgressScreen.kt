@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.ExerciseEntity
 import com.petermathie.vibecheck.data.local.ExerciseVariationEntity
+import com.petermathie.vibecheck.data.local.WorkoutSetEntity
 import com.petermathie.vibecheck.domain.progress.SessionProgress
 import com.petermathie.vibecheck.domain.progress.PersonalRecords
 import com.petermathie.vibecheck.domain.progress.PersonalRecordVisibility
@@ -61,7 +62,12 @@ fun ProgressScreen(vm:EditorViewModel) {
         }.orEmpty()
     }
     val finishedIds=workouts.filter { it.status=="FINISHED" }.map { it.id }.toSet()
-    val trackableSetRowIds = sets.filter { SessionProgress.valid(it) || it.romValue != null }.map { it.workoutExerciseId }.toSet()
+    val savedRows = rows.associateBy { it.id }
+    fun scoringSet(set: WorkoutSetEntity): Boolean {
+        val row = savedRows[set.workoutExerciseId]
+        return SessionProgress.valid(set, row?.trackingType, row?.inputConfig.orEmpty())
+    }
+    val trackableSetRowIds = sets.filter { scoringSet(it) || it.romValue != null || it.distanceValue != null }.map { it.workoutExerciseId }.toSet()
     val eligibleExerciseIds = rows.filter { it.workoutId in finishedIds && it.id in trackableSetRowIds }.map { it.actualExerciseId }.toSet()
     val allPoints = remember(eligibleExerciseIds, workouts, rows, sets, links, bands, variations) {
         eligibleExerciseIds.associateWith { id ->
@@ -70,7 +76,7 @@ fun ProgressScreen(vm:EditorViewModel) {
     }
     val aggregate = remember(allPoints) { SessionProgress.aggregate(allPoints) }
     val exerciseRows=rows.filter { it.actualExerciseId==exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
-    val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
+    val valid=sets.filter { it.workoutExerciseId in exerciseRows && scoringSet(it) && (filter==null || it.variationId==filter) }
     val records=SessionProgress.records(valid,points)
     val visiblePoints = points.filter { it.date in dateRange }
     val visibleEstimatedOneRepMax = dailyEstimatedOneRepMax.filter { it.date in dateRange }
@@ -79,8 +85,9 @@ fun ProgressScreen(vm:EditorViewModel) {
     var selectedWorkoutId by remember { mutableStateOf<String?>(null) }
     var exerciseDetailsDay by remember { mutableStateOf<Long?>(null) }
     val listState = rememberLazyListState()
-    val romRowIds = rows.filter { it.actualExerciseId == exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
-    val romSeries = SessionProgress.romSeries(sets.filter { it.workoutExerciseId in romRowIds })
+    val measurementRows = rows.filter { it.actualExerciseId == exerciseId && it.workoutId in finishedIds }.map { it.id }.toSet()
+    val romSeries = SessionProgress.romSeries(sets.filter { it.workoutExerciseId in measurementRows })
+    val distanceSeries = SessionProgress.distanceSeries(sets.filter { it.workoutExerciseId in measurementRows })
     LaunchedEffect(exerciseId, filter) {
         selectedDay.value = if (exerciseId == null) LocalDate.now().toEpochDay() else null
         listState.scrollToItem(0)
@@ -229,6 +236,16 @@ fun ProgressScreen(vm:EditorViewModel) {
                             Text("ROM · $unit",style=MaterialTheme.typography.titleSmall)
                             MiniChart(series.map { it.romValue!! },dates=series.map { it.loggedAt },unit=unit, valueFormatter=::formatProgressValue, plotHeight=plotHeight) { }
                             series.forEach { Text("${formatProgressValue(it.romValue!!)} $unit") }
+                        }
+                    }
+                }
+                if (distanceSeries.isNotEmpty()) item(key = "distance") {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text("Distance")
+                        distanceSeries.forEach { (unit, series) ->
+                            Text("Distance · $unit", style = MaterialTheme.typography.titleSmall)
+                            MiniChart(series.map { it.distanceValue!! }, dates = series.map { it.loggedAt },
+                                unit = unit, valueFormatter = ::formatProgressValue, plotHeight = plotHeight) { }
                         }
                     }
                 }

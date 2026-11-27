@@ -6,7 +6,12 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import com.petermathie.vibecheck.data.local.SeedMetadataEntity
+import com.petermathie.vibecheck.data.local.ExerciseOverrideEntity
+import com.petermathie.vibecheck.data.local.ExerciseMuscleOverrideEntity
+import com.petermathie.vibecheck.data.local.VariationOverrideEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
+import androidx.room.withTransaction
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -29,6 +34,40 @@ class MuscleMappingTest {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    @Test
+    fun freshSeededVariantsOwnInitialMusclesAndMissingMetadataInitializesWithoutRefillingEmptyMappings() = runBlocking {
+        val dao = database.editorDao()
+        val original = dao.variationMuscleMappings("handstand-wall")
+        val parent = dao.muscleMappings("core:handstand").associate { it.muscleId to it.role }
+        assertTrue(original.isNotEmpty())
+        assertEquals(parent, original.associate { it.muscleId to it.role })
+        assertTrue(dao.variationOverrideById("handstand-wall")!!.musclesPresent)
+        val history = dao.sets().first()
+        database.withTransaction {
+            dao.exerciseOverride(ExerciseOverrideEntity("core:handstand", musclesPresent = true))
+            dao.muscleOverrides(listOf(ExerciseMuscleOverrideEntity("core:handstand", "LATS", "PRIMARY")))
+        }
+        assertEquals(original, dao.variationMuscleMappings("handstand-wall"))
+        database.withTransaction {
+            dao.variationOverride(VariationOverrideEntity("handstand-wall", musclesPresent = true))
+            dao.clearVariationMuscles("handstand-wall")
+            database.openHelper.writableDatabase.execSQL("DELETE FROM variation_overrides WHERE variationId='handstand-free'")
+        }
+        assertEquals(listOf("LATS"), dao.variationMuscleMappings("handstand-free").map { it.muscleId })
+        DatabaseSeeder(ApplicationProvider.getApplicationContext(), database).seedIfNeeded()
+        assertTrue(dao.variationMuscleMappings("handstand-wall").isEmpty())
+        assertTrue(dao.variationOverrideById("handstand-free")!!.musclesPresent)
+        assertEquals(listOf("LATS"), dao.variationMuscleMappings("handstand-free").map { it.muscleId })
+        database.withTransaction {
+            dao.clearMuscleOverrides("core:handstand")
+            dao.muscleOverrides(listOf(ExerciseMuscleOverrideEntity("core:handstand", "HAMSTRINGS", "SECONDARY")))
+        }
+        DatabaseSeeder(ApplicationProvider.getApplicationContext(), database).seedIfNeeded()
+        assertTrue(dao.variationMuscleMappings("handstand-wall").isEmpty())
+        assertEquals(listOf("LATS"), dao.variationMuscleMappings("handstand-free").map { it.muscleId })
+        assertEquals(history, dao.sets().first())
     }
 
     @Test

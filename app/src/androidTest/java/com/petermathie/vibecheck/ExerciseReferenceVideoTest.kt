@@ -44,6 +44,24 @@ class ExerciseReferenceVideoTest {
     }
 
     @Test
+    fun variantVideoOwnershipIsIndependentAndWrongParentAttachFailsWithoutRetargeting() = runBlocking {
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        val variant = database.editorDao().variations().first().first { it.exerciseId == "core:handstand" }
+        viewModel.attachReferenceVideo(context, "core:handstand", Uri.fromFile(source), "Variant video", variant.id).join()
+        val attached = database.editorDao().referenceVideos().first().single()
+        assertEquals(variant.id, attached.variationId)
+        var failed = false
+        viewModel.attachReferenceVideo(
+            context, "core:bench-press", Uri.fromFile(source), "Wrong owner", variant.id,
+            onFailure = { failed = true },
+        ).join()
+        assertTrue(failed)
+        assertEquals(listOf(attached), database.editorDao().referenceVideos().first())
+        viewModel.deleteReferenceVideo(context, attached).join()
+        assertTrue(database.editorDao().referenceVideos().first().isEmpty())
+    }
+
+    @Test
     fun attachingAndDeletingReferenceVideoOwnsTheCopiedFile() = runBlocking {
         val viewModel = lifecycle.own(EditorViewModel(database))
 

@@ -1,7 +1,7 @@
 package com.petermathie.vibecheck.ui
 
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -34,6 +34,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessibilityNew
@@ -44,8 +45,6 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.FitnessCenter
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LibraryBooks
@@ -229,7 +228,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                     PrimaryNavigationBar(destination) { destination = it }
                 },
             ) { padding ->
-            BackHandler(destination in moreDestinations) { destination = Destination.MORE }
+            MoreNavigationBackHandler(destination, imeVisible) { destination = it }
             Column(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
                 if(error != null) TextButton(onClick = { editor.error.value = null }) { Text(error.orEmpty(),color=MaterialTheme.colorScheme.error) }
                 AnimatedContent(
@@ -287,22 +286,35 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         showWorkoutTiming = true,
                         onDeleted = { destination = Destination.HOME },
                     )
-                    Destination.EXERCISES -> ExerciseEditor(editor)
+                    Destination.EXERCISES -> ExerciseEditor(
+                        vm = editor,
+                        onBack = { destination = Destination.MORE },
+                    )
                     Destination.PROGRESS -> ProgressScreen(editor)
                     Destination.MORE -> MoreScreen { destination = it }
                     Destination.HABITS -> TrackerScreen(editor)
-                    Destination.HISTORY -> HistoryScreen(editor,viewModel::selectHistoryDay)
+                    Destination.HISTORY -> HistoryScreen(
+                        vm = editor,
+                        onBack = { destination = Destination.MORE },
+                    )
                     Destination.MEASUREMENTS -> MeasurementsScreen(editor)
-                    Destination.SETTINGS -> SettingsScreen(editor, { destination=Destination.STYLE }) { result ->
-                        viewModel.removeDemoData(result)
-                    }
+                    Destination.SETTINGS -> SettingsScreen(
+                        vm = editor,
+                        onStyle = { destination = Destination.STYLE },
+                        onRemoveDemo = { result -> viewModel.removeDemoData(result) },
+                        onBack = { destination = Destination.MORE },
+                    )
                     Destination.STYLE -> StyleScreen(
-                        paletteId,
-                        { paletteId = it; prefs.edit().putString("palette", it).apply() },
-                        themeMode,
-                        { themeMode = it; prefs.edit().putString("themeMode", it.id).apply() },
-                    ) { result -> viewModel.removeDemoData(result) }
-                    Destination.ARCHIVE -> ArchiveScreen(editor)
+                        selectedId = paletteId,
+                        onSelect = { paletteId = it; prefs.edit().putString("palette", it).apply() },
+                        themeMode = themeMode,
+                        onThemeModeChange = { themeMode = it; prefs.edit().putString("themeMode", it.id).apply() },
+                        onBack = { destination = Destination.SETTINGS },
+                    )
+                    Destination.ARCHIVE -> ArchiveScreen(
+                        vm = editor,
+                        onBack = { destination = Destination.MORE },
+                    )
                 }
                 }
                 }
@@ -356,7 +368,7 @@ internal fun ModeSelector(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            if (item == TrainingMode.STRENGTH) Icons.Outlined.FitnessCenter else SplitsIcon,
+                            if (item == TrainingMode.STRENGTH) Icons.Outlined.FitnessCenter else SeatedStretchIcon,
                             contentDescription = if (item == TrainingMode.STRENGTH) "Strength" else "Stretch",
                             modifier = Modifier.size(24.dp),
                             tint = if (selected) palette.textPrimary else palette.textSecondary,
@@ -383,25 +395,49 @@ internal fun ModeSelector(
     }
 }
 
-private val SplitsIcon by lazy {
-    ImageVector.Builder("Splits", 24.dp, 24.dp, 24f, 24f).apply {
+private val SeatedStretchIcon by lazy {
+    ImageVector.Builder("SeatedStretch", 24.dp, 24.dp, 24f, 24f).apply {
         path(fill = SolidColor(Color.Black)) {
-            moveTo(14f, 4f)
-            curveTo(14f, 5.1f, 13.1f, 6f, 12f, 6f)
-            curveTo(10.9f, 6f, 10f, 5.1f, 10f, 4f)
-            curveTo(10f, 2.9f, 10.9f, 2f, 12f, 2f)
-            curveTo(13.1f, 2f, 14f, 2.9f, 14f, 4f)
+            moveTo(15.7f, 5.9f)
+            curveTo(15.7f, 7.06f, 14.76f, 8f, 13.6f, 8f)
+            curveTo(12.44f, 8f, 11.5f, 7.06f, 11.5f, 5.9f)
+            curveTo(11.5f, 4.74f, 12.44f, 3.8f, 13.6f, 3.8f)
+            curveTo(14.76f, 3.8f, 15.7f, 4.74f, 15.7f, 5.9f)
             close()
         }
-        path(
-            stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
-            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
-        ) {
-            moveTo(12f, 8f); lineTo(12f, 18f)
-            moveTo(8f, 13f); lineTo(12f, 9f); lineTo(16f, 13f)
-            moveTo(2f, 18f); lineTo(22f, 18f)
-            moveTo(2f, 18f); lineTo(2f, 16f)
-            moveTo(22f, 18f); lineTo(22f, 16f)
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(8.4f, 17.4f)
+            curveTo(8.3f, 14.8f, 9.4f, 11.1f, 10.5f, 9.6f)
+            curveTo(11.3f, 8.7f, 12.5f, 8.8f, 13.2f, 9.8f)
+            lineTo(18.8f, 16.3f)
+            quadTo(19.1f, 16.8f, 18.5f, 17.1f)
+            lineTo(17.5f, 17.2f)
+            lineTo(11.9f, 12.1f)
+            lineTo(10.5f, 16.7f)
+            quadTo(9.9f, 18f, 8.4f, 17.4f)
+            close()
+        }
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(7.7f, 16.5f)
+            lineTo(20.9f, 18f)
+            lineTo(20.9f, 17.4f)
+            quadTo(21.1f, 16.1f, 21.5f, 16.2f)
+            quadTo(22.1f, 16.3f, 22.1f, 17.8f)
+            quadTo(22.1f, 19.3f, 21f, 19.4f)
+            lineTo(8.1f, 19.4f)
+            close()
+        }
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(8.8f, 17.4f)
+            lineTo(4.9f, 16.2f)
+            quadTo(4.3f, 16f, 3.8f, 16.5f)
+            lineTo(1.6f, 18.2f)
+            quadTo(1.2f, 18.6f, 1.5f, 19.1f)
+            quadTo(1.8f, 19.5f, 2.4f, 19.2f)
+            lineTo(4.8f, 18.1f)
+            lineTo(7.3f, 19.2f)
+            quadTo(8.7f, 19.7f, 9.2f, 18.5f)
+            close()
         }
     }.build()
 }
@@ -422,6 +458,45 @@ private val moreDestinations = setOf(
     Destination.STYLE,
     Destination.ARCHIVE,
 )
+
+@Composable
+internal fun MoreNavigationBackHandler(
+    destination: Destination,
+    imeVisible: Boolean,
+    onNavigate: (Destination) -> Unit,
+) {
+    BackHandler(destination in moreDestinations && !imeVisible) {
+        onNavigate(if (destination == Destination.STYLE) Destination.SETTINGS else Destination.MORE)
+    }
+}
+
+@Composable
+internal fun VibeBackChevron(
+    onBack: () -> Unit,
+    description: String = "Back to More",
+    enabled: Boolean = true,
+) {
+    IconButton(onClick = onBack, enabled = enabled) {
+        Icon(
+            Icons.Outlined.ChevronLeft,
+            contentDescription = description,
+            modifier = Modifier.size(18.dp),
+            tint = LocalVibePalette.current.textSecondary,
+        )
+    }
+}
+
+@Composable
+internal fun MoreChildTitleRow(
+    title: String,
+    onBack: () -> Unit,
+    backDescription: String = "Back to More",
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        VibeBackChevron(onBack, backDescription)
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.headlineLarge)
+    }
+}
 
 @Composable
 internal fun PrimaryNavigationBar(selected: Destination, onSelect: (Destination) -> Unit) {
@@ -447,24 +522,31 @@ internal fun PrimaryNavigationBar(selected: Destination, onSelect: (Destination)
 @Composable
 internal fun MoreScreen(onSelect: (Destination) -> Unit) {
     val haptics = rememberVibeHaptics()
+    val palette = LocalVibePalette.current
     ScreenList {
         item { Text("More", style = MaterialTheme.typography.headlineLarge) }
-        items(moreDestinations.toList(), key = { it.name }) { destination ->
-            OutlinedButton(
-                onClick = {
-                    haptics.perform(VibeHapticEvent.NAVIGATION)
-                    onSelect(destination)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = MaterialTheme.shapes.medium,
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
+        itemsIndexed(moreDestinations.filter { it != Destination.STYLE }, key = { _, item -> item.name }) { index, destination ->
+            Column(Modifier.fillMaxWidth()) {
+                if (index > 0) HorizontalDivider(
+                    modifier = Modifier.testTag("More option divider"),
+                    color = palette.border.copy(alpha = 0.3f),
+                )
+                TextButton(
+                    onClick = {
+                        haptics.perform(VibeHapticEvent.NAVIGATION)
+                        onSelect(destination)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
                 ) {
-                    Icon(destination.icon, contentDescription = null)
-                    Spacer(Modifier.width(12.dp))
-                    Text(destination.label)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(destination.icon, contentDescription = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(destination.label, style = MaterialTheme.typography.titleLarge)
+                    }
                 }
             }
         }

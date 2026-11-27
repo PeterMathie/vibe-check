@@ -55,6 +55,7 @@ class DatabaseSeeder @Inject constructor(
                 }
                 database.metadataDao().put(SeedMetadataEntity(CATALOGUE_KEY, CATALOGUE_VERSION))
             }
+            database.catalogueDao().initializeMissingVariationMuscles()
             if ((database.metadataDao().version(CURATED_ONLY_KEY) ?: 0) < CURATED_ONLY_VERSION) {
                 database.openHelper.writableDatabase.execSQL(
                     """

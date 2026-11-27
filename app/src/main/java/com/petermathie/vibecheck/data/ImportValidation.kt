@@ -5,6 +5,7 @@ import com.petermathie.vibecheck.domain.model.*
 import com.petermathie.vibecheck.domain.tracker.HabitChoiceIntensity
 import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import org.json.JSONObject
+import org.json.JSONArray
 import java.math.BigDecimal
 import com.petermathie.vibecheck.domain.workout.timingInputs
 import com.petermathie.vibecheck.domain.workout.timingMillis
@@ -13,10 +14,10 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 /** Import is an untrusted boundary: SQLite coercion is not domain validation. */
 internal object ImportValidation {
     data class Column(val name: String, val type: String, val required: Boolean, val key: Boolean)
-    private val booleanFields = setOf("isCustom", "isArchived", "isSeeded", "isDemo", "booleanValue", "targetMet", "isWeightCleared")
+    private val booleanFields = setOf("isCustom", "isArchived", "isSeeded", "isDemo", "booleanValue", "targetMet", "isWeightCleared", "musclesPresent", "musclesSnapshotPresent")
     private val nonNegative = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "widthCentimetresSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "reps", "leftReps", "rightReps", "legacyReps", "legacyLeftReps", "legacyRightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "weightKg", "addedWeightKg", "assistanceKg", "startedAt", "finishedAt", "loggedAt", "updatedAt", "recordedAt")
     private val intFields = setOf("position", "ordinal", "progressionRank", "variationRankSnapshot", "targetSets", "targetRepsMin", "targetRepsMax", "targetHoldSeconds", "restSeconds", "legacyReps", "legacyLeftReps", "legacyRightReps", "version")
-    private val boundedQuantitative = setOf("reps", "leftReps", "rightReps", "weightKg", "addedWeightKg", "assistanceKg", "romValue")
+    private val boundedQuantitative = setOf("reps", "leftReps", "rightReps", "weightKg", "addedWeightKg", "assistanceKg", "romValue", "distanceValue")
     private val numericTrackers = setOf("NUMBER", "COUNT", "DURATION", "RATING")
 
     fun columns(sql: SupportSQLiteDatabase, table: String): List<Column> = buildList {
@@ -80,6 +81,9 @@ internal object ImportValidation {
             require(row.getDouble("widthCentimetres") > 0) { "Band width must be positive" }
             range("colourArgb", 0.0, 4_294_967_295.0)
         }
+        if (table in setOf("exercise_overrides", "variation_overrides")) {
+            require(row.isNull("name") || row.getString("name").isNotBlank()) { "Override name cannot be blank" }
+        }
         listOf("inputConfig", "variationInputConfigSnapshot").filter { row.has(it) }.forEach { column ->
             val config = row.getString(column)
             val modes = config.split(";").filter { it.startsWith("manyTuts=") }
@@ -88,14 +92,24 @@ internal object ImportValidation {
             }
             ExerciseInputConfig.decode(config, row.optString("trackingType"))
         }
-        if (table == "workout_entry_drafts") timingInputs(row.getString("tutEntries"))
+        if (table == "workout_entry_drafts") {
+            timingInputs(row.getString("tutEntries"))
+            require(row.getString("distanceUnit") == "cm" ||
+                row.getString("distanceUnit").isBlank() && row.getString("distanceValue").isBlank()) { "Invalid draft Distance unit" }
+            validateVariantDraftCache(row.getString("variantDraftCache"), row.getString("setId"))
+        }
         if (table == "workout_sets") {
+            require(row.isNull("distanceValue") || row.getDouble("distanceValue") >= 0) { "Distance cannot be negative" }
+            require(row.isNull("distanceUnit") || row.getString("distanceUnit") == "cm" ||
+                row.isNull("distanceValue") && row.getString("distanceUnit").isBlank()) { "Invalid Distance unit" }
+            require(row.isNull("distanceValue") || !row.isNull("distanceUnit") && row.getString("distanceUnit") == "cm") { "Recorded Distance requires its unit" }
             val entries = timingMillis(row.getString("tutEntriesMillis"))
             require(entries.isEmpty() || (!row.isNull("holdMillis") && entries.sum() == row.getLong("holdMillis"))) {
                 "Timing entries must match the recorded hold total"
             }
         }
         if (table == "workouts") {
+            require(row.isNull("programmeNameSnapshot") || row.getString("programmeNameSnapshot").isNotBlank()) { "Programme name snapshot cannot be blank" }
             require(row.getString("status") != "FINISHED" || !row.isNull("finishedAt")) { "Finished workout requires finishedAt" }
             require(row.isNull("finishedAt") || row.getLong("finishedAt") >= row.getLong("startedAt")) { "Workout finish precedes start" }
             require(row.isNull("bodyweightKg") || row.getDouble("bodyweightKg") > 0) { "Bodyweight must be positive" }
@@ -117,7 +131,7 @@ internal object ImportValidation {
         }
         if (table == "tracker_daily_values") require(row.getLong("epochDay") in java.time.LocalDate.MIN.toEpochDay()..java.time.LocalDate.MAX.toEpochDay()) { "Habit date is outside the supported calendar range" }
         if (table == "workout_sets" && row.getString("result") == "FAILED") {
-            val outcomes = listOf("reps", "leftReps", "rightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "romValue")
+            val outcomes = listOf("reps", "leftReps", "rightReps", "holdMillis", "leftHoldMillis", "rightHoldMillis", "romValue", "distanceValue")
             require(outcomes.all { row.isNull(it) || row.getDouble(it) == 0.0 }) { "Failed/partial results must be zero" }
         }
     }
@@ -147,8 +161,14 @@ internal object ImportValidation {
             if (key == "inputConfig" && table in setOf("exercises", "exercise_variations")) return@all true
             val a = row.get(key); val b = existing.get(key)
             if (a is Number && b is Number) BigDecimal(a.toString()).compareTo(BigDecimal(b.toString())) == 0 else a == b
-        }) { "Cannot change seeded $table definitions; duplicate an exercise to customise it" }
+        }) { "Cannot change seeded $table definitions; use local metadata overrides" }
         if (table == "exercises" && existing == null) require(!row.getString("id").startsWith("core:") && !row.getString("id").startsWith("free:")) { "Custom exercise cannot use a reserved catalogue ID" }
+        if (existing != null && table == "exercise_variations") {
+            require(row.getString("exerciseId") == existing.getString("exerciseId")) { "Cannot change variant ownership" }
+        }
+        if (existing != null && table == "workout_sets") {
+            require(row.getString("workoutExerciseId") == existing.getString("workoutExerciseId")) { "Cannot change set ownership" }
+        }
     }
 
     fun relationships(sql: SupportSQLiteDatabase) {
@@ -157,6 +177,25 @@ internal object ImportValidation {
         reject("SELECT id FROM bands LIMIT 1 OFFSET ${com.petermathie.vibecheck.domain.programme.MAX_RESISTANCE_BANDS}", "At most eight resistance bands can be configured")
         reject("SELECT s.id FROM workout_sets s JOIN workout_exercises we ON we.id=s.workoutExerciseId LEFT JOIN exercise_variations v ON v.id=s.variationId WHERE s.variationId IS NOT NULL AND (v.id IS NULL OR v.exerciseId != we.actualExerciseId) LIMIT 1", "A set variation does not belong to the performed exercise")
         reject("SELECT wm.muscleId FROM workout_muscles wm LEFT JOIN muscles m ON m.id=wm.muscleId WHERE m.id IS NULL LIMIT 1", "Unknown muscle in workout snapshot")
+        reject("SELECT m.exerciseId FROM exercise_muscle_overrides m JOIN exercise_overrides o ON o.exerciseId=m.exerciseId WHERE o.musclesPresent=0 LIMIT 1", "Exercise muscle overrides require explicit presence")
+        reject("SELECT m.variationId FROM variation_muscles m JOIN variation_overrides o ON o.variationId=m.variationId WHERE o.musclesPresent=0 LIMIT 1", "Variant muscles require explicit presence")
+        reject("SELECT m.setId FROM workout_set_muscles m JOIN workout_sets s ON s.id=m.setId WHERE s.musclesSnapshotPresent=0 LIMIT 1", "Set muscles require snapshot presence")
+        reject("SELECT v.id FROM exercise_reference_videos v LEFT JOIN exercise_variations e ON e.id=v.variationId WHERE v.variationId IS NOT NULL AND (e.id IS NULL OR e.exerciseId!=v.exerciseId) LIMIT 1", "Video variant must belong to its exercise")
+        reject("SELECT d.setId FROM workout_entry_drafts d JOIN workout_sets s ON s.id=d.setId WHERE d.workoutExerciseId!=s.workoutExerciseId OR d.ordinal!=s.ordinal LIMIT 1", "Draft set ownership does not match its saved set")
+        reject("SELECT d.setId FROM workout_entry_drafts d JOIN workout_exercises e ON e.id=d.workoutExerciseId LEFT JOIN exercise_variations v ON v.id=d.variationId WHERE d.variationId IS NOT NULL AND (v.id IS NULL OR v.exerciseId!=e.actualExerciseId) LIMIT 1", "Draft variant does not belong to its exercise")
+        sql.query("SELECT d.setId,d.variantDraftCache,e.actualExerciseId FROM workout_entry_drafts d JOIN workout_exercises e ON e.id=d.workoutExerciseId").use { drafts ->
+            while (drafts.moveToNext()) {
+                val cache = JSONObject(drafts.getString(1).ifBlank { "{}" })
+                cache.keys().asSequence().forEach { key ->
+                    val identity = JSONArray(key)
+                    if (!identity.isNull(1)) {
+                        sql.query("SELECT exerciseId FROM exercise_variations WHERE id=?", arrayOf(identity.getString(1))).use {
+                            require(it.moveToFirst() && it.getString(0) == drafts.getString(2)) { "Cached variant does not belong to its exercise" }
+                        }
+                    }
+                }
+            }
+        }
         reject("SELECT id FROM workouts WHERE status='DRAFT' LIMIT 1 OFFSET 1", "Only one active draft is supported")
         reject("SELECT v.fieldId FROM tracker_daily_values v JOIN tracker_fields f ON f.id=v.fieldId WHERE (f.valueType IN ('NUMBER','COUNT','DURATION','RATING') AND (v.numericValue IS NULL OR v.booleanValue IS NOT NULL OR v.textValue IS NOT NULL)) OR (f.valueType='BOOLEAN' AND (v.booleanValue IS NULL OR v.numericValue IS NOT NULL OR v.textValue IS NOT NULL)) OR (f.valueType IN ('TEXT','CHOICE','DATETIME') AND (v.textValue IS NULL OR v.numericValue IS NOT NULL OR v.booleanValue IS NOT NULL)) OR (f.valueType IN ('COUNT','DURATION') AND v.numericValue<0) OR (f.valueType='COUNT' AND v.numericValue != CAST(v.numericValue AS INTEGER)) LIMIT 1", "Habit value does not match its field type")
         sql.query(
@@ -177,6 +216,35 @@ internal object ImportValidation {
                     require(runCatching { java.time.LocalDateTime.parse(value) }.isSuccess) { "Habit date/time value is invalid" }
                 }
             }
+        }
+    }
+
+    private fun validateVariantDraftCache(encoded: String, setId: String) {
+        if (encoded.isBlank()) return
+        val cache = JSONObject(encoded)
+        cache.keys().asSequence().forEach { key ->
+            val identity = JSONArray(key)
+            require(identity.length() == 2 && identity.get(0) is String && identity.getString(0) == setId &&
+                (identity.isNull(1) || identity.get(1) is String && identity.getString(1).isNotBlank())) { "Invalid cached set/variant identity" }
+            val raw = cache.get(key)
+            val value = when (raw) {
+                is String -> JSONObject(raw)
+                is JSONObject -> raw
+                else -> throw IllegalArgumentException("Cached variant draft must be an object or encoded object")
+            }
+            val required = setOf("inputConfig", "variantName", "trackingType", "rank", "performance", "rpe",
+                "bands", "left", "right", "addedWeight", "assistance", "rom", "romUnit", "held", "total", "attempts")
+            require(value.keys().asSequence().toSet().let { it.containsAll(required) && it.all { field -> field in required || field in setOf("distance", "distanceUnit") } }) { "Invalid cached variant fields" }
+            (required - "rank").forEach { require(value.get(it) is String) { "Cached $it must be text" } }
+            if (!value.isNull("rank")) {
+                val rank = value.get("rank")
+                require(rank is Number && rank.toDouble() >= 0 && rank.toDouble() <= Int.MAX_VALUE && rank.toDouble() % 1 == 0.0) { "Invalid cached progression rank" }
+            }
+            listOf("distance", "distanceUnit").filter(value::has).forEach { require(value.get(it) is String) { "Cached $it must be text" } }
+            require(!value.has("distanceUnit") || value.getString("distanceUnit") == "cm" ||
+                value.getString("distanceUnit").isBlank() && value.optString("distance").isBlank()) { "Invalid cached Distance unit" }
+            ExerciseInputConfig.decode(value.getString("inputConfig"), value.getString("trackingType"))
+            timingInputs(value.getString("attempts"))
         }
     }
 }

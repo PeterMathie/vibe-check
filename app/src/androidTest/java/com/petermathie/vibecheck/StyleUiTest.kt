@@ -54,14 +54,21 @@ class StyleUiTest {
                             themeMode = it
                             preferences.edit().putString("themeMode", it.id).apply()
                         },
-                        {},
+                        onBack = {},
                     )
                 }
             }
         }
+        val list = compose.onNode(hasScrollToIndexAction())
         VibePalettes.presets.forEach {
+            list.performScrollToNode(hasContentDescription("${it.displayName} palette", substring = true))
             compose.onNodeWithContentDescription("${it.displayName} palette", substring = true).assertExists()
         }
+        list.performTouchInput { swipeUp() }
+        compose.onNodeWithText("Remove demo data").assertDoesNotExist()
+        compose.onNodeWithText("Development data").assertDoesNotExist()
+        list.performScrollToIndex(0)
+        compose.onNodeWithContentDescription("Back to Settings").assertIsDisplayed()
         compose.onNodeWithText("Custom palette").assertDoesNotExist()
         compose.onNodeWithText("Follow system").assertExists()
         compose.onNodeWithText("Dark").performClick()

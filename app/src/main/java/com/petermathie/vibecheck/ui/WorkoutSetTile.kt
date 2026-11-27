@@ -67,6 +67,7 @@ private val SetBoxCenter = HorizontalAlignmentLine { previous, next -> maxOf(pre
 private val TimingBoxGap = 2.dp
 internal data class SetGroupLayout(val large: Boolean = false)
 private val LocalLargeSetGroup = staticCompositionLocalOf { false }
+internal val LocalWorkoutDisplayFractionDigits = staticCompositionLocalOf<Int?> { null }
 
 internal fun Modifier.setBorderLabelBackground(parentColor: Color, setColor: Color): Modifier = drawBehind {
     drawRect(parentColor)
@@ -104,13 +105,15 @@ internal fun previousSetSummary(
     preferredWeightUnit: String,
     snapshots: List<WorkoutSetBandEntity>,
     bands: List<BandEntity>,
+    maximumFractionDigits: Int? = null,
 ): String? {
+    fun number(value: Double) = formatQuantitative(value, maximumFractionDigits)
     val parts = mutableListOf<String>()
     when (config.loggingResistance()) {
         ResistanceMetric.KILOGRAMS -> {
             val unit = if (config.addedWeight) preferredWeightUnit else config.weightUnit ?: "kg"
             val weight = if (config.addedWeight) set.addedWeightKg else set.weightKg
-            weight?.let { parts += "${formatQuantitative(if (unit == "lb") it * 2.2046226218 else it)}$unit" }
+            weight?.let { parts += "${number(if (unit == "lb") it * 2.2046226218 else it)}$unit" }
         }
         ResistanceMetric.BANDS -> if (snapshots.isNotEmpty()) {
             parts += snapshots.joinToString("+") { snapshot ->
@@ -127,11 +130,14 @@ internal fun previousSetSummary(
         }
         else -> Unit
     }
-    fun seconds(millis: Long) = "${formatQuantitative(millis / 1000.0)}s"
+    fun seconds(millis: Long) = "${number(millis / 1000.0)}s"
     when (config.loggingMeasurement()) {
-        MeasurementMetric.REPETITIONS -> set.reps?.let { parts += formatQuantitative(it) }
+        MeasurementMetric.REPETITIONS -> set.reps?.let { parts += number(it) }
         MeasurementMetric.RANGE_OF_MOTION -> set.romValue?.let {
-            parts += "ROM: ${formatQuantitative(it)}${set.romUnit.orEmpty()}"
+            parts += "ROM: ${number(it)}${set.romUnit.orEmpty()}"
+        }
+        MeasurementMetric.DISTANCE -> set.distanceValue?.let {
+            parts += "Distance: ${number(it)}${set.distanceUnit.orEmpty()}"
         }
         MeasurementMetric.HOLD -> {
             val duration = if (config.timeUnderTension && !config.timeHeld) set.timeUnderTensionMillis else set.holdMillis
@@ -243,6 +249,7 @@ internal fun WorkoutSetTile(
     minimumMeasurementWidth: Dp = metricControlWidth(64),
     resistanceLayout: SetGroupLayout = SetGroupLayout(),
     measurementLayout: SetGroupLayout = SetGroupLayout(),
+    dotSeparators: Boolean = false,
     resistance: @Composable () -> Unit,
     measurement: @Composable () -> Unit,
     rpe: @Composable () -> Unit,
@@ -274,7 +281,12 @@ internal fun WorkoutSetTile(
                 { Box(Modifier.semantics { contentDescription = "Completion column for $identity" }) { completion() } },
                 {
                     repeat(if (showResistance) 2 else 1) {
-                        Box(
+                        if (dotSeparators) Text(
+                            "·",
+                            modifier = Modifier.testTag("Value divider for $identity"),
+                            color = LocalVibePalette.current.textSecondary,
+                            style = MaterialTheme.typography.bodyMedium,
+                        ) else Box(
                             Modifier.width(1.dp).height(16.dp).background(dividerColour)
                                 .testTag("Value divider for $identity"),
                         )
@@ -425,6 +437,7 @@ internal fun MeasurementRenderer(
     onDraftChange: (WorkoutEntryDraftEntity) -> Unit,
     onTimingDelete: (WorkoutEntryDraftEntity) -> Unit = onDraftChange,
 ) {
+    val displayDigits = LocalWorkoutDisplayFractionDigits.current
     when (metric) {
         MeasurementMetric.REPETITIONS -> MetricValue(
             reps, "", "Reps for $identity",
@@ -437,12 +450,18 @@ internal fun MeasurementRenderer(
             unit = if (draft.romUnit == "degrees") "°" else draft.romUnit,
             onChange = { onDraftChange(draft.copy(romValue = it)) },
         )
+        MeasurementMetric.DISTANCE -> MetricValue(
+            draft.distanceValue, "", "Distance for $identity",
+            locked, enabled, width = 64, modifier = focus,
+            unit = draft.distanceUnit,
+            onChange = { onDraftChange(draft.copy(distanceValue = it)) },
+        )
         MeasurementMetric.HOLD -> {
             val totalOnly = !config.timeHeld && config.timeUnderTension
             val retainedAttempts = !totalOnly && attempts.size > 1
             val held = if (retainedAttempts) attempts.map { quantitativeInput(it) }
                 .takeIf { values -> values.all { it.isValid } }
-                ?.let { values -> formatQuantitative(values.sumOf { it.value ?: 0.0 }) }.orEmpty()
+                ?.let { values -> formatQuantitative(values.sumOf { it.value ?: 0.0 }, displayDigits) }.orEmpty()
                 else attempts.first()
             MetricValue(
                 if (totalOnly) draft.timeUnderTension else held,
@@ -468,7 +487,7 @@ internal fun MeasurementRenderer(
             val layoutAttempts = visibleTimingInputs(attempts, locked = false)
             val values = attempts.filter(String::isNotEmpty).map { quantitativeInput(it) }
             val sum = if (values.all { it.isValid } && values.any { it.value != null })
-                "${formatQuantitative(values.sumOf { it.value ?: 0.0 })} s" else null
+                "${formatQuantitative(values.sumOf { it.value ?: 0.0 }, displayDigits)} s" else null
             val compactWidth = timingCellWidth()
             val large = LocalLargeSetGroup.current
             // Reserve four timing cells, the inline sum and Total, plus rounding clearance.
@@ -674,6 +693,9 @@ internal fun MetricValue(
     onNext: (() -> Unit)? = null,
     onChange: (String) -> Unit,
 ) {
+    val displayDigits = LocalWorkoutDisplayFractionDigits.current
+    val displayedValue = if (displayDigits == null) value else
+        quantitativeDisplayText(value, displayDigits)
     val labelHeight = if (label.isBlank()) 0.dp else with(LocalDensity.current) {
         MaterialTheme.typography.labelSmall.lineHeight.toDp()
     }
@@ -687,15 +709,15 @@ internal fun MetricValue(
             Box(Modifier.fillMaxWidth().heightIn(min = minimumHeight)) {
                 if (value.isNotBlank()) {
                     MetricValueContent(
-                        value = value, label = "", unit = unit, compact = compact,
+                        value = displayedValue, label = "", unit = unit, compact = compact,
                         compactText = compactText,
                         minimumHeight = minimumHeight,
                         modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {
                             contentDescription = description
-                            stateDescription = listOf(label, value, unit).filter(String::isNotBlank).joinToString(" ")
+                            stateDescription = listOf(label, displayedValue, unit).filter(String::isNotBlank).joinToString(" ")
                         },
                     ) {
-                        Text(value, style = metricNumberStyle(compactText), maxLines = 1, softWrap = false,
+                        Text(displayedValue, style = metricNumberStyle(compactText), maxLines = 1, softWrap = false,
                             modifier = Modifier.horizontalScroll(rememberScrollState()))
                     }
                 }
@@ -729,6 +751,7 @@ internal fun measurementMinimumWidth(metric: MeasurementMetric?): Dp = when (met
     MeasurementMetric.SKILL_HOLD -> skillHoldMinimumWidth()
     MeasurementMetric.REPETITIONS -> metricControlWidth(64)
     MeasurementMetric.RANGE_OF_MOTION -> metricControlWidth(60)
+    MeasurementMetric.DISTANCE -> metricControlWidth(64)
     MeasurementMetric.HOLD -> metricControlWidth(64)
     null -> metricControlWidth(64)
 }
@@ -780,7 +803,7 @@ internal fun MetricValueContent(
                 Modifier.weight(1f, fill = false)
                     .width(numberWidth)
                     .alignByBaseline(),
-                contentAlignment = Alignment.Center,
+                contentAlignment = Alignment.CenterStart,
             ) { number() }
             if (unit.isNotBlank()) Text(unit, style = labelStyle,
                 color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.alignByBaseline())

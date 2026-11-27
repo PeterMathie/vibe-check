@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.*
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -17,11 +18,14 @@ import com.petermathie.vibecheck.data.local.WorkoutEntity
 import com.petermathie.vibecheck.data.seed.DatabaseSeeder
 import com.petermathie.vibecheck.domain.model.TrainingMode
 import com.petermathie.vibecheck.ui.HistoryDayScreen
+import com.petermathie.vibecheck.ui.HistoryScreen
+import com.petermathie.vibecheck.ui.EditorViewModel
 import com.petermathie.vibecheck.ui.HomeScreen
 import com.petermathie.vibecheck.ui.MainViewModel
 import com.petermathie.vibecheck.ui.theme.VibeCheckTheme
 import java.time.LocalDate
 import com.petermathie.vibecheck.ui.formatDisplayDate
+import com.petermathie.vibecheck.ui.formatHistoryWorkoutDate
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -41,6 +45,92 @@ class HistoryUiTest {
         if (::database.isInitialized) database else null
     }
     private val compose get() = lifecycle.compose
+
+    @Test
+    fun workoutHistoryShowsCapturedTitleAndGuardedEditorAndStatusOnlyRemoval() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val time = LocalDate.now().atTime(10, 1).atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val saved = WorkoutEntity(
+            "history-summary", null, "Saved day", "STRENGTH", "FINISHED",
+            time - 60_000, time, "", null, false, programmeNameSnapshot = "Captured programme",
+        )
+        runBlocking { database.workoutDao().insertWorkouts(listOf(saved)) }
+        val vm = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { HistoryScreen(vm) } }
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("Captured programme").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Body map").assertDoesNotExist()
+        compose.onNodeWithText(formatDisplayDate(time)).assertIsDisplayed()
+        val titleBounds = compose.onNodeWithText("Captured programme").fetchSemanticsNode().boundsInRoot
+        val dateBounds = compose.onNodeWithText(formatDisplayDate(time)).fetchSemanticsNode().boundsInRoot
+        val removeBounds = compose.onNodeWithContentDescription("Remove Captured programme").fetchSemanticsNode().boundsInRoot
+        assertEquals(titleBounds.center.y, dateBounds.center.y, 1f)
+        assertEquals(dateBounds.center.y, removeBounds.center.y, 1f)
+        assertTrue(removeBounds.left - dateBounds.right >= with(compose.density) { 12.dp.toPx() } - 1f)
+        compose.onNodeWithText("Keyword search").performTextInput("Saved day")
+        compose.onNodeWithText("Captured programme").assertIsDisplayed()
+        compose.onNodeWithText("Captured programme").performClick()
+        compose.onNodeWithText("Saved day").assertIsDisplayed()
+        compose.onNodeWithText("${formatHistoryWorkoutDate(time)},").assertIsDisplayed()
+        val editorTitle = compose.onNodeWithText("Saved day").fetchSemanticsNode().boundsInRoot
+        val editorDate = compose.onNodeWithContentDescription("Change workout date").fetchSemanticsNode().boundsInRoot
+        val editorStart = compose.onNodeWithContentDescription("Change start time").fetchSemanticsNode().boundsInRoot
+        assertTrue("Date/time range is below title", editorDate.top >= editorTitle.bottom)
+        assertEquals(editorDate.center.y, editorStart.center.y, 1f)
+        compose.onNodeWithText("Started").assertDoesNotExist()
+        compose.onNodeWithText("Finished").assertDoesNotExist()
+        compose.onNodeWithText("Logged duration: 00:01:00").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change start time").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change finish time").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Change start time").performClick()
+        compose.onAllNodes(hasSetTextAction())[0].performTextReplacement("11")
+        compose.onNodeWithText("Apply").performClick()
+        compose.waitUntil(15_000) {
+            vm.error.value?.let { compose.onAllNodesWithText(it).fetchSemanticsNodes().isNotEmpty() } == true
+        }
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals(saved, vm.workouts.value.single())
+        compose.onNodeWithContentDescription("Back to history").performClick()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithText("Captured programme").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Remove Captured programme").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+        assertEquals("FINISHED", vm.workouts.value.single().status)
+        compose.onNodeWithContentDescription("Remove Captured programme").performClick()
+        compose.onNodeWithText("Remove", useUnmergedTree = true).performClick()
+        compose.waitUntil(15_000) { vm.workouts.value.single().status == "DISCARDED" }
+        assertEquals(saved.copy(status = "DISCARDED"), vm.workouts.value.single())
+    }
+
+    @Test
+    fun dateFilterCrossesClearOnlyTheirOwnedSelectionWithoutHelperButtons() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val vm = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { HistoryScreen(vm) } }
+        val today = LocalDate.now()
+        compose.onNodeWithText("Choose Start before End.").assertDoesNotExist()
+        compose.onNodeWithText("Start").performClick()
+        compose.onNode(hasText(today.dayOfMonth.toString()) and hasClickAction()).performClick()
+        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithText("Without End, only Start day is shown.").assertDoesNotExist()
+        compose.onNodeWithText("End").performClick()
+        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithText("Both dates are included.").assertDoesNotExist()
+        compose.onNodeWithText("Clear End").assertDoesNotExist()
+        compose.onNodeWithText("Clear dates").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Clear End date").performClick()
+        compose.onNodeWithText("Start: ${formatDisplayDate(today)}").assertExists()
+        compose.onNodeWithText("End").assertIsEnabled()
+        compose.onNodeWithContentDescription("Clear End date").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Clear Start date").performClick()
+        compose.onNodeWithText("Start").assertExists()
+        compose.onNodeWithText("End").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Clear Start date").assertDoesNotExist()
+    }
 
     @Test
     fun homeBreakdownListsRecordedValuesRatherThanOnlyTargetMetCounts() {

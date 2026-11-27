@@ -77,6 +77,10 @@ internal fun ExerciseInputConfig.clearedRecordedMeasurement(
             if (draft.romValue.isNotEmpty()) return null
             recorded.copy(romValue = null)
         }
+        MeasurementMetric.DISTANCE -> {
+            if (draft.distanceValue.isNotEmpty()) return null
+            recorded.copy(distanceValue = null)
+        }
         null -> return null
     }
     return cleared.takeUnless { it == recorded }

@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.focusable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
 import androidx.compose.material3.Icon
@@ -80,7 +79,7 @@ internal fun HistoryDayScreen(
         ScreenList(modifier = Modifier.statusBarsPadding()) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Outlined.ArrowBack, "Back", tint = LocalVibePalette.current.textPrimary) }
+                VibeBackChevron(onBack, "Back")
                 Text(
                     formatDisplayDate(date),
                     style = MaterialTheme.typography.headlineMedium,

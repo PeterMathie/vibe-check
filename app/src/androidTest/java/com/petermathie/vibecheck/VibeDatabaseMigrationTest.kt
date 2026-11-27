@@ -20,6 +20,7 @@ import com.petermathie.vibecheck.data.local.MIGRATION_15_16
 import com.petermathie.vibecheck.data.local.MIGRATION_16_17
 import com.petermathie.vibecheck.data.local.MIGRATION_17_18
 import com.petermathie.vibecheck.data.local.MIGRATION_18_19
+import com.petermathie.vibecheck.data.local.MIGRATION_19_20
 import com.petermathie.vibecheck.domain.model.programmeColour
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
@@ -40,6 +41,50 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate19To20InitializesOnlyCurrentVariantsAndKeepsLegacyMeasurementsAndVideoOwners() {
+        helper.createDatabase(databaseName, 19).apply {
+            execSQL("INSERT INTO muscles(id,displayName,svgGroupId) VALUES ('m','Muscle','m')")
+            execSQL("INSERT INTO exercises(id,canonicalName,tag,trackingType,equipment,instructions,source,isCustom,isArchived) VALUES ('e','Original','STRENGTH','REPS',NULL,NULL,'seed',0,0)")
+            execSQL("INSERT INTO exercise_muscles(exerciseId,muscleId,role) VALUES ('e','m','PRIMARY')")
+            execSQL("INSERT INTO exercise_variations(id,exerciseId,name,progressionRank,isSeeded,trackingType) VALUES ('v','e','Original variant',10,1,'REPS')")
+            execSQL("INSERT INTO workouts(id,programmeDayId,name,mode,status,startedAt,finishedAt,notes,bodyweightKg,isDemo) VALUES ('w',NULL,'Saved day','STRENGTH','FINISHED',1,2,'Keep',NULL,0)")
+            execSQL("INSERT INTO workout_exercises(id,workoutId,plannedExerciseId,actualExerciseId,position,notes,restSeconds,supersetGroup) VALUES ('we','w','e','e',0,'',120,NULL)")
+            execSQL("INSERT INTO workout_muscles(workoutExerciseId,muscleId,role) VALUES ('we','m','SECONDARY')")
+            execSQL("INSERT INTO workout_sets(id,workoutExerciseId,ordinal,setType,result,variationId,romValue,romUnit,notes,loggedAt,updatedAt) VALUES ('s','we',1,'WORKING','COMPLETED','v',42.125,'cm','Keep set',1,2)")
+            execSQL("INSERT INTO exercise_reference_videos(id,exerciseId,displayName,fileName,createdAt) VALUES ('video','e','Video','local.mp4',1)")
+            execSQL("INSERT INTO workout_entry_drafts(workoutExerciseId,setId,ordinal,performance,rpe,detailsOpen,warmUp,failed,bandIds,variationId,leftValue,rightValue,addedWeight,assistance,romValue,romUnit,updatedAt) VALUES ('we','s',1,'','',0,0,0,'[]','v','','','','','42.125','cm',2)")
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 20, true, MIGRATION_19_20).use { migrated ->
+            migrated.query("SELECT programmeNameSnapshot,name,notes FROM workouts").use {
+                assertTrue(it.moveToFirst()); assertTrue(it.isNull(0))
+                assertEquals("Saved day", it.getString(1)); assertEquals("Keep", it.getString(2))
+            }
+            migrated.query("SELECT romValue,romUnit,distanceValue,distanceUnit,musclesSnapshotPresent FROM workout_sets").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(42.125, it.getDouble(0), 0.0); assertEquals("cm", it.getString(1))
+                assertTrue(it.isNull(2)); assertTrue(it.isNull(3)); assertEquals(0, it.getInt(4))
+            }
+            migrated.query("SELECT distanceValue,distanceUnit,variantDraftCache,romValue FROM workout_entry_drafts").use {
+                assertTrue(it.moveToFirst()); assertEquals("", it.getString(0)); assertEquals("cm", it.getString(1))
+                assertEquals("{}", it.getString(2)); assertEquals("42.125", it.getString(3))
+            }
+            migrated.query("SELECT m.role,o.musclesPresent FROM variation_muscles m JOIN variation_overrides o ON o.variationId=m.variationId").use {
+                assertTrue(it.moveToFirst()); assertEquals("PRIMARY", it.getString(0)); assertEquals(1, it.getInt(1))
+            }
+            migrated.query("SELECT role FROM workout_muscles").use {
+                assertTrue(it.moveToFirst()); assertEquals("SECONDARY", it.getString(0))
+            }
+            migrated.query("SELECT COUNT(*) FROM workout_set_muscles").use {
+                assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0))
+            }
+            migrated.query("SELECT variationId,fileName FROM exercise_reference_videos").use {
+                assertTrue(it.moveToFirst()); assertTrue(it.isNull(0)); assertEquals("local.mp4", it.getString(1))
+            }
+        }
+    }
 
     @Test
     fun migrate18To19AssignsProgrammeColoursWithoutChangingDaysOrHistory() {

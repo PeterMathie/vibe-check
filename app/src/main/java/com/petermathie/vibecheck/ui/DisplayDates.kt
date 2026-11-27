@@ -30,3 +30,15 @@ internal fun formatDisplayDate(
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
 ): String = formatDisplayDate(Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate(), locale)
+
+internal fun formatHistoryWorkoutDate(
+    timestamp: Long,
+    zone: ZoneId = ZoneId.systemDefault(),
+    locale: Locale = Locale.getDefault(),
+): String {
+    val date = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate()
+    val pattern = if (locale.language == Locale.ENGLISH.language) {
+        "d'${dayOrdinalSuffix(date.dayOfMonth)}' MMM yyyy"
+    } else "d MMM yyyy"
+    return date.format(DateTimeFormatter.ofPattern(pattern, locale))
+}

@@ -6,7 +6,22 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Update
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
+
+private const val SAVED_METRIC_CONFIG = "(';' || COALESCE(NULLIF(ws.variationInputConfigSnapshot,''),we.inputConfig) || ';')"
+private const val POSITIVE_REPS = "(COALESCE(ws.reps,0)>0 OR COALESCE(ws.leftReps,0)>0 OR COALESCE(ws.rightReps,0)>0)"
+private const val POSITIVE_HOLD = "(COALESCE(ws.holdMillis,0)>0 OR COALESCE(ws.leftHoldMillis,0)>0 OR COALESCE(ws.rightHoldMillis,0)>0)"
+private const val QUALIFYING_RESULT = """
+CASE
+WHEN INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=REPETITIONS;')>0 THEN """ + POSITIVE_REPS + """
+WHEN INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=RANGE_OF_MOTION;')>0 THEN COALESCE(ws.romValue,0)>0
+WHEN INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=DISTANCE;')>0 THEN COALESCE(ws.distanceValue,0)>0
+WHEN INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=HOLD;')>0
+  OR INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=SKILL_HOLD;')>0 THEN """ + POSITIVE_HOLD + """
+ELSE (""" + POSITIVE_REPS + " OR " + POSITIVE_HOLD + """ OR COALESCE(ws.romValue,0)>0 OR COALESCE(ws.distanceValue,0)>0)
+END
+"""
 
 data class ProgrammeDayRow(
     val id: String,
@@ -69,10 +84,10 @@ data class HistoryTrackerRow(
 
 @Dao
 interface CatalogueDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertMuscles(rows: List<MuscleEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun insertExercises(rows: List<ExerciseEntity>)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -81,8 +96,38 @@ interface CatalogueDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExerciseMuscles(rows: List<ExerciseMuscleEntity>)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertVariations(rows: List<ExerciseVariationEntity>)
+    @Upsert
+    suspend fun insertVariationDefinitions(rows: List<ExerciseVariationEntity>)
+
+    @Query("SELECT * FROM variation_overrides WHERE variationId=:id")
+    suspend fun variationOverride(id:String):VariationOverrideEntity?
+    @Upsert suspend fun insertVariationOverride(row:VariationOverrideEntity)
+    @Upsert suspend fun insertVariationMuscles(rows:List<VariationMuscleEntity>)
+    @Query("SELECT * FROM (" + EFFECTIVE_MAPPINGS + ") WHERE exerciseId=:id")
+    suspend fun effectiveMuscles(id:String):List<ExerciseMuscleEntity>
+    @Query("SELECT v.* FROM exercise_variations v WHERE NOT EXISTS (SELECT 1 FROM variation_overrides o WHERE o.variationId=v.id AND o.musclesPresent=1)")
+    suspend fun variationsMissingMuscles():List<ExerciseVariationEntity>
+    @Query("DELETE FROM variation_muscles WHERE variationId=:id")
+    suspend fun clearVariationMuscles(id:String)
+
+    @Transaction
+    suspend fun insertVariations(rows: List<ExerciseVariationEntity>) {
+        insertVariationDefinitions(rows)
+        initializeMissingVariationMuscles()
+    }
+
+    @Transaction
+    suspend fun initializeMissingVariationMuscles() {
+        variationsMissingMuscles().forEach { row ->
+            val override = variationOverride(row.id)
+            if (override?.musclesPresent != true) {
+                val muscles = effectiveMuscles(row.exerciseId)
+                insertVariationOverride((override ?: VariationOverrideEntity(row.id)).copy(musclesPresent = true))
+                clearVariationMuscles(row.id)
+                insertVariationMuscles(muscles.map { VariationMuscleEntity(row.id,it.muscleId,it.role) })
+            }
+        }
+    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBands(rows: List<BandEntity>)
@@ -92,15 +137,20 @@ interface CatalogueDao {
 
     @Query(
         """
-        SELECT DISTINCT e.* FROM exercises e
+        SELECT DISTINCT e.* FROM (""" + EFFECTIVE_EXERCISES + """) e
         LEFT JOIN exercise_aliases a ON a.exerciseId = e.id
-        LEFT JOIN exercise_muscles em ON em.exerciseId = e.id
+        LEFT JOIN (""" + EFFECTIVE_MAPPINGS + """) em ON em.exerciseId = e.id
+        LEFT JOIN (""" + EFFECTIVE_VARIATIONS + """) v ON v.exerciseId = e.id
+        LEFT JOIN (""" + EFFECTIVE_VARIATION_MAPPINGS + """) vm ON vm.variationId=v.id
+        LEFT JOIN muscles mm ON mm.id=vm.muscleId
         LEFT JOIN muscles m ON m.id = em.muscleId
         WHERE e.isArchived = 0 AND (
             :query = '' OR
             lower(e.canonicalName) LIKE '%' || lower(:query) || '%' OR
+            lower(v.name) LIKE '%' || lower(:query) || '%' OR
             a.normalizedAlias LIKE '%' || lower(:query) || '%' OR
-            lower(m.displayName) LIKE '%' || lower(:query) || '%'
+            lower(m.displayName) LIKE '%' || lower(:query) || '%' OR
+            lower(mm.displayName) LIKE '%' || lower(:query) || '%'
         )
         ORDER BY e.canonicalName
         LIMIT 100
@@ -138,7 +188,7 @@ interface ProgrammeDao {
                pe.targetSets, pe.targetRepsMin, pe.targetRepsMax, pe.targetHoldSeconds, pe.targetRpe,
                pe.position, pe.restSeconds, pe.notes, pe.supersetGroup
         FROM programme_exercises pe
-        JOIN exercises e ON e.id = pe.exerciseId
+        JOIN (""" + EFFECTIVE_EXERCISES + """) e ON e.id = pe.exerciseId
         WHERE pe.programmeDayId = :dayId
         ORDER BY pe.position
         """,
@@ -240,22 +290,28 @@ interface WorkoutDao {
         WHERE we.workoutId = :workoutId
           AND ws.setType = 'WORKING'
           AND ws.result = 'COMPLETED'
-          AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
-            OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
-            OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0
-            OR COALESCE(ws.romValue, 0) > 0)
-        """,
+          AND (""" + QUALIFYING_RESULT + ")",
     )
     suspend fun qualifyingSetCount(workoutId: String): Int
 
     @Query(
         """
-        SELECT DISTINCT wm.muscleId FROM workout_muscles wm
-        JOIN workout_exercises we ON we.id = wm.workoutExerciseId
-        JOIN workout_sets ws ON ws.workoutExerciseId = we.id
+        WITH mappings AS (
+          SELECT s.id AS setId,m.muscleId,m.role FROM workout_sets s
+          JOIN workout_set_muscles m ON m.setId=s.id WHERE s.musclesSnapshotPresent=1
+          UNION ALL
+          SELECT s.id AS setId,m.muscleId,m.role FROM workout_sets s
+          JOIN workout_muscles m ON m.workoutExerciseId=s.workoutExerciseId WHERE s.musclesSnapshotPresent=0
+        )
+        SELECT DISTINCT wm.muscleId FROM mappings wm
+        JOIN workout_sets ws ON ws.id=wm.setId
+        JOIN workout_exercises we ON we.id = ws.workoutExerciseId
         WHERE we.workoutId = :workoutId
           AND ws.setType = 'WORKING'
           AND ws.result = 'COMPLETED'
+          AND ws.distanceValue IS NULL
+          AND INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=DISTANCE;')=0
+          AND INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=RANGE_OF_MOTION;')=0
           AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
             OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
             OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0)
@@ -269,12 +325,18 @@ interface WorkoutDao {
 
     @Query(
         """
-        WITH mappings AS (
+        WITH legacyMappings AS (
           SELECT workoutExerciseId,muscleId,role FROM workout_muscles
           UNION ALL
           SELECT we.id AS workoutExerciseId,em.muscleId,em.role FROM workout_exercises we
           JOIN exercise_muscles em ON em.exerciseId=we.actualExerciseId
           WHERE NOT EXISTS (SELECT 1 FROM workout_muscles wm WHERE wm.workoutExerciseId=we.id)
+        ), mappings AS (
+          SELECT s.id AS setId,m.muscleId,m.role FROM workout_sets s
+          JOIN workout_set_muscles m ON m.setId=s.id WHERE s.musclesSnapshotPresent=1
+          UNION ALL
+          SELECT s.id AS setId,m.muscleId,m.role FROM workout_sets s
+          JOIN legacyMappings m ON m.workoutExerciseId=s.workoutExerciseId WHERE s.musclesSnapshotPresent=0
         )
         SELECT w.id AS workoutId, w.finishedAt AS finishedAt, w.mode AS mode,
                COALESCE(NULLIF(we.exerciseName,''),e.canonicalName) AS exerciseName,
@@ -283,11 +345,14 @@ interface WorkoutDao {
         JOIN workout_exercises we ON we.workoutId = w.id
         JOIN workout_sets ws ON ws.workoutExerciseId = we.id
         JOIN exercises e ON e.id = we.actualExerciseId
-        JOIN mappings em ON em.workoutExerciseId = we.id
+        JOIN mappings em ON em.setId = ws.id
         WHERE w.status = 'FINISHED' AND w.finishedAt IS NOT NULL
           AND ws.setType = 'WORKING'
           AND ws.result = 'COMPLETED'
           AND ws.romValue IS NULL
+          AND ws.distanceValue IS NULL
+          AND INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=DISTANCE;')=0
+          AND INSTR(""" + SAVED_METRIC_CONFIG + """,';measurementMetric=RANGE_OF_MOTION;')=0
           AND (COALESCE(ws.reps, 0) > 0 OR COALESCE(ws.holdMillis, 0) > 0
             OR COALESCE(ws.leftReps, 0) > 0 OR COALESCE(ws.rightReps, 0) > 0
             OR COALESCE(ws.leftHoldMillis, 0) > 0 OR COALESCE(ws.rightHoldMillis, 0) > 0)
