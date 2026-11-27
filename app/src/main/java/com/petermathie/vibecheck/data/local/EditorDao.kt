@@ -23,6 +23,12 @@ interface EditorDao {
     @Query("SELECT * FROM exercise_reference_videos ORDER BY createdAt") fun referenceVideos(): Flow<List<ExerciseReferenceVideoEntity>>
     @Query("SELECT * FROM exercise_variations WHERE id=:id") suspend fun variationById(id: String): ExerciseVariationEntity?
     @Upsert suspend fun programme(row: ProgrammeEntity)
+    @Query("UPDATE programmes SET name=:name WHERE id=:id")
+    suspend fun renameProgramme(id: String, name: String): Int
+    @Query("UPDATE programmes SET colourArgb=:colour WHERE id=:id")
+    suspend fun setProgrammeColour(id: String, colour: Long): Int
+    @Query("UPDATE programmes SET isArchived=:archived WHERE id=:id")
+    suspend fun setProgrammeArchived(id: String, archived: Boolean): Int
     @Upsert suspend fun day(row: ProgrammeDayEntity)
     @Upsert suspend fun entry(row: ProgrammeExerciseEntity)
     @Upsert suspend fun exercise(row: ExerciseEntity)

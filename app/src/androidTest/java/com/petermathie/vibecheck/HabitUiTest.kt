@@ -29,9 +29,9 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.test.*
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.Root
@@ -47,6 +47,12 @@ import java.io.File
 import java.time.LocalDate
 import java.time.YearMonth
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.After
@@ -364,12 +370,12 @@ class HabitUiTest {
     }
 
     @Test(timeout = 120_000)
-    fun calendarInspectionKeepsDatesLeftAndMeasurementsRightWithoutMovingTheNextHabit() {
+    fun calendarSelectionSharesOneEditingDayWithoutABottomReadoutOrLayoutShift() {
         val today = LocalDate.of(2026, 11, 20)
         val history = listOf(18 to 20.0, 19 to 0.0).map { (day, value) ->
             TrackerDailyValueEntity(number.id, today.withDayOfMonth(day).toEpochDay(), value, null, null, "", 1)
         } + TrackerDailyValueEntity(number.id, today.withMonth(9).withDayOfMonth(30).toEpochDay(), 5.0, null, null, "", 1)
-        val state = HabitCalendarState("2026-11")
+        val state = HabitCalendarState("2026-11", today.toEpochDay())
         var expanded by mutableStateOf(true)
         compose.setContent {
             HabitFixture {
@@ -379,32 +385,11 @@ class HabitUiTest {
                 }
             }
         }
-        fun assertDateAndAlignment(date: LocalDate) {
-            compose.onNodeWithText(": ").assertDoesNotExist()
-            val dateNode = compose.onNodeWithTag("Habit entry date ${tracker.id}")
-            dateNode.assertTextEquals(habitCalendarDate(date))
-            val bounds = dateNode.getUnclippedBoundsInRoot()
-            val readout = compose.onNodeWithTag("Habit entry ${tracker.id}").getUnclippedBoundsInRoot()
-            val value = compose.onNodeWithTag("Habit entry value ${tracker.id}")
-            assertEquals(readout.left, bounds.left)
-            assertEquals(readout.right, value.getUnclippedBoundsInRoot().right)
-            assertTextEndsAtRight(value)
-            dateNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action ->
-                val layouts = mutableListOf<TextLayoutResult>()
-                assertTrue(action(layouts))
-                assertFalse(layouts.single().hasVisualOverflow)
-                assertEquals(FontFamily.Monospace, layouts.single().layoutInput.style.fontFamily)
-                assertEquals(0f, layouts.single().getLineLeft(0), 0.5f)
-            }
-        }
         listOf(true, false).forEach { month ->
-            compose.runOnIdle {
-                expanded = month
-                state.selectedDay = null
-                state.selectedWeekDay = null
-            }
-            val readout = compose.onNodeWithTag("Habit entry ${tracker.id}")
-            val reserved = readout.getUnclippedBoundsInRoot()
+            compose.runOnIdle { expanded = month }
+            compose.onNodeWithTag("Habit entry ${tracker.id}").assertDoesNotExist()
+            compose.onNodeWithTag("Habit entry date ${tracker.id}").assertDoesNotExist()
+            compose.onNodeWithTag("Habit entry value ${tracker.id}").assertDoesNotExist()
             val calendar = compose.onNodeWithTag("Habit calendar ${tracker.id}")
             val before = calendar.getUnclippedBoundsInRoot()
             val next = compose.onNodeWithTag("Next habit").getUnclippedBoundsInRoot()
@@ -412,14 +397,10 @@ class HabitUiTest {
                 compose.onNode(hasText(label) and hasAnyAncestor(hasTestTag("Habit calendar ${tracker.id}")))
                     .assertIsDisplayed()
             }
-            readout.onChildren().assertCountEquals(0)
             listOf(18 to "20 g", 19 to "0 g", 17 to "No entry").forEach { (day, entry) ->
                 val description = "${formatDisplayDate(today.withDayOfMonth(day))}: $entry"
                 compose.onNodeWithContentDescription(description).performClick().assertIsSelected()
-                compose.onNode(hasText(entry) and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}")))
-                    .assertIsDisplayed()
-                assertDateAndAlignment(today.withDayOfMonth(day))
-                assertEquals(reserved, readout.getUnclippedBoundsInRoot())
+                compose.runOnIdle { assertEquals(today.withDayOfMonth(day).toEpochDay(), state.selectedDay) }
                 assertEquals(before, calendar.getUnclippedBoundsInRoot())
                 assertEquals(next, compose.onNodeWithTag("Next habit").getUnclippedBoundsInRoot())
             }
@@ -429,42 +410,41 @@ class HabitUiTest {
             state.show(YearMonth.of(2026, 9))
         }
         compose.onNodeWithContentDescription("30th of September 2026: 5 g").performClick()
-        assertDateAndAlignment(today.withMonth(9).withDayOfMonth(30))
+        compose.runOnIdle { assertEquals(today.withMonth(9).withDayOfMonth(30).toEpochDay(), state.selectedDay) }
+        compose.runOnIdle { expanded = false }
+        compose.onNodeWithContentDescription("17th of November 2026: No entry").assertIsNotSelected()
+        compose.runOnIdle { expanded = true }
+        compose.onNodeWithContentDescription("30th of September 2026: 5 g").assertIsSelected()
         compose.runOnIdle { state.show(YearMonth.of(2026, 11)) }
         compose.onNodeWithContentDescription("1st of November 2026: No entry").performClick()
-        assertDateAndAlignment(today.withDayOfMonth(1))
+        compose.runOnIdle { assertEquals(today.withDayOfMonth(1).toEpochDay(), state.selectedDay) }
     }
 
     @Test(timeout = 120_000)
-    fun longCalendarNotesScrollInsideTheReservedReadoutAtLargeText() {
+    fun longHistoricalWrittenEntryLoadsIntoTheEditorAtLargeTextWithoutAReadout() {
         val today = LocalDate.of(2026, 11, 20)
         val field = number.copy(valueType = "TEXT", unit = null)
         val note = (1..12).joinToString("\n") { "Line $it of the complete recorded note." }
         val day = TrackerDailyValueEntity(field.id, today.toEpochDay(), null, null, note, "", 1)
-        val state = HabitCalendarState("2026-11")
+        createDatabase()
+        val vm = lifecycle.own(EditorViewModel(database))
+        val state = HabitCalendarState("2026-11", today.minusDays(1).toEpochDay())
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, 1.6f)) {
                 HabitFixture {
                     Column {
+                        HabitDailyInput(vm, field, day.takeIf { it.epochDay == state.selectedDay }, state.selectedDay, Color.Red)
                         HabitMonthHeatmap(tracker, field, listOf(day), today, state, true, {})
-                        Text("Next habit", Modifier.testTag("Next habit"))
                     }
                 }
             }
         }
-        val readout = compose.onNodeWithTag("Habit entry ${tracker.id}")
-        val before = readout.getUnclippedBoundsInRoot()
-        val next = compose.onNodeWithTag("Next habit").getUnclippedBoundsInRoot()
+        input(field.name).assertTextEquals("")
         compose.onNodeWithContentDescription("20th of November 2026: $note").performClick()
-        compose.onNode(hasText(note) and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}"))).assertExists()
-        val scrolling = compose.onNode(
-            hasScrollAction() and hasAnyAncestor(hasTestTag("Habit entry ${tracker.id}")),
-        )
-        scrolling.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(0f, 10_000f)) }
-        assertTrue(scrolling.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
-        assertEquals(before, readout.getUnclippedBoundsInRoot())
-        assertEquals(next, compose.onNodeWithTag("Next habit").getUnclippedBoundsInRoot())
+        input(field.name).assertTextContains(note)
+        compose.onNodeWithTag("Habit entry ${tracker.id}").assertDoesNotExist()
+        assertTrue(runBlocking { database.editorDao().values().first() }.isEmpty())
     }
 
     @Test(timeout = 120_000)
@@ -1048,6 +1028,155 @@ class HabitUiTest {
     }
 
     @Test(timeout = 120_000)
+    fun historicalSelectionLoadsEditsAndClearsOnlyThatDayAndAllowsDatesBeforeHistory() {
+        val today = LocalDate.now()
+        val month = YearMonth.from(today).minusMonths(1)
+        val recorded = month.atDay(10)
+        val row = TrackerDailyValueEntity(number.id, recorded.toEpochDay(), 25.0, null, null, "Legacy notes", 1)
+        val todayRow = row.copy(epochDay = today.toEpochDay(), numericValue = 9.0, notes = "")
+        launch(listOf(number), values = listOf(row, todayRow))
+        input("g").assertTextContains("9")
+        compose.onNodeWithContentDescription("Previous month for Wellbeing").performClick()
+        input("g").assertTextContains("9")
+        compose.onNodeWithContentDescription("${formatDisplayDate(recorded)}: 25 g").performClick()
+        input("g").assertTextContains("25")
+        compose.onNodeWithContentDescription("Editing Wellbeing for ${formatDisplayDate(recorded)}").assertExists()
+        compose.onNodeWithTag("Habit entry ${tracker.id}").assertDoesNotExist()
+        assertEquals(listOf(row, todayRow).sortedBy { it.epochDay },
+            runBlocking { database.editorDao().values().first() }.sortedBy { it.epochDay })
+        input("g").performTextReplacement("-3")
+        compose.onNodeWithText("Enter a number greater than or equal to zero").assertExists()
+        input("g").performTextReplacement("12.5")
+        awaitSaved { database.editorDao().values().first().single { it.epochDay == row.epochDay }.numericValue == 12.5 }
+        input("g").performTextReplacement("")
+        awaitSaved { database.editorDao().values().first().single { it.epochDay == row.epochDay }.numericValue == null }
+        assertEquals("Legacy notes", runBlocking {
+            database.editorDao().values().first().single { it.epochDay == row.epochDay }.notes
+        })
+        val empty = month.atDay(3)
+        compose.onNodeWithContentDescription("${formatDisplayDate(empty)}: No entry").performClick()
+        input("g").assertTextEquals("")
+        compose.onNodeWithContentDescription("Previous month for Wellbeing").performClick()
+        val earlier = month.minusMonths(1).atDay(3)
+        compose.onNodeWithContentDescription("${formatDisplayDate(earlier)}: No entry").performClick()
+        input("g").assertTextEquals("")
+        input("g").performTextReplacement("7")
+        awaitSaved { database.editorDao().values().first().any { it.epochDay == earlier.toEpochDay() && it.numericValue == 7.0 } }
+        compose.onNodeWithContentDescription("Next month for Wellbeing").performClick()
+        compose.onNodeWithContentDescription("${formatDisplayDate(recorded)}: No entry").performClick()
+        input("g").assertTextEquals("")
+        input("g").performTextReplacement("0")
+        awaitSaved { database.editorDao().values().first().single { it.epochDay == row.epochDay }.numericValue == 0.0 }
+        assertEquals(todayRow, runBlocking {
+            database.editorDao().values().first().single { it.epochDay == today.toEpochDay() }
+        })
+        assertTrue(runBlocking { database.editorDao().values().first() }.none { it.epochDay == empty.toEpochDay() })
+        compose.onNodeWithText(tracker.name).performClick()
+        input("g").assertTextContains("0")
+        compose.onNodeWithContentDescription("Editing Wellbeing for ${formatDisplayDate(recorded)}").assertExists()
+        compose.onNodeWithText(tracker.name).performClick()
+        compose.onNodeWithContentDescription("${formatDisplayDate(recorded)}: 0 g").assertIsSelected()
+    }
+
+    @Test(timeout = 120_000)
+    fun queuedEditsStayPinnedToTheirFieldAndDayWhenSelectionChangesRapidly() {
+        val month = YearMonth.from(LocalDate.now()).minusMonths(1)
+        val firstDay = month.atDay(10)
+        val nextDay = month.atDay(17)
+        val first = TrackerDailyValueEntity(number.id, firstDay.toEpochDay(), 10.0, null, null, "", 1)
+        val next = first.copy(epochDay = nextDay.toEpochDay(), numericValue = 20.0)
+        launch(listOf(number), values = listOf(first, next))
+        val other = tracker.copy(id = "other", name = "Other", position = 1)
+        val otherField = number.copy(id = "other-field", trackerId = other.id)
+        val otherValue = first.copy(fieldId = otherField.id, numericValue = 99.0)
+        runBlocking {
+            database.trackerDao().insertTrackers(listOf(other))
+            database.trackerDao().insertFields(listOf(otherField))
+            database.trackerDao().upsertValue(otherValue)
+        }
+        awaitHabit(other.name)
+        compose.onNodeWithContentDescription("Previous month for Wellbeing").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("${formatDisplayDate(firstDay)}: 10 g").performClick()
+        val release = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val blocker = scope.launch {
+            database.withTransaction { started.complete(Unit); release.await() }
+        }
+        try {
+            runBlocking { started.await() }
+            val fieldInput = compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("Habit editing target ${tracker.id}")))
+            fieldInput.performTextReplacement("41")
+            compose.onNodeWithContentDescription("${formatDisplayDate(nextDay)}: 20 g").performClick()
+            fieldInput.assertTextContains("20")
+            fieldInput.performTextReplacement("42")
+            compose.onNodeWithContentDescription("${formatDisplayDate(firstDay)}: 10 g").performClick()
+            fieldInput.performTextReplacement("-3")
+            compose.onNodeWithContentDescription("${formatDisplayDate(nextDay)}: 20 g").performClick()
+            fieldInput.assertTextContains("20")
+        } finally {
+            release.complete(Unit)
+            runBlocking { blocker.join() }
+            scope.cancel()
+        }
+        awaitSaved {
+            val saved = database.editorDao().values().first()
+            saved.single { it.epochDay == first.epochDay && it.fieldId == number.id }.numericValue == 41.0 &&
+                saved.single { it.epochDay == next.epochDay && it.fieldId == number.id }.numericValue == 42.0
+        }
+        val saved = runBlocking { database.editorDao().values().first() }
+        assertEquals(otherValue, saved.single { it.fieldId == otherField.id })
+        assertEquals(3, saved.size)
+    }
+
+    @Test(timeout = 120_000)
+    fun emptyBooleanAndChoiceHabitsCanRecordAndClearHistoricalDays() {
+        val today = LocalDate.now()
+        val month = YearMonth.from(today).minusMonths(2)
+        val date = month.atDay(8)
+        val boolean = number.copy(name = "Done", valueType = "BOOLEAN", unit = null)
+        val mood = tracker.copy(id = "mood", name = "Mood", position = 1)
+        val choice = number.copy(
+            id = "feeling", trackerId = mood.id, name = "Feeling", valueType = "CHOICE", unit = null,
+            choiceOptions = "Sad\nHappy", choiceLightThrough = 0, choiceDarkFrom = 1,
+        )
+        createDatabase()
+        runBlocking {
+            database.trackerDao().insertTrackers(listOf(tracker, mood))
+            database.trackerDao().insertFields(listOf(boolean, choice))
+        }
+        val vm = lifecycle.own(EditorViewModel(database))
+        compose.setContent { HabitFixture { TrackerScreen(vm, fixturePreferences) } }
+        awaitHabit()
+        repeat(2) { compose.onNodeWithContentDescription("Previous month for Wellbeing").performScrollTo().performClick() }
+        compose.onNode(
+            hasContentDescription("${formatDisplayDate(date)}: No entry") and
+                hasAnyAncestor(hasTestTag("Habit calendar ${tracker.id}")),
+        ).performScrollTo().performClick()
+        compose.onNodeWithContentDescription(boolean.name).performScrollTo().performClick()
+        awaitSaved { database.editorDao().values().first().singleOrNull()?.booleanValue == true }
+        assertEquals(date.toEpochDay(), runBlocking { database.editorDao().values().first().single().epochDay })
+        compose.onNodeWithContentDescription(boolean.name).performClick()
+        awaitSaved { database.editorDao().values().first().singleOrNull()?.booleanValue == false }
+        compose.onNodeWithContentDescription("Clear Done entry").performClick()
+        awaitSaved { database.editorDao().values().first().isEmpty() }
+        repeat(2) { compose.onNodeWithContentDescription("Previous month for Mood").performScrollTo().performClick() }
+        compose.onNode(
+            hasContentDescription("${formatDisplayDate(date)}: No entry") and
+                hasAnyAncestor(hasTestTag("Habit calendar ${mood.id}")),
+        ).performScrollTo().performClick()
+        button("Feeling: Choose...").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Happy, dark shade").performClick()
+        awaitSaved { database.editorDao().values().first().singleOrNull()?.textValue == "Happy" }
+        val saved = runBlocking { database.editorDao().values().first().single() }
+        assertEquals(choice.id, saved.fieldId)
+        assertEquals(date.toEpochDay(), saved.epochDay)
+        assertEquals("DARK", saved.choiceIntensity)
+        compose.onNodeWithContentDescription("Clear Feeling entry").performScrollTo().performClick()
+        awaitSaved { database.editorDao().values().first().isEmpty() }
+    }
+
+    @Test(timeout = 120_000)
     fun existingHabitOffersOnlyFirstMeasurementAndPreservesExtraHistory() {
         val extra = number.copy(id = "extra", name = "Repetitions", unit = "reps", position = 1)
         val old = TrackerDailyValueEntity(extra.id, LocalDate.now().minusDays(1).toEpochDay(), 7.0, null, null, "", 1)
@@ -1067,7 +1196,7 @@ class HabitUiTest {
     }
 
     @Test(timeout = 120_000)
-    fun calendarSwipesRespectRecordedRangeWithoutChangingEntryDateOrHistory() {
+    fun calendarSwipesBrowseBeforeHistoryWithoutChangingTheEditingTargetOrWriting() {
         val today = LocalDate.now()
         val current = YearMonth.from(today)
         val first = current.minusMonths(2)
@@ -1099,21 +1228,25 @@ class HabitUiTest {
         fun swipeForward() = compose.onNodeWithTag("Habit calendar ${tracker.id}")
             .performTouchInput { swipeRight() }
         compose.onNodeWithContentDescription("Next month for Wellbeing").assertIsNotEnabled()
-        compose.onNodeWithContentDescription("Previous month for Reading").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Previous month for Reading").assertIsEnabled()
         compose.onNodeWithContentDescription("Next month for Reading").assertIsNotEnabled()
         swipeBack()
         assertMonth(current.minusMonths(1))
         swipeBack()
         assertMonth(first)
-        compose.onNodeWithContentDescription("Previous month for Wellbeing").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Previous month for Wellbeing").assertIsEnabled()
         swipeBack()
+        assertMonth(first.minusMonths(1))
+        compose.onNodeWithContentDescription("Editing Wellbeing for ${formatDisplayDate(today)}").assertExists()
+        swipeForward()
         assertMonth(first)
         val firstEntry = "${formatDisplayDate(first.atDay(1))}: 10 g"
         compose.onNodeWithContentDescription(firstEntry).performTouchInput { click() }.assertIsSelected()
-        compose.onNodeWithTag("Habit entry date ${tracker.id}")
-            .assertTextEquals(habitCalendarDate(first.atDay(1))).assertIsDisplayed()
-        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertTextEquals("10 g").assertIsDisplayed()
-        captureFixture("habits-calendar-swipe-oldest")
+        compose.onNodeWithContentDescription("Editing Wellbeing for ${formatDisplayDate(first.atDay(1))}").assertExists()
+        compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("Habit editing target ${tracker.id}")))
+            .assertTextContains("10")
+        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertDoesNotExist()
+        captureFixture("habits-calendar-swipe-historical")
         swipeForward()
         assertMonth(current.minusMonths(1))
         swipeForward()
@@ -1129,18 +1262,17 @@ class HabitUiTest {
         assertEquals(history.sortedBy { it.epochDay },
             runBlocking { database.editorDao().values().first() }.sortedBy { it.epochDay })
         val entry = compose.onNode(
-            hasText("g") and hasSetTextAction() and
-                hasAnySibling(hasTestTag("Habit calendar ${tracker.id}")),
+            hasSetTextAction() and hasAnyAncestor(hasTestTag("Habit editing target ${tracker.id}")),
         )
         entry.performScrollTo()
         swipeBack()
         entry.performScrollTo().performTextReplacement("12.5")
         awaitSaved {
-            database.editorDao().values().first().singleOrNull { it.epochDay == today.toEpochDay() }?.numericValue == 12.5
+            database.editorDao().values().first().singleOrNull { it.epochDay == first.atDay(1).toEpochDay() }?.numericValue == 12.5
         }
         assertMonth(current.minusMonths(1))
-        assertEquals(history.sortedBy { it.epochDay },
-            runBlocking { database.editorDao().values().first() }.filterNot { it.epochDay == today.toEpochDay() }.sortedBy { it.epochDay })
+        assertEquals(history.drop(1),
+            runBlocking { database.editorDao().values().first() }.filterNot { it.epochDay == first.atDay(1).toEpochDay() })
     }
 
     @Test(timeout = 120_000)
@@ -1276,8 +1408,8 @@ class HabitUiTest {
         input("g").performTextReplacement("8.5")
         awaitSaved { database.editorDao().values().first().singleOrNull()?.numericValue == 8.5 }
         val title = compose.onNodeWithContentDescription(names.last()).getUnclippedBoundsInRoot()
-        val field = input("g").getUnclippedBoundsInRoot()
-        assertEquals((title.top + title.bottom).value / 2, (field.top + field.bottom).value / 2, 1f)
+        val entry = compose.onNodeWithTag("Habit editing target ${habit.id}").getUnclippedBoundsInRoot()
+        assertEquals((title.top + title.bottom).value / 2, (entry.top + entry.bottom).value / 2, 1f)
         assertEquals(names.last(), runBlocking { database.editorDao().trackers().first().single().name })
         assertEquals(number, runBlocking { database.editorDao().fields().first().single() })
     }

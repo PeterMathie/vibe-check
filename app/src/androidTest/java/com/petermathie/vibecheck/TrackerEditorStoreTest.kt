@@ -81,6 +81,25 @@ class TrackerEditorStoreTest {
     }
 
     @Test
+    fun editingAndClearingHistoricalMeasurementPreservesNotesAndOtherDays() = runBlocking {
+        store.saveEditor(TrackerEntity("tracker", "Practice", false), listOf(field("field", 0)), true)
+        val historical = TrackerDailyValueEntity("field", -1000, 7.0, null, null, "Legacy notes", 1)
+        val other = historical.copy(epochDay = 20, numericValue = 12.0, notes = "Other day")
+        database.trackerDao().upsertValue(historical)
+        database.trackerDao().upsertValue(other)
+        store.saveValue(historical.copy(numericValue = 8.0, notes = "", updatedAt = 2))
+        assertEquals(historical.copy(numericValue = 8.0, updatedAt = 2),
+            database.editorDao().values().first().single { it.epochDay == -1000L })
+        store.clearValue("field", -1000)
+        val cleared = database.editorDao().values().first().single { it.epochDay == -1000L }
+        assertEquals("Legacy notes", cleared.notes)
+        assertEquals(null, cleared.numericValue)
+        assertEquals(other, database.editorDao().values().first().single { it.epochDay == 20L })
+        store.saveValue(historical.copy(numericValue = 9.0, notes = "", updatedAt = 3))
+        assertEquals("Legacy notes", database.editorDao().values().first().single { it.epochDay == -1000L }.notes)
+    }
+
+    @Test
     fun fullCreationPersistsChosenMeasurementAndHeatmapWithoutExtraDefault() = runBlocking {
         val tracker = TrackerEntity("tracker", "Protein", false, heatmapFieldId = "grams", heatmapMode = "GOAL")
         val grams = field("grams", 0).copy(unit = "g", targetComparison = "AT_LEAST", targetValue = 120.0)

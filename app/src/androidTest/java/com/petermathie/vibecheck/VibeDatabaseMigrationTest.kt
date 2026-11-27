@@ -19,6 +19,8 @@ import com.petermathie.vibecheck.data.local.MIGRATION_14_15
 import com.petermathie.vibecheck.data.local.MIGRATION_15_16
 import com.petermathie.vibecheck.data.local.MIGRATION_16_17
 import com.petermathie.vibecheck.data.local.MIGRATION_17_18
+import com.petermathie.vibecheck.data.local.MIGRATION_18_19
+import com.petermathie.vibecheck.domain.model.programmeColour
 import com.petermathie.vibecheck.data.local.VibeDatabase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -38,6 +40,38 @@ class VibeDatabaseMigrationTest {
         InstrumentationRegistry.getInstrumentation(),
         VibeDatabase::class.java,
     )
+
+    @Test
+    fun migrate18To19AssignsProgrammeColoursWithoutChangingDaysOrHistory() {
+        helper.createDatabase(databaseName, 18).apply {
+            execSQL("INSERT INTO programmes (id,name,mode,isDemo,isArchived,position) VALUES ('plan','Legacy plan','STRENGTH',0,0,3)")
+            execSQL("INSERT INTO programme_days (id,programmeId,name,position) VALUES ('day','plan','Day',2)")
+            execSQL("INSERT INTO workouts (id,programmeDayId,name,mode,status,startedAt,finishedAt,notes,bodyweightKg,isDemo) VALUES ('history','day','Recorded name','STRENGTH','FINISHED',1,2,'Keep history',80,0)")
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 19, true, MIGRATION_18_19).use { migrated ->
+            migrated.query("SELECT name,position,colourArgb FROM programmes WHERE id='plan'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Legacy plan", it.getString(0))
+                assertEquals(3, it.getInt(1))
+                assertEquals(programmeColour("plan"), it.getLong(2))
+            }
+            migrated.query("SELECT programmeId,name,position FROM programme_days WHERE id='day'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("plan", it.getString(0))
+                assertEquals("Day", it.getString(1))
+                assertEquals(2, it.getInt(2))
+            }
+            migrated.query("SELECT name,startedAt,finishedAt,notes,bodyweightKg FROM workouts WHERE id='history'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals("Recorded name", it.getString(0))
+                assertEquals(1L, it.getLong(1))
+                assertEquals(2L, it.getLong(2))
+                assertEquals("Keep history", it.getString(3))
+                assertEquals(80.0, it.getDouble(4), 0.0)
+            }
+        }
+    }
 
     @Test
     fun migrate17To18RetainsBodyweightValuesUnitsAndLegacyNotes() {

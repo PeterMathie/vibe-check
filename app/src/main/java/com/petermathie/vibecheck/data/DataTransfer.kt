@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck.data
 
 import com.petermathie.vibecheck.data.local.VibeDatabase
+import com.petermathie.vibecheck.domain.model.programmeColour
 import com.petermathie.vibecheck.domain.tracker.decodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.encodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoices
@@ -57,6 +58,13 @@ object DataTransfer {
                 val seen=mutableSetOf<List<Any>>()
                 repeat(rows.length()) { i ->
                     val row=rows.getJSONObject(i)
+                    if (table == "programmes" && !row.has("colourArgb")) {
+                        val id = row.getString("id")
+                        val colour = sql.query("SELECT colourArgb FROM programmes WHERE id=?", arrayOf(id)).use {
+                            if (it.moveToFirst()) it.getLong(0) else programmeColour(id)
+                        }
+                        row.put("colourArgb", colour)
+                    }
                     if (table == "body_measurements" && !row.has("isWeightCleared")) row.put("isWeightCleared", 0)
                     if (table == "trackers") {
                         if (!row.has("heatmapFieldId")) row.put("heatmapFieldId", JSONObject.NULL)

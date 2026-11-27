@@ -95,8 +95,29 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                 }
             }
         }
-    fun save(row: ProgrammeEntity) = write { dao.programme(row) }
-    fun createProgramme(row: ProgrammeEntity, day: ProgrammeDayEntity, onCreated: () -> Unit = {}) = write(onCreated) {
+    fun save(row: ProgrammeEntity) = write {
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid programme colour" }
+        dao.programme(row)
+    }
+    fun renameProgramme(id: String, name: String) = write {
+        require(name.isNotBlank()) { "Programme name cannot be blank" }
+        require(dao.renameProgramme(id, name.trim()) == 1) { "Programme no longer exists" }
+    }
+    fun setProgrammeColour(id: String, colour: Long) = write {
+        require(colour in 0..0xFFFFFFFFL) { "Invalid programme colour" }
+        require(dao.setProgrammeColour(id, colour) == 1) { "Programme no longer exists" }
+    }
+    fun archiveProgramme(id: String) = write {
+        require(dao.setProgrammeArchived(id, true) == 1) { "Programme no longer exists" }
+    }
+    fun createProgramme(
+        row: ProgrammeEntity,
+        day: ProgrammeDayEntity,
+        onFailure: () -> Unit = {},
+        onCreated: () -> Unit = {},
+    ) = write(onCreated, onFailure) {
+        require(row.name.isNotBlank()) { "Programme name cannot be blank" }
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid programme colour" }
         db.withTransaction {
             dao.programme(row)
             dao.day(day)

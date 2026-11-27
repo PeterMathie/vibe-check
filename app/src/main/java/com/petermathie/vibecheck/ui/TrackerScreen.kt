@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -33,6 +34,9 @@ import com.petermathie.vibecheck.domain.tracker.habitMeasurement
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import kotlin.random.Random
 
 internal const val COLLAPSED_HABITS = "collapsedHabits"
@@ -136,7 +140,6 @@ fun TrackerScreen(
         mutableStateOf(preferences.getStringSet(COLLAPSED_HABITS, emptySet()).orEmpty().toSet())
     }
     val today = LocalDate.now()
-    val epoch = today.toEpochDay()
     var editor by remember { mutableStateOf<HabitEditorSeed?>(null) }
     var deleteCandidate by remember { mutableStateOf<TrackerEntity?>(null) }
     val trackers = data?.trackers.orEmpty()
@@ -170,7 +173,7 @@ fun TrackerScreen(
                 itemsIndexed(order.ordered(active) { it.id }, key = { _, tracker -> tracker.id }) { index, tracker ->
                     val trackerFields = fields.filter { it.trackerId == tracker.id }
                     val calendarState = rememberSaveable(tracker.id, saver = HabitCalendarState.Saver) {
-                        HabitCalendarState(YearMonth.from(today).toString())
+                        HabitCalendarState(YearMonth.from(today).toString(), today.toEpochDay())
                     }
                     val expanded = tracker.id !in collapsedIds
                     val glowOrigin = remember(tracker.id) {
@@ -223,10 +226,25 @@ fun TrackerScreen(
                                 },
                             ) {
                                 if (field != null) {
-                                    HabitDailyInput(
-                                        vm, field, values.find { it.fieldId == field.id && it.epochDay == epoch },
-                                        epoch, Color(tracker.colourArgb.toInt()),
-                                    )
+                                    val day = minOf(calendarState.selectedDay, today.toEpochDay())
+                                    val date = LocalDate.ofEpochDay(day)
+                                    Column(
+                                        Modifier.fillMaxWidth().testTag("Habit editing target ${tracker.id}"),
+                                        horizontalAlignment = Alignment.End,
+                                    ) {
+                                        Text(
+                                            date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault())),
+                                            Modifier.semantics {
+                                                contentDescription = "Editing ${tracker.name} for ${formatDisplayDate(date)}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = palette.textSecondary,
+                                        )
+                                        HabitDailyInput(
+                                            vm, field, values.find { it.fieldId == field.id && it.epochDay == day },
+                                            day, Color(tracker.colourArgb.toInt()),
+                                        )
+                                    }
                                 }
                             }
                             HabitMonthHeatmap(

@@ -69,6 +69,7 @@ internal object ImportValidation {
         oneOf("heatmapMode", setOf("RELATIVE", "GOAL"))
         range("rpe", 0.0, 10.0)
         range("targetRpe", 0.0, 10.0)
+        if (table == "programmes") range("colourArgb", 0.0, 4_294_967_295.0)
         if (table == "body_measurements") {
             require(row.getInt("isWeightCleared") == 0 || row.getString("metric").equals("Bodyweight", ignoreCase = true)) {
                 "Only bodyweight measurements can have a cleared weight"

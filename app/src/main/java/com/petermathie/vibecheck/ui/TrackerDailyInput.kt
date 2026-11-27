@@ -56,7 +56,7 @@ internal fun HabitDailyInput(
                     modifier = Modifier.semantics { contentDescription = field.name },
                 )
                 Text(field.name, Modifier.weight(1f, fill = false), textAlign = TextAlign.End)
-                if (value != null) ClearHabitEntry(field.name) { epoch?.let { vm.clearValue(field.id, it) } }
+                if (value?.booleanValue != null) ClearHabitEntry(field.name) { epoch?.let { vm.clearValue(field.id, it) } }
             }
             "CHOICE" -> ChoiceInput(
                 field.name, decodeHabitChoices(field), value?.choiceOptionId, value?.textValue.orEmpty(),

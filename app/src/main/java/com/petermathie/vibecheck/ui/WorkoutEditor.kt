@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -57,6 +56,7 @@ import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -111,6 +111,8 @@ fun WorkoutEditor(
     val entryDrafts = loggingData?.drafts.orEmpty()
     val definitions = loggingData?.definitions.orEmpty()
     val measurements by vm.measurements.collectAsStateWithLifecycle()
+    val programmeDays by vm.days.collectAsStateWithLifecycle()
+    val programmes by vm.programmes.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val loggingPreferences = remember(context) { context.getSharedPreferences("workout_logging", 0) }
     val settings = remember(context) { context.getSharedPreferences("settings", 0) }
@@ -134,6 +136,9 @@ fun WorkoutEditor(
     var restRemaining by remember { mutableStateOf(0L) }
     LaunchedEffect(Unit) { while(true) { restRemaining=(context.getSharedPreferences("settings",0).getLong("restEnd",0)-System.currentTimeMillis()).coerceAtLeast(0)/1000;kotlinx.coroutines.delay(500) } }
     val workout = workouts.find { it.id == workoutId }
+    val programmeId = programmeDays.find { it.id == workout?.programmeDayId }?.programmeId
+    val sectionColour = programmes.find { it.id == programmeId }?.let { Color(it.colourArgb.toInt()) }
+        ?: LocalVibePalette.current.accent
     var add by remember { mutableStateOf(false) }
     var editDate by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -285,8 +290,10 @@ fun WorkoutEditor(
             editedSetIds.removeAll(observedDrafts.remove(row.id).orEmpty().map { it.setId }.toSet())
         }.join()
     }
+    val palette = LocalVibePalette.current
+    HabitGlassDialogHost { backdrop, _ ->
     CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
-    Box(Modifier.fillMaxSize().imePadding()) {
+    Box(Modifier.fillMaxSize().imePadding().then(backdrop)) {
     LazyColumn(
         Modifier
             .fillMaxSize()
@@ -305,7 +312,10 @@ fun WorkoutEditor(
     ) {
         item {
             Text(workout.name, style = MaterialTheme.typography.headlineSmall)
-            if (logged.isNotEmpty()) Text("Logged duration: ${((logged.maxOf { it.loggedAt } - logged.minOf { it.loggedAt }) / 60000)} min")
+            if (logged.isNotEmpty()) Text(
+                "Logged duration: ${((logged.maxOf { it.loggedAt } - logged.minOf { it.loggedAt }) / 60000)} min",
+                style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
+            )
             if(workout.status=="FINISHED") VibeActionButton("Change workout date", { editDate=true }, importance = ActionImportance.COMPACT)
         }
         rows.forEachIndexed { index, row ->
@@ -328,21 +338,18 @@ fun WorkoutEditor(
                     state = exerciseSwipeStates.getOrPut(row.id) { StagedSwipeState() },
                 ) {
                     Surface(
-                        color = LocalVibePalette.current.surface,
-                        contentColor = LocalVibePalette.current.textPrimary,
+                        color = Color.Transparent,
+                        contentColor = palette.textPrimary,
                         shape = MaterialTheme.shapes.medium,
                         modifier = Modifier.fillMaxWidth()
-                            .border(1.dp, LocalVibePalette.current.textSecondary.copy(alpha = 0.18f), MaterialTheme.shapes.medium)
+                            .habitGlow(sectionColour, palette.isDark)
                             .panelToggle("Exercise $name", !collapsed) { collapsedRows[row.id] = !collapsed },
                     ) {
                         Column {
-                            ExerciseHeading(name, !collapsed, { collapsedRows[row.id] = !collapsed }) {
-                                if (rows.size > 1) ReorderHandle(
-                                    exerciseOrder, row.id, name,
-                                    modifier = Modifier.pointerInput(row.id) {
-                                        detectTapGestures(onTap = {})
-                                    },
-                                )
+                            ReorderHandle(
+                                exerciseOrder, row.id, name, enabled = rows.size > 1, longPress = true,
+                            ) {
+                                ExerciseHeading(name, !collapsed, { collapsedRows[row.id] = !collapsed })
                             }
                             if (!collapsed) WorkoutExerciseCard(
                                 vm,
@@ -401,7 +408,7 @@ fun WorkoutEditor(
                     set.romValue,
                 ).any { (it ?: 0.0) > 0.0 }
             }
-            OutlinedButton(
+            TextButton(
                 onClick = { add = true },
                 enabled = !add && !editDate && !confirmDelete,
                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Add exercise to workout" },
@@ -417,10 +424,10 @@ fun WorkoutEditor(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MaterialTheme.shapes.medium,
             ) { Text(if (workout.status == "FINISHED") "Done editing" else "Finish workout") }
-            OutlinedButton(
+            TextButton(
                 onClick = { confirmDelete = true },
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 shape = MaterialTheme.shapes.medium,
             ) {
                 Icon(Icons.Outlined.Delete, contentDescription = null)
@@ -455,8 +462,10 @@ fun WorkoutEditor(
                 { removeExercise(stickyRow) },
                 state = exerciseSwipeStates.getOrPut(stickyRow.id) { StagedSwipeState() },
             ) {
-                Surface(color = MaterialTheme.colorScheme.surface) {
-                    ExerciseHeading(name, expanded, { collapsedRows[stickyRow.id] = expanded }, pinned = true)
+                Surface(color = palette.background, contentColor = palette.textPrimary) {
+                    Box(Modifier.habitGlow(palette.accent, palette.isDark)) {
+                        ExerciseHeading(name, expanded, { collapsedRows[stickyRow.id] = expanded }, pinned = true)
+                    }
                 }
             }
         }
@@ -474,7 +483,7 @@ fun WorkoutEditor(
     }
     }
     }
-    if(editDate)NameDialog("Workout date (YYYY-MM-DD)",Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),{editDate=false}) { value ->
+    if(editDate)NameDialog("Workout date (YYYY-MM-DD)",Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),{editDate=false}, glass = true) { value ->
         runCatching { java.time.LocalDate.parse(value) }.getOrNull()?.let { date ->
             val old=Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(ZoneId.systemDefault())
             val end=date.atTime(old.toLocalTime()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -482,14 +491,11 @@ fun WorkoutEditor(
         }
     }
     if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete workout?") },
-            text = { Text("Are you sure you want to delete “${workout.name}”? This cannot be undone.") },
-            dismissButton = {
+        HabitGlassDialog(
+            onDismiss = { confirmDelete = false },
+            title = "Delete workout?",
+            actions = {
                 TextButton(onClick = { confirmDelete = false }) { Text("No") }
-            },
-            confirmButton = {
                 TextButton(
                     onClick = {
                         confirmDelete = false
@@ -501,9 +507,12 @@ fun WorkoutEditor(
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                 ) { Text("Yes, delete") }
             },
-        )
+        ) {
+            Text("Are you sure you want to delete “${workout.name}”? This cannot be undone.")
+        }
     }
     if (add) ExercisePicker(vm, { add = false }) { e -> vm.save(WorkoutExerciseEntity(newId(), workout.id, e.id, e.id, rows.size, "", 120, null)); add = false }
+    }
 }
 private fun Modifier.panelToggle(label: String, expanded: Boolean, toggle: () -> Unit): Modifier =
     pointerInput(label, expanded) { detectTapGestures { toggle() } }
@@ -520,17 +529,15 @@ private fun ExerciseHeading(
     expanded: Boolean,
     toggle: () -> Unit,
     pinned: Boolean = false,
-    reorderHandle: @Composable (() -> Unit)? = null,
 ) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
             name,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                 .panelToggle("${if (pinned) "Pinned exercise" else "Exercise"} heading for $name", expanded, toggle)
                 .padding(12.dp),
         )
-        reorderHandle?.invoke()
     }
 }
 
@@ -688,8 +695,8 @@ private fun WorkoutExerciseCard(
     Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         row.targets.takeIf {
             it.isNotBlank() && !it.trim().matches(Regex("\\d+\\s+sets?", RegexOption.IGNORE_CASE))
-        }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        row.supersetGroup?.let { Text("Circuit: $it · rest after round", style = MaterialTheme.typography.labelSmall) }
+        }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = LocalVibePalette.current.textSecondary) }
+        row.supersetGroup?.let { Text("Circuit: $it · rest after round", style = MaterialTheme.typography.labelSmall, color = LocalVibePalette.current.textSecondary) }
         repeat(visibleRows) { index ->
             val ordinal = index + 1
             val draft = draftAt(ordinal)
@@ -714,7 +721,10 @@ private fun WorkoutExerciseCard(
                     availableBands)
             }
             val palette = LocalVibePalette.current
-            val fill = if (isActive) palette.surfaceRaised else palette.surface
+            val fill = when {
+                isActive -> palette.surfaceSelected
+                else -> Color.Transparent
+            }
             val density = LocalDensity.current
             key(draft.setId) {
             var confirming by remember { mutableStateOf(false) }
@@ -749,8 +759,12 @@ private fun WorkoutExerciseCard(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
                     .onFocusChanged { if (it.hasFocus) activateSet(draft) }
                     .focusGroup()
-                    .border(1.dp, if (isLocked) palette.accent else palette.textSecondary.copy(alpha = if (isActive) 0.4f else 0.28f),
-                        MaterialTheme.shapes.medium)
+                    .drawBehind {
+                        if (ordinal > 1) drawLine(
+                            palette.border.copy(alpha = 0.3f),
+                            Offset(0f, 0f), Offset(size.width, 0f), 1.dp.toPx(),
+                        )
+                    }
                     .pointerInput(isExpanded) {
                         detectTapGestures {
                             activateSet(draft)
@@ -788,7 +802,7 @@ private fun WorkoutExerciseCard(
                 }
                 WorkoutSetTile(
                     identity = identity,
-                    showResistance = resistanceMetric != ResistanceMetric.BODYWEIGHT,
+                    showResistance = resistanceMetric != null && resistanceMetric != ResistanceMetric.BODYWEIGHT,
                     minimumMeasurementWidth = measurementMinimumWidth(measurementMetric),
                     resistanceLayout = SetGroupLayout(large = resistanceMetric == ResistanceMetric.BANDS),
                     measurementLayout = SetGroupLayout(large = measurementMetric == MeasurementMetric.SKILL_HOLD),
@@ -819,7 +833,7 @@ private fun WorkoutExerciseCard(
                     },
                     rpe = {
                         var rpeFocused by remember { mutableStateOf(false) }
-                        val badgeFill = if (isLocked) fill else metricFieldFill(draft.rpe, rpeFocused).compositeOver(fill)
+                        val badgeFill = if (isLocked) fill else metricFieldFill(rpeFocused).compositeOver(fill)
                         Box {
                             MetricValue(
                                 draft.rpe, "", "RPE for $identity",
@@ -915,8 +929,8 @@ private fun WorkoutExerciseCard(
                             enabled = draftLoaded,
                             showName = ordinal == 1 || draftAt(ordinal - 1).variationId != draft.variationId ||
                                 variantNameFor(draftAt(ordinal - 1)) != variantName,
-                            backgroundColor = fill,
-                            parentBackgroundColor = palette.surface,
+                            backgroundColor = fill.compositeOver(palette.background),
+                            parentBackgroundColor = palette.background,
                             onSelect = { option ->
                                 variantDrafts = variantDrafts + (
                                     variantDraftKey(draft.setId, draft.variationId) to encodeVariantDraft(
@@ -942,10 +956,10 @@ private fun WorkoutExerciseCard(
                             it, style = MaterialTheme.typography.labelSmall.copy(
                                 fontSize = 9.sp, lineHeight = 11.sp, fontFeatureSettings = "tnum",
                             ),
-                            color = palette.textPrimary,
+                            color = palette.textSecondary,
                             textAlign = TextAlign.End,
                             modifier = Modifier.weight(2f, fill = false)
-                                .setBorderLabelBackground(palette.surface, fill).padding(horizontal = 2.dp)
+                                .setBorderLabelBackground(palette.background, fill.compositeOver(palette.background)).padding(horizontal = 2.dp)
                                 .semantics { contentDescription = "Previous result for $identity" },
                         )
                     }
@@ -990,14 +1004,29 @@ private fun WorkoutExerciseCard(
                 Text(if (notesOpen) "Hide notes" else "Notes")
             }
         }
-        if (notesOpen) OutlinedTextField(notes, { notes = it; vm.save(row.copy(notes = it)) }, label = { Text("Exercise notes") }, modifier = Modifier.fillMaxWidth())
+        if (notesOpen) TextField(
+            notes, { notes = it; vm.save(row.copy(notes = it)) },
+            label = { Text("Exercise notes") }, modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.small, colors = programmeFieldColors(),
+        )
     }
-    if (rpeHelpOpen) RpeInformationDialog { rpeHelpOpen = false }
+    if (rpeHelpOpen) RpeInformationDialog(glass = true) { rpeHelpOpen = false }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RpeInformationDialog(onDismiss: () -> Unit) {
+internal fun RpeInformationDialog(glass: Boolean = false, onDismiss: () -> Unit) {
+    if (glass) {
+        HabitGlassDialog(title = "RPE / RIR", onDismiss = onDismiss) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("RPE", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                Text("RIR", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+            }
+            HorizontalDivider(color = LocalVibePalette.current.border.copy(alpha = 0.3f))
+            RpeScaleRows()
+        }
+        return
+    }
     BasicAlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(240.dp),
@@ -1027,21 +1056,26 @@ internal fun RpeInformationDialog(onDismiss: () -> Unit) {
                     }
                 }
                 HorizontalDivider()
-                listOf(
-                    "10" to "0",
-                    "9" to "~1",
-                    "8" to "~2",
-                    "7" to "~3",
-                    "6" to "~4",
-                    "5" to "5+",
-                    "0-4" to "Many",
-                ).forEach { (level, reserve) ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text(level, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                        Text(reserve, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                RpeScaleRows()
             }
+        }
+    }
+}
+
+@Composable
+private fun RpeScaleRows() {
+    listOf(
+        "10" to "0",
+        "9" to "~1",
+        "8" to "~2",
+        "7" to "~3",
+        "6" to "~4",
+        "5" to "5+",
+        "0-4" to "Many",
+    ).forEach { (level, reserve) ->
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(level, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(reserve, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -1091,13 +1125,8 @@ private fun SetIconButton(
 }
 
 @Composable
-private fun metricFieldFill(value: String, focused: Boolean) = with(LocalVibePalette.current) {
-    when {
-        focused -> surfaceSelected
-        value.isEmpty() -> surfaceInset
-        else -> textPrimary.copy(alpha = 0.07f)
-    }
-}
+private fun metricFieldFill(focused: Boolean) =
+    if (focused) LocalVibePalette.current.surfaceSelected else Color.Transparent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1128,12 +1157,11 @@ internal fun QuantitativeTextField(
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val palette = LocalVibePalette.current
-    val fill = metricFieldFill(value, focused)
+    val fill = metricFieldFill(focused)
     val outline = when {
         focused -> palette.focusRing
         error != null -> palette.danger
-        value.isEmpty() -> palette.textSecondary.copy(alpha = 0.35f)
-        else -> palette.border.copy(alpha = 0f)
+        else -> Color.Transparent
     }
 
     Column {
@@ -1162,7 +1190,13 @@ internal fun QuantitativeTextField(
                 trailing = trailingIcon,
                 modifier = Modifier.fillMaxWidth()
                     .background(fill, MaterialTheme.shapes.small)
-                    .border(if (focused) 2.dp else 1.dp, outline, MaterialTheme.shapes.small),
+                    .drawBehind {
+                        if (focused || error != null) drawLine(
+                            outline, Offset(2.dp.toPx(), size.height),
+                            Offset((size.width - 2.dp.toPx()).coerceAtLeast(0f), size.height),
+                            if (focused) 2.dp.toPx() else 1.dp.toPx(),
+                        )
+                    },
             ) { inner() }
         },
     )

@@ -53,6 +53,13 @@ fun ProgressScreen(vm:EditorViewModel) {
         progressDateRange(LocalDate.ofEpochDay(customStart), LocalDate.ofEpochDay(customEnd), ZoneId.systemDefault())
     } else progressDateRange(rangeMonths, LocalDate.now(), ZoneId.systemDefault())
     val points=exerciseId?.let { SessionProgress.points(it,workouts,rows,sets,links,bands,filter,variations) }.orEmpty()
+    val showEstimatedOneRepMax = exercises.find { it.id == exerciseId }?.trackingType == "WEIGHT_REPS"
+    val zone = ZoneId.systemDefault()
+    val dailyEstimatedOneRepMax = remember(exerciseId, showEstimatedOneRepMax, workouts, rows, sets, filter, zone) {
+        exerciseId?.takeIf { showEstimatedOneRepMax }?.let {
+            SessionProgress.dailyEstimatedOneRepMax(it, workouts, rows, sets, filter, zone)
+        }.orEmpty()
+    }
     val finishedIds=workouts.filter { it.status=="FINISHED" }.map { it.id }.toSet()
     val trackableSetRowIds = sets.filter { SessionProgress.valid(it) || it.romValue != null }.map { it.workoutExerciseId }.toSet()
     val eligibleExerciseIds = rows.filter { it.workoutId in finishedIds && it.id in trackableSetRowIds }.map { it.actualExerciseId }.toSet()
@@ -66,6 +73,7 @@ fun ProgressScreen(vm:EditorViewModel) {
     val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
     val records=SessionProgress.records(valid,points)
     val visiblePoints = points.filter { it.date in dateRange }
+    val visibleEstimatedOneRepMax = dailyEstimatedOneRepMax.filter { it.date in dateRange }
     val recordVisibility=SessionProgress.recordVisibility(exercises.find { it.id==exerciseId }?.trackingType)
     val selectedDay = rememberSaveable { mutableStateOf<Long?>(LocalDate.now().toEpochDay()) }
     var selectedWorkoutId by remember { mutableStateOf<String?>(null) }
@@ -135,7 +143,14 @@ fun ProgressScreen(vm:EditorViewModel) {
                         verticalArrangement = Arrangement.spacedBy(VibeSpacing.small),
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (exerciseId == null) "Overall training trend" else "Training trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                when {
+                                    exerciseId == null -> "Overall training trend"
+                                    showEstimatedOneRepMax -> "Estimated 1RM trend"
+                                    else -> "Training trend"
+                                },
+                                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                            )
                             ProgressRangeSelector(rangeMonths, customRange, onCustom = { rangeDialog = true }) {
                                 rangeMonths = it
                                 customRange = false
@@ -153,22 +168,29 @@ fun ProgressScreen(vm:EditorViewModel) {
                                 onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
                                 graphState = if (visibleAggregate.isEmpty()) VibeGraphState.Empty("No training points recorded in this date range.") else VibeGraphState.Data,
                             )
-                        } else if (points.isEmpty()) Text("Complete a working set for this exercise to see its progress.")
+                        } else if (showEstimatedOneRepMax && dailyEstimatedOneRepMax.isEmpty()) {
+                            Text("Record weight and repetitions in a completed working set to see estimated 1RM.")
+                        } else if (!showEstimatedOneRepMax && points.isEmpty()) Text("Complete a working set for this exercise to see its progress.")
                         else VibeGraph(
-                                values = visiblePoints.map { it.index ?: it.score },
-                                secondaryValues = visiblePoints.map { it.trend },
-                                dates = visiblePoints.map { it.date },
-                                unit = "points",
+                                values = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.kilograms } else visiblePoints.map { it.index ?: it.score },
+                                secondaryValues = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.trendKilograms } else visiblePoints.map { it.trend },
+                                dates = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.date } else visiblePoints.map { it.date },
+                                unit = if (showEstimatedOneRepMax) "kg" else "points",
                                 dateRange = dateRange,
                                 readoutBelow = true,
                                 edgeToEdge = true,
                                 plotHeight = plotHeight,
                                 compactLayout = true,
                                 onValueHelp = { methodology = true },
+                                valueHelpDescription = if (showEstimatedOneRepMax) "About estimated 1RM" else "What are points?",
                                 valueFormatter = ::formatProgressValue,
                                 selectedDate = selectedDay.value?.let { LocalDate.ofEpochDay(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() },
                                 onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
-                                graphState = if (visiblePoints.isEmpty()) VibeGraphState.Empty("No points recorded in this date range.") else VibeGraphState.Data,
+                                graphState = when {
+                                    showEstimatedOneRepMax && visibleEstimatedOneRepMax.isEmpty() -> VibeGraphState.Empty("No estimated 1RM recorded in this date range.")
+                                    !showEstimatedOneRepMax && visiblePoints.isEmpty() -> VibeGraphState.Empty("No points recorded in this date range.")
+                                    else -> VibeGraphState.Data
+                                },
                             )
                     }
                 }
@@ -254,9 +276,17 @@ fun ProgressScreen(vm:EditorViewModel) {
             customRange = true
             rangeDialog = false
         }
-        if(methodology)HabitGlassDialog(title="How points are calculated",onDismiss={methodology=false}) {
+        if(methodology)HabitGlassDialog(
+            title = if (showEstimatedOneRepMax) "How estimated 1RM is calculated" else "How points are calculated",
+            onDismiss = { methodology = false },
+        ) {
             if (exerciseId == null) Text("Overall training trend averages each exercise's personal points for the week, using UTC weeks. Weeks overlapping the date range remain visible, with partial weeks positioned at the range boundary without changing their averages. Weekly points are separate from the selected local day and its workout list. The date range only changes what is shown, not the personal baselines.")
-            Text("The strongest valid working set supplies each session's points. The first three valid sessions establish a personal baseline of 100 points. Before that, points reflect raw performance. For skills, points are a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")
+            if (showEstimatedOneRepMax) {
+                Text("Each local calendar day shows the highest estimated one-rep max across this exercise's completed working sets and workouts, respecting the selected variation. The Epley estimate uses recorded weight and repetitions; warm-ups, failed sets and ROM measurements are excluded. Bilateral repetitions use the lower recorded side.")
+                Text("Values are kilograms, not normalized points. The rolling line averages the last three recorded daily bests. The date range only changes what is shown, not the estimates or their rolling average. Overall training and other exercise scores are unchanged.")
+            } else {
+                Text("The strongest valid working set supplies each session's points. The first three valid sessions establish a personal baseline of 100 points. Before that, points reflect raw performance. For skills, points are a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")
+            }
             Text("RPE is perceived effort on a 0–10 scale: how hard the working set felt, not a measure of progress.")
         }
         if (rpeHelp) RpeInformationDialog { rpeHelp = false }

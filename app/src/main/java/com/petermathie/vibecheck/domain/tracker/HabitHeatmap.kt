@@ -17,17 +17,6 @@ internal fun habitNumericError(type: String, value: Double?): String? = when {
 internal fun habitMeasurement(fields: List<TrackerFieldEntity>): TrackerFieldEntity? =
     fields.filterNot { it.isArchived }.minByOrNull { it.position }
 
-internal fun firstHabitMonth(
-    fieldId: String?,
-    values: List<TrackerDailyValueEntity>,
-    today: LocalDate,
-): YearMonth {
-    val first = values.asSequence()
-        .filter { it.fieldId == fieldId && it.epochDay <= today.toEpochDay() }
-        .minOfOrNull { it.epochDay } ?: today.toEpochDay()
-    return YearMonth.from(LocalDate.ofEpochDay(first))
-}
-
 internal fun hasHabitGoal(field: TrackerFieldEntity): Boolean =
     field.valueType in numericHabitTypes && field.targetValue?.isFinite() == true &&
         when (field.targetComparison) {

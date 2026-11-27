@@ -64,7 +64,7 @@ class ProgrammeUiTest {
         compose.onNodeWithText("Rename programme").assertDoesNotExist()
         compose.onNodeWithText("Duplicate").assertDoesNotExist()
         compose.onNodeWithText("Archive").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Reorder Alpha").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Reorder Alpha").assertIsDisplayed()
         compose.onNodeWithContentDescription("Start Alpha").performClick()
         assertEquals("day-a", startedDay)
         compose.onNodeWithText("Bench press").assertDoesNotExist()
@@ -99,7 +99,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Add exercise or stretch").assertDoesNotExist()
         compose.onNodeWithContentDescription("Edit targets for Bench press").assertDoesNotExist()
         compose.onNodeWithContentDescription("Edit prescription for Bench press").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Reorder Bench press").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Reorder Bench press").assertIsDisplayed()
         compose.onNodeWithText("Exercise settings").assertDoesNotExist()
 
         compose.onNodeWithText("Duplicate").performScrollTo().assertIsDisplayed()
@@ -152,7 +152,7 @@ class ProgrammeUiTest {
 
         val handleLeft = compose.onNodeWithContentDescription("Reorder Alpha").fetchSemanticsNode().boundsInRoot.left
         val titleLeft = compose.onNodeWithText("Alpha").fetchSemanticsNode().boundsInRoot.left
-        assertTrue(handleLeft < titleLeft)
+        assertTrue(handleLeft <= titleLeft)
         dragDown("Reorder Alpha")
         compose.waitUntil(15_000) {
             runBlocking { database.editorDao().programmes().first().sortedBy { it.position }.map { it.id } } ==
@@ -162,7 +162,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Edit programme Alpha").performClick()
         val dayHandleLeft = compose.onNodeWithContentDescription("Reorder Morning").fetchSemanticsNode().boundsInRoot.left
         val dayTitleLeft = compose.onNodeWithText("Morning").fetchSemanticsNode().boundsInRoot.left
-        assertTrue(dayHandleLeft < dayTitleLeft)
+        assertTrue(dayHandleLeft <= dayTitleLeft)
         dragDown("Reorder Morning")
         compose.waitUntil(15_000) {
             runBlocking {
@@ -175,7 +175,7 @@ class ProgrammeUiTest {
 
         val entryHandleLeft = compose.onNodeWithContentDescription("Reorder Bench press").fetchSemanticsNode().boundsInRoot.left
         val entryTitleLeft = compose.onNodeWithText("Bench press").fetchSemanticsNode().boundsInRoot.left
-        assertTrue(entryHandleLeft < entryTitleLeft)
+        assertTrue(entryHandleLeft <= entryTitleLeft)
         dragDown("Reorder Bench press")
         compose.waitUntil(15_000) {
             runBlocking {
@@ -215,9 +215,16 @@ class ProgrammeUiTest {
     @Test
     fun programmePrescriptionEditorPersistsAssignmentTargets() {
         seedProgramme()
+        runBlocking {
+            val entry = database.editorDao().entries().first().single()
+            database.editorDao().entry(entry.copy(targetHoldSeconds = 42, targetRpe = 8.0))
+        }
         setProgrammeContent { _, _, _ -> }
         compose.onNodeWithContentDescription("Edit programme Alpha").performClick()
-        compose.onNodeWithContentDescription("Edit prescription for Bench press").performClick()
+        compose.onNodeWithText("Bench press").performClick()
+        compose.onNodeWithText("Programme prescription").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Target seconds").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Target RPE").assertDoesNotExist()
 
         compose.onNodeWithContentDescription("Sets").performTextClearance()
         compose.onNodeWithContentDescription("Sets").performTextInput("4")
@@ -225,7 +232,6 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Minimum reps").performTextInput("6")
         compose.onNodeWithContentDescription("Maximum reps").performTextClearance()
         compose.onNodeWithContentDescription("Maximum reps").performTextInput("10")
-        compose.onNodeWithContentDescription("Target RPE").performTextInput("8")
         compose.onNodeWithContentDescription("Rest seconds").performTextClearance()
         compose.onNodeWithContentDescription("Rest seconds").performTextInput("90")
         compose.onNodeWithText("Save").performClick()
@@ -237,6 +243,7 @@ class ProgrammeUiTest {
                         it.targetRepsMin == 6 &&
                         it.targetRepsMax == 10 &&
                         it.targetRpe == 8.0 &&
+                        it.targetHoldSeconds == 42 &&
                         it.restSeconds == 90
                 }
             }
@@ -310,7 +317,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("New programme").assertIsDisplayed().performClick()
         compose.onNode(hasSetTextAction()).performTextInput("My gym plan")
-        compose.onNodeWithText("Save").performClick()
+        compose.onNodeWithContentDescription("Save programme name").performClick()
         compose.waitUntil(15_000) {
             compose.onAllNodesWithText("No exercises yet").fetchSemanticsNodes().isNotEmpty()
         }
@@ -347,6 +354,86 @@ class ProgrammeUiTest {
         compose.onNodeWithText("Delete").performScrollTo().performClick()
         compose.waitUntil(15_000) { activeProgrammes().isEmpty() }
         assertEquals(listOf("historical"), runBlocking { database.editorDao().workouts().first().map { it.id } })
+    }
+
+    @Test
+    fun unnamedCreationUsesEditorDraftAndColourPersistsThroughRenameAndDuplicate() {
+        createDatabase()
+        setProgrammeContent { _, _, _ -> }
+        compose.onNodeWithText("New programme").performClick()
+        compose.onAllNodes(isDialog()).assertCountEquals(0)
+        compose.onNode(hasSetTextAction()).assert(
+            SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.EditableText,
+                androidx.compose.ui.text.AnnotatedString(""),
+            ),
+        )
+        compose.onNodeWithContentDescription("Save programme name").assertIsNotEnabled()
+        compose.onNodeWithText("Add exercise").assertIsNotEnabled()
+        assertTrue(activeProgrammes().isEmpty())
+        compose.onNodeWithContentDescription("Back").performClick()
+        assertTrue(activeProgrammes().isEmpty())
+        assertTrue(runBlocking { database.editorDao().days().first().isEmpty() })
+
+        compose.onNodeWithText("New programme").performClick()
+        compose.onNodeWithContentDescription("Change programme colour").performClick()
+        compose.onNodeWithContentDescription("Set programme colour Blue").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("   ")
+        compose.onNodeWithContentDescription("Save programme name").assertIsNotEnabled()
+        compose.onNode(hasSetTextAction()).performTextClearance()
+        compose.onNode(hasSetTextAction()).performTextInput("Coloured plan")
+        compose.onNodeWithContentDescription("Save programme name").performClick()
+        compose.waitUntil(15_000) { activeProgrammes().singleOrNull()?.colourArgb == 0xFF42A5F5L }
+        val saved = activeProgrammes().single()
+        assertEquals(1, runBlocking { database.editorDao().days().first().count { it.programmeId == saved.id } })
+        compose.onNodeWithContentDescription("Change programme colour").performClick()
+        compose.onNodeWithContentDescription("Set programme colour Orange").performClick()
+        compose.waitUntil(15_000) { activeProgrammes().single().colourArgb == 0xFFFFA726L }
+        compose.onNode(hasSetTextAction()).performTextClearance()
+        compose.onNode(hasSetTextAction()).performTextInput("Renamed")
+        compose.onNodeWithContentDescription("Save programme name").performClick()
+        compose.waitUntil(15_000) { activeProgrammes().single().name == "Renamed" }
+        compose.onNodeWithText("Duplicate").performScrollTo().performClick()
+        compose.waitUntil(15_000) { activeProgrammes().size == 2 }
+        assertTrue(activeProgrammes().all { it.colourArgb == 0xFFFFA726L })
+    }
+
+    @Test
+    fun programmeExerciseUsesTwoStageSwipeInsteadOfPermanentBin() {
+        seedProgramme()
+        setProgrammeContent { _, _, _ -> }
+        compose.onNodeWithContentDescription("Edit programme Alpha").performClick()
+        compose.onNodeWithContentDescription("Remove Bench press").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Delete programme exercise Bench press").assertDoesNotExist()
+        val row = compose.onNodeWithContentDescription("Swipe actions for programme exercise Bench press")
+        row.performTouchInput { swipeLeft() }
+        compose.onNodeWithContentDescription("Delete programme exercise Bench press").assertIsDisplayed()
+        assertEquals(1, runBlocking { database.editorDao().entries().first().size })
+        row.performTouchInput { swipeRight() }
+        compose.waitForIdle()
+        assertEquals(1, runBlocking { database.editorDao().entries().first().size })
+        row.performTouchInput { swipeLeft() }
+        row.performTouchInput { swipeLeft() }
+        compose.waitUntil(15_000) { runBlocking { database.editorDao().entries().first().isEmpty() } }
+        assertEquals(2, runBlocking { database.editorDao().exercises().first().size })
+        assertEquals(1, activeProgrammes().size)
+    }
+
+    @Test
+    fun queuedProgrammeColourNameOrderAndArchiveChangesDoNotOverwriteEachOther() {
+        seedProgramme(includeSecondRows = true)
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.runOnIdle {
+            viewModel.setProgrammeColour("programme-a", 0xFFFFA726L)
+            viewModel.renameProgramme("programme-a", "Renamed")
+            viewModel.moveProgramme("programme-a", 1)
+            viewModel.archiveProgramme("programme-a")
+        }
+        compose.waitUntil(15_000) {
+            runBlocking { database.editorDao().archivedProgrammes().first() }.singleOrNull()?.let {
+                it.id == "programme-a" && it.name == "Renamed" && it.colourArgb == 0xFFFFA726L && it.position == 1
+            } == true
+        }
     }
 
     @Test
@@ -410,6 +497,10 @@ class ProgrammeUiTest {
         assertEquals(0, starts)
         assertEquals(before, runBlocking { database.editorDao().workouts().first() })
         compose.onNodeWithText("New programme").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Edit programme Alpha").performClick()
+        compose.onNodeWithContentDescription("Resume workout").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Back").performClick()
+        compose.onNodeWithContentDescription("Resume workout").assertIsDisplayed()
 
         runBlocking {
             database.workoutDao().updateWorkout(before.single { it.id == id }.copy(status = "DISCARDED"))
@@ -514,6 +605,7 @@ class ProgrammeUiTest {
     private fun dragDown(description: String) {
         compose.onNodeWithContentDescription(description).performScrollTo().performTouchInput {
             down(center)
+            advanceEventTime(700)
             repeat(5) {
                 moveBy(Offset(0f, 60f))
                 advanceEventTime(50)

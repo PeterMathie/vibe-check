@@ -140,6 +140,8 @@ data class ProgrammeEntity(
     val isDemo: Boolean,
     val isArchived: Boolean = false,
     @androidx.room.ColumnInfo(defaultValue = "0") val position: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "4282549749")
+    val colourArgb: Long = com.petermathie.vibecheck.domain.model.programmeColour(id),
 )
 
 @Entity(

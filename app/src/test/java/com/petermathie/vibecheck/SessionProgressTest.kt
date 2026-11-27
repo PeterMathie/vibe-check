@@ -6,8 +6,92 @@ import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.ui.emptySet
 import org.junit.Test
 import org.junit.Assert.*
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 
 class SessionProgressTest {
+    private fun finished(id: String, time: Long) =
+        WorkoutEntity(id, null, id, "STRENGTH", "FINISHED", time, time, "", 80.0, false)
+
+    private fun row(id: String, workout: String, exercise: String = "bench") =
+        WorkoutExerciseEntity(id, workout, exercise, exercise, 0, "", 60, null, trackingType = "WEIGHT_REPS")
+
+    @Test fun dailyE1rmUsesTheHighestEstimateAcrossAllSetsAndWorkoutsNotVariationRank() {
+        val zone = ZoneId.of("UTC")
+        val day = LocalDate.of(2026, 11, 20)
+        val time = day.atTime(9, 0).atZone(zone).toInstant().toEpochMilli()
+        val workouts = listOf(finished("morning", time), finished("evening", time + 36_000_000),
+            finished("draft", time).copy(status = "IN_PROGRESS"))
+        val rows = listOf(row("am", "morning"), row("pm", "evening"), row("draft-row", "draft"),
+            row("other", "morning", "squat"))
+        val sets = listOf(
+            emptySet("am", 1).copy(weightKg = 100.0, reps = 1.0),
+            emptySet("am", 2).copy(weightKg = 80.0, reps = 10.0),
+            emptySet("pm", 1).copy(weightKg = 90.0, reps = 8.0),
+            emptySet("am", 3).copy(weightKg = 50.0, reps = 6.0, variationId = "paused", variationRankSnapshot = 9),
+            emptySet("am", 4).copy(weightKg = 300.0, reps = 20.0, setType = "WARM_UP"),
+            emptySet("pm", 2).copy(weightKg = 300.0, reps = 20.0, result = "FAILED"),
+            emptySet("draft-row", 1).copy(weightKg = 300.0, reps = 20.0),
+            emptySet("other", 1).copy(weightKg = 300.0, reps = 20.0),
+        )
+        val daily = SessionProgress.dailyEstimatedOneRepMax("bench", workouts, rows, sets, zone = zone).single()
+        assertEquals(day.atStartOfDay(zone).toInstant().toEpochMilli(), daily.date)
+        assertEquals(114.0, daily.kilograms, 0.0001)
+        assertEquals(60.0, SessionProgress.dailyEstimatedOneRepMax(
+            "bench", workouts, rows, sets, filter = "paused", zone = zone,
+        ).single().kilograms, 0.0001)
+    }
+
+    @Test fun dailyE1rmGroupsByTheViewingLocalDayIncludingTheDaylightSavingBoundary() {
+        val zone = ZoneId.of("America/New_York")
+        val times = listOf("2026-11-01T03:30:00Z", "2026-11-01T04:30:00Z", "2026-11-02T04:30:00Z")
+            .map { Instant.parse(it).toEpochMilli() }
+        val workouts = times.mapIndexed { index, time -> finished("w$index", time) }
+        val rows = workouts.mapIndexed { index, workout -> row("r$index", workout.id) }
+        val sets = rows.mapIndexed { index, row -> emptySet(row.id, 1).copy(weightKg = 60.0 + index * 10, reps = 6.0) }
+        val daily = SessionProgress.dailyEstimatedOneRepMax("bench", workouts, rows, sets, zone = zone)
+        assertEquals(listOf(LocalDate.of(2026, 10, 31), LocalDate.of(2026, 11, 1)),
+            daily.map { Instant.ofEpochMilli(it.date).atZone(zone).toLocalDate() })
+        assertEquals(listOf(72.0, 96.0), daily.map { it.kilograms })
+        assertEquals(Instant.parse("2026-11-01T04:00:00Z").toEpochMilli(), daily.last().date)
+    }
+
+    @Test fun dailyE1rmRemainsRawAfterThreeDaysAndItsTrendIsCalculatedBeforeRangeFiltering() {
+        val zone = ZoneId.of("UTC")
+        val workouts = (0..3).map { index ->
+            finished("w$index", LocalDate.of(2026, 11, 1).plusDays(index.toLong()).atStartOfDay(zone).toInstant().toEpochMilli())
+        }
+        val rows = workouts.mapIndexed { index, workout -> row("r$index", workout.id) }
+        val sets = rows.mapIndexed { index, row -> emptySet(row.id, 1).copy(weightKg = 60.0 + index * 10, reps = 6.0) }
+        val original = SessionProgress.points("bench", workouts, rows, sets, emptyList(), emptyList())
+        val daily = SessionProgress.dailyEstimatedOneRepMax("bench", workouts, rows, sets, zone = zone)
+        assertEquals(listOf(72.0, 84.0, 96.0, 108.0), daily.map { it.kilograms })
+        assertNull(daily[1].trendKilograms)
+        assertEquals(84.0, daily[2].trendKilograms!!, 0.0001)
+        assertEquals(96.0, daily.filter { it.date == daily.last().date }.single().trendKilograms!!, 0.0001)
+        assertEquals(original, SessionProgress.points("bench", workouts, rows, sets, emptyList(), emptyList()))
+    }
+
+    @Test fun dailyE1rmUsesBilateralAndFractionalRepsAndExcludesUnusableMeasurements() {
+        val workout = finished("w", 1)
+        val row = row("r", "w")
+        val base = emptySet("r", 1).copy(weightKg = 60.0, reps = 4.5)
+        val bilateral = base.copy(ordinal = 2, reps = null, leftReps = 5.0, rightReps = 4.0)
+        val unusable = listOf(
+            base.copy(weightKg = null), base.copy(weightKg = 0.0),
+            base.copy(weightKg = Double.POSITIVE_INFINITY), base.copy(weightKg = -60.0),
+            base.copy(reps = 0.0), base.copy(reps = Double.NaN), base.copy(romValue = 20.0),
+        )
+        assertTrue(SessionProgress.dailyEstimatedOneRepMax("bench", listOf(workout), listOf(row), unusable).isEmpty())
+        assertEquals(69.0, SessionProgress.dailyEstimatedOneRepMax(
+            "bench", listOf(workout), listOf(row), listOf(base, bilateral) + unusable,
+        ).single().kilograms, 0.0001)
+        assertEquals(68.0, SessionProgress.dailyEstimatedOneRepMax(
+            "bench", listOf(workout), listOf(row), listOf(bilateral),
+        ).single().kilograms, 0.0001)
+    }
+
     @Test fun zeroAndWarmupsAreExcluded(){
         val set=emptySet("e",1).copy(weightKg=100.0,reps=0.0)
         assertNull(SessionProgress.score(set,80.0,0.0))

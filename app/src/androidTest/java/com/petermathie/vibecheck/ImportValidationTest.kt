@@ -60,6 +60,35 @@ class ImportValidationTest {
     private fun document(tables: JSONObject): String = JSONObject().put("format", "vibe-trainer").put("version", 1).put("tables", tables).toString()
 
     @Test
+    fun programmeColoursRoundTripAndLegacyImportsKeepExistingChoices() = runBlocking {
+        val legacy = fixture("programmes").apply { remove("colourArgb") }
+        val id = legacy.getString("id")
+        val dao = db.editorDao()
+        val programme = dao.programmes().first().first { it.id == id }
+        dao.programme(programme.copy(colourArgb = 0xFFFFA726L))
+        val history = dao.workouts().first()
+        DataTransfer.import(db, document(rows("programmes", legacy)))
+        assertEquals(0xFFFFA726L, dao.programmes().first().first { it.id == id }.colourArgb)
+        val newLegacy = JSONObject(legacy.toString()).put("id", "new-legacy-plan").put("isDemo", 0)
+        DataTransfer.import(db, document(rows("programmes", newLegacy)))
+        val assigned = dao.programmes().first().first { it.id == "new-legacy-plan" }.colourArgb
+        assertEquals(com.petermathie.vibecheck.domain.model.programmeColour("new-legacy-plan"), assigned)
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        DataTransfer.import(db, document(rows("programmes", newLegacy)))
+        assertEquals(assigned, dao.programmes().first().first { it.id == "new-legacy-plan" }.colourArgb)
+        assertEquals(0xFFFFA726L, dao.programmes().first().first { it.id == id }.colourArgb)
+        assertEquals(history, dao.workouts().first())
+    }
+
+    @Test
+    fun invalidProgrammeColoursRollBack() = runBlocking {
+        listOf(-1L, 0x1FFFFFFFFL).forEach {
+            rejected(rows("programmes", fixture("programmes").put("colourArgb", it)), "colourArgb")
+        }
+    }
+
+    @Test
     fun legacyBodyweightsDefaultToActiveAndClearedRowsRoundTripWithNotes() = runBlocking {
         val legacy = JSONObject()
             .put("id", "legacy-bodyweight").put("recordedAt", 123)

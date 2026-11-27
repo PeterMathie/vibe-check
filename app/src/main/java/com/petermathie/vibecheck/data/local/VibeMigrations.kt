@@ -5,6 +5,19 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import com.petermathie.vibecheck.domain.tracker.encodeHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoices
 import com.petermathie.vibecheck.domain.tracker.legacyHabitChoiceSnapshot
+import com.petermathie.vibecheck.domain.model.programmeColour
+
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE programmes ADD COLUMN colourArgb INTEGER NOT NULL DEFAULT 4282549749")
+        val ids = db.query("SELECT id FROM programmes").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
+        }
+        ids.forEach { id ->
+            db.execSQL("UPDATE programmes SET colourArgb=? WHERE id=?", arrayOf(programmeColour(id), id))
+        }
+    }
+}
 
 val MIGRATION_17_18 = object : Migration(17, 18) {
     override fun migrate(db: SupportSQLiteDatabase) {
