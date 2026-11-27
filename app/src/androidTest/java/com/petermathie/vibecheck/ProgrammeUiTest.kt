@@ -80,8 +80,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Start Alpha").performClick()
         assertEquals("day-a", startedDay)
         compose.onNodeWithText("Bench press").assertDoesNotExist()
-        compose.onNodeWithText("Alpha").performClick()
-        previewDiagnostics("Alpha")
+        toggleProgrammePreview("Alpha")
         compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertIsDisplayed()
         compose.onNodeWithText("Bench press").assertIsDisplayed()
         assertTrue(
@@ -162,7 +161,7 @@ class ProgrammeUiTest {
         compose.waitUntil(15_000) {
             compose.onAllNodesWithText(longName).fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithText(longName).performClick()
+        toggleProgrammePreview(longName)
 
         listOf(1f, 1.3f, 2f).forEach { scale ->
             compose.runOnIdle { fontScale.value = scale }
@@ -345,8 +344,7 @@ class ProgrammeUiTest {
         seedStretchProgramme()
         setProgrammeContent(mode = TrainingMode.STRETCHING) { _, _, _ -> }
 
-        compose.onNodeWithText("Stretching").performClick()
-        previewDiagnostics("Stretching")
+        toggleProgrammePreview("Stretching")
         compose.onNodeWithContentDescription("Read-only exercises for Stretching").assertIsDisplayed()
         compose.onNodeWithText("Front split").assertIsDisplayed()
         compose.onNodeWithText("Forward fold").assertIsDisplayed()
@@ -416,15 +414,13 @@ class ProgrammeUiTest {
         }
         setProgrammeContent { _, _, _ -> }
 
-        compose.onNodeWithText("Alpha").assertIsDisplayed().performClick()
-        compose.onNodeWithText("Beta").assertIsDisplayed().performClick()
-        previewDiagnostics("Alpha")
-        previewDiagnostics("Beta")
+        toggleProgrammePreview("Alpha")
+        toggleProgrammePreview("Beta")
         compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertIsDisplayed()
         compose.onNodeWithContentDescription("Read-only exercises for Beta").assertIsDisplayed()
         compose.onNodeWithText("Bench press").assertIsDisplayed()
         compose.onNodeWithText("Forward fold").assertIsDisplayed()
-        compose.onNodeWithText("Alpha").performClick()
+        toggleProgrammePreview("Alpha", expanded = false)
         compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertDoesNotExist()
         compose.onNodeWithContentDescription("Read-only exercises for Beta").assertIsDisplayed()
         assertEquals(before, runBlocking {
@@ -605,18 +601,20 @@ class ProgrammeUiTest {
         println("Programme normal-row diagnostics: $diagnostics")
         assertTrue("Name/fields must retain left-to-right ordering: $diagnostics",
             name.right <= bounds[0].left && bounds[0].right <= bounds[1].left)
-        for (field in fields) {
+        for ((index, field) in fields.withIndex()) {
             assertEquals("Name/input must share one row: $diagnostics",
                 name.center.y, field.fetchSemanticsNode().boundsInRoot.center.y, 1f)
             val layouts = mutableListOf<TextLayoutResult>()
             field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            assertTrue(layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
+            val textDiagnostics = textLayoutDiagnostics("numeric field $index", field, layouts)
+            assertTrue(textDiagnostics, layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
         }
         for (suffix in listOf("sets", "s")) {
             val layouts = mutableListOf<TextLayoutResult>()
-            compose.onNode(hasText(suffix) and hasAnyAncestor(isDialog()), useUnmergedTree = true)
-                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-            assertTrue(layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
+            val node = compose.onNode(hasText(suffix) and hasAnyAncestor(isDialog()), useUnmergedTree = true)
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val textDiagnostics = textLayoutDiagnostics("suffix $suffix", node, layouts)
+            assertTrue(textDiagnostics, layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
         }
     }
 
@@ -949,6 +947,36 @@ class ProgrammeUiTest {
     private fun modalText(text: String) = compose.onNode(hasText(text) and hasAnyAncestor(isDialog()))
 
     private fun programmeNameInput() = compose.onNodeWithContentDescription("Programme name")
+
+    private fun toggleProgrammePreview(name: String, expanded: Boolean = true) {
+        compose.onNodeWithText(name).assertIsDisplayed().performClick()
+        val expected = if (expanded) "Exercises shown" else "Exercises hidden"
+        try {
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithText(name).fetchSemanticsNodes().singleOrNull()
+                    ?.config?.getOrNull(SemanticsProperties.StateDescription) == expected
+            }
+        } catch (e: ComposeTimeoutException) {
+            previewDiagnostics(name)
+            throw e
+        }
+        compose.waitForIdle()
+        previewDiagnostics(name)
+    }
+
+    private fun textLayoutDiagnostics(
+        label: String,
+        node: SemanticsNodeInteraction,
+        layouts: List<TextLayoutResult>,
+    ): String {
+        val details = layouts.map {
+            "text=${it.layoutInput.text}; size=${it.size}; constraints=${it.layoutInput.constraints}; " +
+                "maxLines=${it.layoutInput.maxLines}; lineCount=${it.lineCount}; " +
+                "overflowWidth=${it.didOverflowWidth}; overflowHeight=${it.didOverflowHeight}"
+        }
+        return "Programme text-layout diagnostics: $label; bounds=${node.fetchSemanticsNode().boundsInRoot}; layouts=$details"
+            .also { println(it) }
+    }
 
     private fun previewDiagnostics(name: String) {
         val titles = compose.onAllNodesWithText(name).fetchSemanticsNodes().map {

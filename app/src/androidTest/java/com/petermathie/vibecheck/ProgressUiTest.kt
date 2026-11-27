@@ -115,6 +115,13 @@ class ProgressUiTest {
 
         compose.runOnIdle { showBody.value = true }
         compose.onNodeWithText("Bodyweight trend").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Bodyweight date range").performClick()
+        compose.onNode(hasText("Custom") and hasAnyAncestor(isPopup())).performClick()
+        chooseDate("Beginning", java.time.Instant.ofEpochMilli(retained.recordedAt)
+            .atZone(ZoneId.systemDefault()).toLocalDate())
+        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithContentDescription("Bodyweight date range")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Custom"))
         scrollToNode(hasContentDescription("Progress chart", substring = true))
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
         scrollToNode(hasContentDescription("Graph readout"))
@@ -548,11 +555,14 @@ class ProgressUiTest {
         compose.onNodeWithContentDescription("Choose $field date").performClick()
         val inCalendar = hasAnyAncestor(hasContentDescription("$field calendar"))
         compose.onNode(hasContentDescription("year", substring = true) and hasClickAction() and inCalendar).performClick()
-        compose.onNode((hasText(date.year.toString(), substring = true) or hasContentDescription(date.year.toString(), substring = true)) and hasClickAction() and inCalendar).performClick()
+        val year = hasText("Navigate to year ${date.year}") and hasClickAction() and inCalendar
+        compose.onNode(hasScrollToIndexAction() and inCalendar).performScrollToNode(year)
+        compose.onNode(year).performClick()
         compose.onNodeWithText("Choose month").performClick()
         compose.onNodeWithText(date.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())).performClick()
         val bounds = compose.onNodeWithContentDescription("$field calendar").fetchSemanticsNode().boundsInWindow
-        compose.onAllNodes(hasText(date.dayOfMonth.toString(), substring = true) and hasClickAction() and inCalendar)
+        val fullDate = date.format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.FULL))
+        compose.onAllNodes(hasText(fullDate, substring = true) and hasClickAction() and inCalendar)
             .filterToOne(SemanticsMatcher("Visible date") {
                 it.boundsInWindow.width > 0 && it.boundsInWindow.height > 0 && bounds.contains(it.boundsInWindow.center)
             }).performClick()

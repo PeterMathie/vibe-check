@@ -1084,7 +1084,9 @@ class HabitUiTest {
         awaitSaved { database.editorDao().values().first().any { it.epochDay == earlier.toEpochDay() && it.numericValue == 7.0 } }
         compose.onNodeWithContentDescription("Next month for Wellbeing").performClick()
         compose.onNodeWithContentDescription("${formatDisplayDate(recorded)}: No entry").performClick()
-        input("g").assertTextEquals("")
+        input("g").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString(""),
+        ))
         input("g").performTextReplacement("0")
         awaitSaved { database.editorDao().values().first().single { it.epochDay == row.epochDay }.numericValue == 0.0 }
         assertEquals(todayRow, runBlocking {
