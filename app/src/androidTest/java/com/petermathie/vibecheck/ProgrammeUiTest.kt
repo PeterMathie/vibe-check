@@ -949,7 +949,7 @@ class ProgrammeUiTest {
     private fun programmeNameInput() = compose.onNodeWithContentDescription("Programme name")
 
     private fun toggleProgrammePreview(name: String, expanded: Boolean = true) {
-        compose.onNodeWithText(name).assertIsDisplayed().performClick()
+        compose.onNodeWithText(name).assertIsDisplayed().performTouchInput { click() }
         val expected = if (expanded) "Exercises shown" else "Exercises hidden"
         try {
             compose.waitUntil(15_000) {
