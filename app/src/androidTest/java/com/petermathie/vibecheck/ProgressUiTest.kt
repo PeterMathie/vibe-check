@@ -556,7 +556,10 @@ class ProgressUiTest {
         val inCalendar = hasAnyAncestor(hasContentDescription("$field calendar"))
         compose.onNode(hasContentDescription("year", substring = true) and hasClickAction() and inCalendar).performClick()
         val year = hasText("Navigate to year ${date.year}") and hasClickAction() and inCalendar
-        compose.onNode(hasScrollToIndexAction() and inCalendar).performScrollToNode(year)
+        compose.onNode(
+            hasScrollToIndexAction() and inCalendar and
+                SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+        ).performScrollToNode(year)
         compose.onNode(year).performClick()
         compose.onNodeWithText("Choose month").performClick()
         compose.onNodeWithText(date.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())).performClick()

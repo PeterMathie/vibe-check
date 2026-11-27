@@ -972,10 +972,19 @@ class ProgrammeUiTest {
         val details = layouts.map {
             "text=${it.layoutInput.text}; size=${it.size}; constraints=${it.layoutInput.constraints}; " +
                 "maxLines=${it.layoutInput.maxLines}; lineCount=${it.lineCount}; " +
-                "overflowWidth=${it.didOverflowWidth}; overflowHeight=${it.didOverflowHeight}"
+                "overflowWidth=${it.didOverflowWidth}; overflowHeight=${it.didOverflowHeight}; " +
+                "paragraphSize=${it.multiParagraph.width}x${it.multiParagraph.height}; " +
+                "lines=${(0 until it.lineCount).map { line ->
+                    "${it.getLineLeft(line)}..${it.getLineRight(line)} at ${it.getLineTop(line)}..${it.getLineBottom(line)}"
+                }}; glyphs=${it.layoutInput.text.indices.map { index -> it.getBoundingBox(index) }}"
         }
-        return "Programme text-layout diagnostics: $label; bounds=${node.fetchSemanticsNode().boundsInRoot}; layouts=$details"
-            .also { println(it) }
+        val semantics = node.fetchSemanticsNode()
+        val panes = compose.onAllNodes(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Edit programme"))
+            .fetchSemanticsNodes().map { it.boundsInWindow }
+        val diagnostics = "Programme text-layout diagnostics: $label; bounds=${semantics.boundsInRoot}; " +
+            "windowBounds=${semantics.boundsInWindow}; panes=$panes; layouts=$details"
+        println(diagnostics)
+        return diagnostics
     }
 
     private fun previewDiagnostics(name: String) {

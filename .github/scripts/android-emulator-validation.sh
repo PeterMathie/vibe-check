@@ -13,10 +13,10 @@ capture_diagnostics() {
 
 gradle :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace
 
-# Exclude compilation from the runtime watchdog. In CI, 155 of 175 tests took
-# 11 minutes while still progressing; allow the full suite to finish and report.
+# Exclude compilation from the runtime watchdog. The 282-case suite was still
+# progressing at 16 minutes in CI; allow complete results within a bounded run.
 set +e
-timeout --signal=TERM --kill-after=30s 16m \
+timeout --signal=TERM --kill-after=30s 22m \
   gradle :app:connectedDebugAndroidTest --stacktrace
 test_status=$?
 set -e
