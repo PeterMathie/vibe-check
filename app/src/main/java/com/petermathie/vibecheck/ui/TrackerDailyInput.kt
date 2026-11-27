@@ -6,6 +6,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.petermathie.vibecheck.data.local.TrackerDailyValueEntity
 import com.petermathie.vibecheck.data.local.TrackerFieldEntity
@@ -123,11 +125,19 @@ private fun ChoiceInput(
     var expanded by remember { mutableStateOf(false) }
     val palette = LocalVibePalette.current
     val shades = palette.habitHeatmapColors(habitColour)
+    val readback = selectedLabel.ifBlank { options.find { it.id == selectedId }?.label.orEmpty() }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = { expanded = true }, modifier = Modifier.weight(1f)) {
-            Text("$label: ${selectedLabel.ifBlank { "Choose..." }}", Modifier.fillMaxWidth(), textAlign = TextAlign.End)
+        TextButton(onClick = { expanded = true }, modifier = Modifier.weight(1f).semantics {
+            contentDescription = label
+        }) {
+            Text(
+                readback.ifBlank { "Choose..." }, Modifier.weight(1f),
+                color = selectionTextColor(), textAlign = TextAlign.End,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+            Icon(Icons.Outlined.ExpandMore, label, tint = selectionTextColor())
         }
-        if (selectedLabel.isNotBlank()) ClearHabitEntry(label, onClear)
+        if (readback.isNotBlank()) ClearHabitEntry(label, onClear)
     }
     if (expanded) {
         HabitGlassDialog(
@@ -147,7 +157,7 @@ private fun ChoiceInput(
                             ) {
                                 Box(Modifier.size(12.dp).background(shades.forLevel(option.intensity.heatmapLevel), CircleShape))
                                 Spacer(Modifier.width(8.dp))
-                                Text(option.label, Modifier.weight(1f), color = palette.textPrimary, textAlign = TextAlign.Start)
+                                Text(option.label, Modifier.weight(1f), color = selectionTextColor(), textAlign = TextAlign.Start)
                                 if (selected) Icon(Icons.Outlined.Check, "Selected", Modifier.padding(start = 4.dp).size(18.dp))
                             }
                         }

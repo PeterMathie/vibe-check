@@ -573,8 +573,9 @@ class HabitUiTest {
         val calendar = compose.onNodeWithTag("Habit calendar ${reading.id}").getUnclippedBoundsInRoot()
         assertEquals(calendar.right.value, checkboxLabel.getUnclippedBoundsInRoot().right.value, 0.5f)
         compose.onNode(hasScrollAction()).performScrollToKey(mood.id)
-        button("Feelings: Choose...").performScrollTo().assertIsDisplayed()
-        assertTextEndsAtRight(compose.onNodeWithText("Feelings: Choose...", useUnmergedTree = true))
+        button("Choose...").performScrollTo().assertIsDisplayed()
+        assertTextEndsAtRight(compose.onNodeWithText("Choose...", useUnmergedTree = true))
+        compose.onNodeWithContentDescription("Feelings").assertIsDisplayed()
         captureFixture("habits-choice-entry-alignment")
     }
 
@@ -609,7 +610,15 @@ class HabitUiTest {
         }
         val field = number.copy(name = "Feelings", valueType = "CHOICE", unit = null, choiceOptionsJson = encodeHabitChoices(choices))
         launch(listOf(field))
-        button("Feelings: Choose...").performClick()
+        val selectorLayouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText("Choose...", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(selectorLayouts) }
+        assertEquals(Color.White, selectorLayouts.single().layoutInput.style.color)
+        button("Choose...").performClick()
+        val optionLayouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithText("light 1", useUnmergedTree = true)
+            .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(optionLayouts) }
+        assertEquals(Color.White, optionLayouts.single().layoutInput.style.color)
         fun bounds(label: String, shade: String) = compose.onNodeWithContentDescription("$label, $shade shade")
             .getUnclippedBoundsInRoot()
         val first = bounds("light 1", "light")
@@ -658,7 +667,7 @@ class HabitUiTest {
         awaitSaved {
             database.editorDao().trackers().first().single().let { it.iconName == "mood" && it.colourArgb == 0xFF42A5F5L }
         }
-        button("Feeling: Choose...").performClick()
+        button("Choose...").performClick()
         compose.onNodeWithContentDescription("Sad, light shade").assertExists()
         compose.onNodeWithContentDescription("Okay, medium shade").assertExists()
         compose.onNodeWithContentDescription("Happy, dark shade").performClick()
@@ -690,7 +699,12 @@ class HabitUiTest {
         assertEquals("DARK", runBlocking { database.editorDao().values().first().single().choiceIntensity })
         captureFixture("habits-choice-calendar")
         edit()
-        button("Archive habit").performScrollTo().performClick()
+        button("Archive habit").assertDoesNotExist()
+        val archive = button("Archive").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val save = button("Save").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        assertEquals("Archive and Save share one row", archive.center.y, save.center.y, 1f)
+        assertTrue("Archive and Save do not overlap", archive.right <= save.left)
+        button("Archive").performClick()
         button("Archive").performClick()
         awaitSaved { database.editorDao().trackers().first().single().isArchived }
         button("Restore").performScrollTo().performClick()
@@ -1165,7 +1179,7 @@ class HabitUiTest {
             hasContentDescription("${formatDisplayDate(date)}: No entry") and
                 hasAnyAncestor(hasTestTag("Habit calendar ${mood.id}")),
         ).performScrollTo().performClick()
-        button("Feeling: Choose...").performScrollTo().performClick()
+        button("Choose...").performScrollTo().performClick()
         compose.onNodeWithContentDescription("Happy, dark shade").performClick()
         awaitSaved { database.editorDao().values().first().singleOrNull()?.textValue == "Happy" }
         val saved = runBlocking { database.editorDao().values().first().single() }
@@ -1354,7 +1368,8 @@ class HabitUiTest {
     }
 
     @Test(timeout = 120_000)
-    fun longTitlesWrapBesideEntryAndRetainDraftAtLargeFont() {
+    fun longTitlesAdaptAroundDateAndEntryAndRetainDraftAtLargeFont() {
+        val today = LocalDate.now()
         createDatabase()
         val habit = tracker.copy(name = "Water")
         runBlocking {
@@ -1397,9 +1412,13 @@ class HabitUiTest {
                 val title = heading.getUnclippedBoundsInRoot()
                 val field = input("g").getUnclippedBoundsInRoot()
                 val calendar = compose.onNodeWithTag("Habit calendar ${habit.id}").getUnclippedBoundsInRoot()
-                assertTrue("Entry must stay to the right: $title / $field", title.right < field.left)
-                assertTrue("Entry must share the title row: $title / $field",
-                    title.top < field.bottom && field.top < title.bottom)
+                assertTrue("Long title must not overlap entry: $title / $field", title.bottom <= field.top || title.right < field.left)
+                val date = compose.onNodeWithContentDescription("Editing $name for ${formatDisplayDate(today)}")
+                    .getUnclippedBoundsInRoot()
+                assertTrue("Date precedes input", date.right <= field.left)
+                assertEquals((date.top + date.bottom).value / 2, (field.top + field.bottom).value / 2, 1f)
+                compose.onNodeWithContentDescription("Editing $name for ${formatDisplayDate(today)}")
+                    .assertTextContains(today.format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.LONG)))
                 assertEquals(calendar.right, field.right)
             }
         }
@@ -1409,7 +1428,7 @@ class HabitUiTest {
         awaitSaved { database.editorDao().values().first().singleOrNull()?.numericValue == 8.5 }
         val title = compose.onNodeWithContentDescription(names.last()).getUnclippedBoundsInRoot()
         val entry = compose.onNodeWithTag("Habit editing target ${habit.id}").getUnclippedBoundsInRoot()
-        assertEquals((title.top + title.bottom).value / 2, (entry.top + entry.bottom).value / 2, 1f)
+        assertTrue("Entry remains visible below a long title", title.bottom <= entry.top)
         assertEquals(names.last(), runBlocking { database.editorDao().trackers().first().single().name })
         assertEquals(number, runBlocking { database.editorDao().fields().first().single() })
     }
@@ -1523,7 +1542,7 @@ class HabitUiTest {
     fun permanentlyDeletesEmptyHabit() {
         launch(emptyList())
         edit()
-        button("Archive habit").performScrollTo().performClick()
+        button("Archive").performClick()
         button("Archive").performClick()
         awaitSaved { database.editorDao().trackers().first().single().isArchived }
         button("Delete").performScrollTo().performClick()

@@ -100,6 +100,7 @@ internal fun Modifier.habitGlow(
 @Composable
 internal fun HabitHeadingAndEntry(
     heading: @Composable () -> Unit,
+    minimumEntryWidth: androidx.compose.ui.unit.Dp? = null,
     entry: @Composable () -> Unit,
 ) {
     Layout(
@@ -111,6 +112,20 @@ internal fun HabitHeadingAndEntry(
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val gap = 12.dp.roundToPx().coerceAtMost(constraints.maxWidth)
+        if (minimumEntryWidth != null) {
+            val title = measurables[0].measure(loose)
+            val inline = constraints.maxWidth - title.width - gap >= minimumEntryWidth.toPx() * fontScale
+            val entryWidth = if (inline) constraints.maxWidth - title.width - gap else constraints.maxWidth
+            val input = measurables[1].measure(loose.copy(minWidth = entryWidth, maxWidth = entryWidth))
+            val height = if (inline) maxOf(title.height, input.height) else title.height + input.height
+            return@Layout layout(constraints.maxWidth, height) {
+                title.placeRelative(0, if (inline) (height - title.height) / 2 else 0)
+                input.placeRelative(
+                    if (inline) constraints.maxWidth - input.width else 0,
+                    if (inline) (height - input.height) / 2 else title.height,
+                )
+            }
+        }
         val minimumEntryWidth = minOf(
             (128.dp.toPx() * fontScale).toInt(),
             ((constraints.maxWidth - gap) * 0.4f).toInt(),
@@ -190,6 +205,7 @@ fun TrackerScreen(
                             if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
                             val field = habitMeasurement(trackerFields)
                             HabitHeadingAndEntry(
+                                minimumEntryWidth = 240.dp,
                                 heading = {
                                     ReorderHandle(
                                         order, tracker.id, tracker.name, enabled = active.size > 1, longPress = true,
@@ -228,22 +244,23 @@ fun TrackerScreen(
                                 if (field != null) {
                                     val day = minOf(calendarState.selectedDay, today.toEpochDay())
                                     val date = LocalDate.ofEpochDay(day)
-                                    Column(
+                                    Row(
                                         Modifier.fillMaxWidth().testTag("Habit editing target ${tracker.id}"),
-                                        horizontalAlignment = Alignment.End,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     ) {
                                         Text(
-                                            date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault())),
-                                            Modifier.semantics {
+                                            date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG).withLocale(Locale.getDefault())),
+                                            Modifier.weight(1f).semantics {
                                                 contentDescription = "Editing ${tracker.name} for ${formatDisplayDate(date)}"
                                             },
                                             style = MaterialTheme.typography.labelSmall,
                                             color = palette.textSecondary,
                                         )
-                                        HabitDailyInput(
+                                        Box(Modifier.weight(0.85f)) { HabitDailyInput(
                                             vm, field, values.find { it.fieldId == field.id && it.epochDay == day },
                                             day, Color(tracker.colourArgb.toInt()),
-                                        )
+                                        ) }
                                     }
                                 }
                             }

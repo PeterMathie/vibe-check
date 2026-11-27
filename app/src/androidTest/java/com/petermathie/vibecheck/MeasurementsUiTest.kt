@@ -218,9 +218,14 @@ class MeasurementsUiTest {
             compose.onNodeWithContentDescription("$minimum to $maximum kg", substring = true)
                 .performScrollTo().assertIsDisplayed()
 
-        assertTrendRange("1 month")
-        assertTrend("78.00", "81.00")
-        listOf("3 months" to "76.00", "6 months" to "74.00", "1 year" to "72.00").forEach { (range, minimum) ->
+        assertTrendRange("1 year")
+        val initialTrend = assertTrend("72.00", "81.00")
+        assertTrue(
+            "Bodyweight trend appears above the calendar",
+            initialTrend.getUnclippedBoundsInRoot().bottom <=
+                compose.onNodeWithContentDescription("Bodyweight calendar").getUnclippedBoundsInRoot().top,
+        )
+        listOf("1 month" to "78.00", "3 months" to "76.00", "6 months" to "74.00", "1 year" to "72.00").forEach { (range, minimum) ->
             chooseTrendRange(range)
             assertTrendRange(range)
             assertTrend(minimum, "81.00")
@@ -363,6 +368,93 @@ class MeasurementsUiTest {
     }
 
     @Test
+    fun emptyPhotoTileIsAlwaysPresentAndDateNavigationDoesNotWrite() {
+        showBody()
+        showPhotos()
+        compose.waitUntil(15_000) { compose.onAllNodesWithText("No photos yet.").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("No photos yet.").assertIsDisplayed()
+        selectDay(today.minusDays(1))
+        showPhotos()
+        compose.onNodeWithText("No photos yet.").assertIsDisplayed()
+        assertTrue(activeRows().isEmpty())
+        assertFalse(File(fixtureDirectory, "progress-photos").exists())
+    }
+
+    @Test
+    fun selectedDayPhotoOpensAllPhotosAndSwipingPreviousWrapsWithoutWritingMeasurements() {
+        val selected = measurement("gallery-weight", today, 12, 80.0)
+        seed(selected)
+        val directory = File(fixtureDirectory, "progress-photos").apply { check(mkdirs()) }
+        val dates = listOf(today.minusDays(2).atTime(12, 0), today.atTime(9, 0), today.atTime(10, 0))
+        val originals = dates.map { date ->
+            File(directory, "${date.atZone(zone).toInstant().toEpochMilli()}.jpg").apply {
+                val bitmap = android.graphics.Bitmap.createBitmap(24, 24, android.graphics.Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(android.graphics.Color.WHITE)
+                outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                bitmap.recycle()
+            }
+        }
+        val before = originals.associate { it.name to it.readBytes().toList() }
+        showBody()
+        showPhotos()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithTag("Body photo tile ${originals[1].name}").fetchSemanticsNodes().isNotEmpty()
+        }
+        val inlineBounds = compose.onNodeWithTag("Body photo tile ${originals[1].name}").fetchSemanticsNode().boundsInRoot
+        compose.onNodeWithTag("Body photo tile ${originals[1].name}").assertIsDisplayed().performClick()
+        compose.onNodeWithText("Body photos").assertIsDisplayed()
+        compose.onNodeWithTag("Body photo position").assertTextContains("2 of 3")
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithTag("Body photo ${originals[1].name}").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("Body photo ${originals[1].name}").assertIsDisplayed()
+        compose.waitForIdle()
+        val enlarged = compose.onNodeWithTag("Body photo ${originals[1].name}").fetchSemanticsNode().boundsInRoot
+        val glass = compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Body photos"))
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue(enlarged.width > inlineBounds.width && enlarged.height > inlineBounds.height)
+        assertTrue(minOf(enlarged.width, enlarged.height) > minOf(inlineBounds.width, inlineBounds.height))
+        assertTrue(enlarged.left >= glass.left && enlarged.right <= glass.right)
+        assertTrue(enlarged.top >= glass.top && enlarged.bottom <= glass.bottom)
+        compose.onNodeWithContentDescription("Previous photo").performClick()
+        compose.waitUntil(15_000) { compose.onAllNodes(hasTestTag("Body photo position") and hasText("1 of 3")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Body photo gallery").performTouchInput { swipeLeft() }
+        compose.waitUntil(15_000) { compose.onAllNodes(hasTestTag("Body photo position") and hasText("3 of 3")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Next photo").performClick()
+        compose.waitUntil(15_000) { compose.onAllNodes(hasTestTag("Body photo position") and hasText("1 of 3")).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("Close").performClick()
+        assertEquals(listOf(selected), activeRows())
+        assertEquals(before, directory.listFiles()!!.associate { it.name to it.readBytes().toList() })
+        assertEquals("80.00", inputText())
+        selectDay(today.minusDays(1))
+        showPhotos()
+        compose.onNodeWithContentDescription("Body photo carousel").assertIsDisplayed()
+        compose.onNodeWithTag("Body photo tile position").assertTextContains("3 of 3")
+        compose.onNodeWithContentDescription("Body photo carousel").performTouchInput { swipeLeft() }
+        compose.waitUntil(15_000) { compose.onAllNodes(hasTestTag("Body photo tile position") and hasText("2 of 3")).fetchSemanticsNodes().isNotEmpty() }
+        assertEquals("", inputText())
+        assertEquals(listOf(selected), activeRows())
+        assertEquals(before, directory.listFiles()!!.associate { it.name to it.readBytes().toList() })
+    }
+
+    @Test
+    fun damagedPhotoReportsDecodeErrorAndRemainsUnchanged() {
+        val directory = File(fixtureDirectory, "progress-photos").apply { check(mkdirs()) }
+        val photo = File(directory, "${today.atTime(12, 0).atZone(zone).toInstant().toEpochMilli()}.jpg")
+            .apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val before = photo.readBytes()
+        showBody()
+        showPhotos()
+        compose.waitUntil(15_000) {
+            compose.onAllNodes(hasText("Could not open photo:", substring = true)).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithContentDescription("Previous photo in tile").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Next photo in tile").assertIsNotEnabled()
+        assertArrayEquals(before, photo.readBytes())
+        assertTrue(activeRows().isEmpty())
+    }
+
+    @Test
     fun photoPickerUsesCapturedDayWithoutCreatingAWeightOrNote() {
         showBody()
         val photoDay = today.minusDays(1)
@@ -404,6 +496,11 @@ class MeasurementsUiTest {
         compose.onNodeWithText("Photo added").assertDoesNotExist()
         assertTrue(File(fixtureDirectory, "progress-photos").listFiles().orEmpty().isEmpty())
         assertTrue(activeRows().isEmpty())
+    }
+
+    private fun showPhotos() {
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToKey("photos")
+        compose.onNodeWithTag("Body photos tile").assertIsDisplayed()
     }
 
     private fun showBody(largeType: Boolean = false): EditorViewModel {

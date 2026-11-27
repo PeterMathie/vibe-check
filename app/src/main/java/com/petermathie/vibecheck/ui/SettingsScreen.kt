@@ -12,6 +12,10 @@ import com.petermathie.vibecheck.BuildConfig
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,11 +25,20 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
@@ -61,6 +74,10 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.io.File
 import java.io.InputStream
+import java.io.IOException
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import com.petermathie.vibecheck.data.BackupPreferences
 import com.petermathie.vibecheck.data.DemoRemovalSummary
 
@@ -381,9 +398,27 @@ fun MeasurementsScreen(
     var selectedDay by rememberSaveable { mutableStateOf(today.toEpochDay()) }
     var displayedMonth by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
     var importPhotoDay by rememberSaveable { mutableStateOf<Long?>(null) }
-    var rangeMonths by rememberSaveable { mutableIntStateOf(1) }
+    var photoRevision by remember { mutableIntStateOf(0) }
+    var photos by remember { mutableStateOf(emptyList<BodyPhoto>()) }
+    var photoError by remember { mutableStateOf<String?>(null) }
+    var photosLoading by remember { mutableStateOf(true) }
+    var galleryStart by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(context, photoRevision, zone) {
+        photosLoading = true
+        try {
+            photos = withContext(Dispatchers.IO) { bodyPhotos(File(context.filesDir, "progress-photos"), zone) }
+            photoError = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            photoError = "Could not load photos: ${e.message}"
+            vm.error.value = photoError
+        }
+        photosLoading = false
+    }
+    var rangeMonths by rememberSaveable { mutableIntStateOf(12) }
     var customRange by rememberSaveable { mutableStateOf(false) }
-    var customStart by rememberSaveable { mutableLongStateOf(today.minusMonths(1).toEpochDay()) }
+    var customStart by rememberSaveable { mutableLongStateOf(today.minusYears(1).toEpochDay()) }
     var customEnd by rememberSaveable { mutableLongStateOf(today.toEpochDay()) }
     var rangeDialog by remember { mutableStateOf(false) }
     val dateRange = if (customRange) {
@@ -411,6 +446,7 @@ fun MeasurementsScreen(
                     }
                 }
                 message = "Photo added"
+                photoRevision++
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -434,6 +470,7 @@ fun MeasurementsScreen(
         }
     }
     val selectedMeasurement = weightsByDay[selectedDay]
+    val selectedPhotos = photos.filter { it.day.toEpochDay() == selectedDay }
     val selectedValue = selectedMeasurement?.let { converted.getValue(it.id) }
     val trendRows = bodyweights.filter { it.recordedAt in dateRange }
     val trendError = trendRows.firstNotNullOfOrNull { converted.getValue(it.id).exceptionOrNull()?.message }
@@ -448,7 +485,7 @@ fun MeasurementsScreen(
     RegisterAppFabAction(
         owner = Destination.MEASUREMENTS,
         destination = AppFabDestination.AddBodyPhoto,
-        visible = importPhotoDay == null && !rangeDialog,
+        visible = importPhotoDay == null && !rangeDialog && galleryStart == null,
     ) {
         focusManager.clearFocus(force = true)
         keyboardController?.hide()
@@ -463,6 +500,45 @@ fun MeasurementsScreen(
     }
     HabitGlassDialogHost(constrainToContent = true) { backdrop, _ ->
         ScreenList(modifier = backdrop.semantics { contentDescription = "Body page" }) {
+            item(key = "trend") {
+                Column(
+                    Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Bodyweight trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        ProgressRangeSelector(
+                            rangeMonths, customRange, onCustom = { rangeDialog = true },
+                            description = "Bodyweight date range",
+                        ) {
+                            rangeMonths = it
+                            customRange = false
+                        }
+                    }
+                    VibeGraph(
+                        values = if (trendError == null) trendRows.map { converted.getValue(it.id).getOrThrow() } else emptyList(),
+                        dates = if (trendError == null) trendRows.map { it.recordedAt } else emptyList(),
+                        unit = displayUnit.symbol,
+                        dateRange = dateRange,
+                        readoutBelow = true,
+                        edgeToEdge = true,
+                        compactLayout = true,
+                        plotHeight = 200.dp,
+                        valueFormatter = ::formatBodyweight,
+                        graphState = when {
+                            rows == null -> VibeGraphState.Loading
+                            trendError != null -> VibeGraphState.Error(trendError)
+                            trendRows.isEmpty() -> VibeGraphState.Empty("No bodyweight entries in this date range.")
+                            else -> VibeGraphState.Data
+                        },
+                        onSelect = { index ->
+                            val day = Instant.ofEpochMilli(trendRows[index].recordedAt).atZone(zone).toLocalDate()
+                            selectedDay = day.toEpochDay()
+                            displayedMonth = YearMonth.from(day).toString()
+                        },
+                    )
+                }
+            }
             item(key = "calendar") {
                 Column(
                     Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark)
@@ -535,43 +611,27 @@ fun MeasurementsScreen(
                     )
                 }
             }
-            item(key = "trend") {
+            item(key = "photos") {
                 Column(
-                    Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                    Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark).testTag("Body photos tile"),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Bodyweight trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        ProgressRangeSelector(
-                            rangeMonths, customRange, onCustom = { rangeDialog = true },
-                            description = "Bodyweight date range",
-                        ) {
-                            rangeMonths = it
-                            customRange = false
+                    Text("Photos", style = MaterialTheme.typography.titleMedium)
+                    when {
+                        photosLoading -> Box(Modifier.fillMaxWidth().height(320.dp), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
                         }
+                        photoError != null -> Text(requireNotNull(photoError), color = MaterialTheme.colorScheme.error)
+                        photos.isEmpty() -> Text("No photos yet.", Modifier.padding(vertical = 24.dp), color = palette.textSecondary)
+                        else -> BodyPhotoCarousel(
+                            photos, (selectedPhotos.firstOrNull() ?: photos.last()).file.name,
+                            onPhotoClick = { photo ->
+                                focusManager.clearFocus(force = true)
+                                keyboardController?.hide()
+                                galleryStart = photo.file.name
+                            },
+                        )
                     }
-                    VibeGraph(
-                        values = if (trendError == null) trendRows.map { converted.getValue(it.id).getOrThrow() } else emptyList(),
-                        dates = if (trendError == null) trendRows.map { it.recordedAt } else emptyList(),
-                        unit = displayUnit.symbol,
-                        dateRange = dateRange,
-                        readoutBelow = true,
-                        edgeToEdge = true,
-                        compactLayout = true,
-                        plotHeight = 200.dp,
-                        valueFormatter = ::formatBodyweight,
-                        graphState = when {
-                            rows == null -> VibeGraphState.Loading
-                            trendError != null -> VibeGraphState.Error(trendError)
-                            trendRows.isEmpty() -> VibeGraphState.Empty("No bodyweight entries in this date range.")
-                            else -> VibeGraphState.Data
-                        },
-                        onSelect = { index ->
-                            val day = Instant.ofEpochMilli(trendRows[index].recordedAt).atZone(zone).toLocalDate()
-                            selectedDay = day.toEpochDay()
-                            displayedMonth = YearMonth.from(day).toString()
-                        },
-                    )
                 }
             }
             if (message.isNotBlank()) item { Text(message) }
@@ -586,6 +646,179 @@ fun MeasurementsScreen(
             customRange = true
             rangeDialog = false
         }
+        galleryStart?.let { name ->
+            if (photosLoading || photoError != null) {
+                HabitGlassDialog(title = "Body photos", onDismiss = { galleryStart = null }) {
+                    if (photosLoading) CircularProgressIndicator()
+                    else Text(requireNotNull(photoError), color = MaterialTheme.colorScheme.error)
+                }
+            } else BodyPhotoGallery(photos, name, onDismiss = { galleryStart = null })
+        }
+    }
+}
+
+internal data class BodyPhoto(val file: File, val timestamp: Long, val day: LocalDate)
+
+internal fun bodyPhotos(directory: File, zone: ZoneId): List<BodyPhoto> {
+    if (!directory.exists()) return emptyList()
+    check(directory.isDirectory) { "Photo storage is not a directory" }
+    val files = directory.listFiles() ?: throw IOException("Could not read photo storage")
+    return files.filter { it.isFile && it.extension.equals("jpg", true) }.map { file ->
+        val timestamp = file.nameWithoutExtension.toLongOrNull()
+            ?: throw IOException("Photo has no saved date: ${file.name}")
+        BodyPhoto(file, timestamp, Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate())
+    }.sortedWith(compareBy<BodyPhoto> { it.timestamp }.thenBy { it.file.name })
+}
+
+internal fun bodyPhotoIndex(page: Int, count: Int): Int {
+    require(count > 0) { "Photo gallery is empty" }
+    return Math.floorMod(page, count)
+}
+
+internal fun bodyPhotoStartPage(index: Int, count: Int): Int {
+    require(index in 0 until count) { "Selected photo is not in the gallery" }
+    val middle = Int.MAX_VALUE / 2
+    return middle - Math.floorMod(middle, count) + index
+}
+
+@Composable
+internal fun BodyPhotoGallery(photos: List<BodyPhoto>, initialName: String, onDismiss: () -> Unit) {
+    HabitGlassDialog(title = "Body photos", onDismiss = onDismiss) {
+        BodyPhotoCarousel(photos, initialName)
+    }
+}
+
+@Composable
+private fun BodyPhotoCarousel(
+    photos: List<BodyPhoto>,
+    initialName: String,
+    onPhotoClick: ((BodyPhoto) -> Unit)? = null,
+) {
+    val index = photos.indexOfFirst { it.file.name == initialName }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        if (index < 0) {
+            Text("This photo is no longer available.", color = MaterialTheme.colorScheme.error)
+        } else key(photos.map { it.file.name }, initialName) {
+            val pager = rememberPagerState(initialPage = bodyPhotoStartPage(index, photos.size)) { Int.MAX_VALUE }
+            val scope = rememberCoroutineScope()
+            val reducedMotion = com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion.current
+            val current = photos[bodyPhotoIndex(pager.currentPage, photos.size)]
+            val density = LocalDensity.current
+            var navigationHeight by remember { mutableStateOf(48.dp) }
+            Row(
+                Modifier.fillMaxWidth().onSizeChanged { navigationHeight = with(density) { it.height.toDp() } },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(enabled = photos.size > 1, onClick = {
+                    scope.launch {
+                        if (reducedMotion) pager.scrollToPage(pager.currentPage - 1)
+                        else pager.animateScrollToPage(pager.currentPage - 1)
+                    }
+                }) { Icon(Icons.Outlined.ChevronLeft, if (onPhotoClick == null) "Previous photo" else "Previous photo in tile") }
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(current.day.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG).withLocale(Locale.getDefault())))
+                    Text(
+                        "${bodyPhotoIndex(pager.currentPage, photos.size) + 1} of ${photos.size}",
+                        Modifier.testTag(if (onPhotoClick == null) "Body photo position" else "Body photo tile position"),
+                    )
+                }
+                IconButton(enabled = photos.size > 1, onClick = {
+                    scope.launch {
+                        if (reducedMotion) pager.scrollToPage(pager.currentPage + 1)
+                        else pager.animateScrollToPage(pager.currentPage + 1)
+                    }
+                }) { Icon(Icons.Outlined.ChevronRight, if (onPhotoClick == null) "Next photo" else "Next photo in tile") }
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val inline = onPhotoClick != null
+                val viewportWidth = if (inline) minOf(200.dp, maxWidth * 0.6f) else maxWidth
+                val viewportHeight = if (inline) 160.dp else minOf(
+                    480.dp, (LocalHabitDialogContentMaxHeight.current - navigationHeight).coerceAtLeast(1.dp),
+                )
+                val width = with(density) { viewportWidth.roundToPx() }.coerceAtLeast(1)
+                val height = with(density) { viewportHeight.roundToPx() }.coerceAtLeast(1)
+                HorizontalPager(
+                    state = pager, modifier = Modifier.width(viewportWidth).height(viewportHeight).semantics {
+                        contentDescription = if (onPhotoClick == null) "Body photo gallery" else "Body photo carousel"
+                    },
+                    reverseLayout = LocalLayoutDirection.current == LayoutDirection.Ltr,
+                    userScrollEnabled = photos.size > 1,
+                ) { page ->
+                    val photo = photos[bodyPhotoIndex(page, photos.size)]
+                    val image by produceState<Result<androidx.compose.ui.graphics.ImageBitmap>?>(null, photo.file, width, height) {
+                        value = try {
+                            Result.success(withContext(Dispatchers.IO) { decodeBodyPhoto(photo.file, width, height).asImageBitmap() })
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Result.failure(e)
+                        }
+                    }
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        when {
+                            image == null -> CircularProgressIndicator()
+                            image?.isFailure == true -> Text(
+                                "Could not open photo: ${image?.exceptionOrNull()?.message}",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            else -> Image(
+                                requireNotNull(image).getOrThrow(),
+                                contentDescription = "Body photo for ${formatDisplayDate(photo.day)}",
+                                modifier = Modifier.fillMaxSize()
+                                    .testTag(if (onPhotoClick == null) "Body photo ${photo.file.name}" else "Body photo tile ${photo.file.name}")
+                                    .then(
+                                        if (onPhotoClick != null) Modifier.clickable(onClickLabel = "Enlarge photo") { onPhotoClick(photo) }
+                                        else Modifier,
+                                    ),
+                                contentScale = ContentScale.Fit,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun decodeBodyPhoto(file: File, width: Int, height: Int): android.graphics.Bitmap {
+    if (Build.VERSION.SDK_INT >= 28) {
+        return android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(file)) { decoder, info, _ ->
+            val scale = minOf(1f, width.toFloat() / info.size.width, height.toFloat() / info.size.height)
+            decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+            decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    }
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+    check(bounds.outWidth > 0 && bounds.outHeight > 0) { "Unsupported or damaged image" }
+    val orientation = if (bounds.outMimeType == "image/jpeg") {
+        android.media.ExifInterface(file.path).getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL,
+        )
+    } else android.media.ExifInterface.ORIENTATION_NORMAL
+    val rotated = orientation in listOf(5, 6, 7, 8)
+    val sourceWidth = if (rotated) bounds.outHeight else bounds.outWidth
+    val sourceHeight = if (rotated) bounds.outWidth else bounds.outHeight
+    var sample = 1
+    while (sourceWidth / sample > width || sourceHeight / sample > height) sample *= 2
+    val bitmap = android.graphics.BitmapFactory.decodeFile(file.path, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample })
+        ?: throw IOException("Could not decode image")
+    val matrix = android.graphics.Matrix()
+    when (orientation) {
+        0, 1 -> return bitmap
+        2 -> matrix.postScale(-1f, 1f)
+        3 -> matrix.postRotate(180f)
+        4 -> matrix.postScale(1f, -1f)
+        5 -> { matrix.postRotate(90f); matrix.postScale(-1f, 1f) }
+        6 -> matrix.postRotate(90f)
+        7 -> { matrix.postRotate(270f); matrix.postScale(-1f, 1f) }
+        8 -> matrix.postRotate(270f)
+        else -> { bitmap.recycle(); throw IOException("Unsupported image orientation") }
+    }
+    return try {
+        android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    } finally {
+        bitmap.recycle()
     }
 }
 

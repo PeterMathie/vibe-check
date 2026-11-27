@@ -184,18 +184,24 @@ internal fun WorkoutSetVariantPicker(
                 .padding(horizontal = 2.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            if (showName && variantName.isNotBlank()) Text(
-                variantName,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                color = palette.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.setBorderLabelBackground(parentBackgroundColor, backgroundColor)
-                    .semantics { contentDescription = "Variant for $identity" },
-            ) else if (variations.isNotEmpty()) Icon(
+            if (showName && (selectable || variantName.isNotBlank())) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    variantName.ifBlank { "Choose..." },
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                    color = selectionTextColor(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                        .setBorderLabelBackground(parentBackgroundColor, backgroundColor)
+                        .semantics { contentDescription = "Variant for $identity" },
+                )
+                if (selectable) Icon(
+                    Icons.Outlined.ExpandMore, null,
+                    Modifier.size(16.dp).setBorderLabelBackground(parentBackgroundColor, backgroundColor),
+                    tint = selectionTextColor(),
+                )
+            } else if (variations.isNotEmpty()) Icon(
                 Icons.Outlined.ExpandMore, null,
                 Modifier.size(16.dp).setBorderLabelBackground(parentBackgroundColor, backgroundColor),
-                tint = palette.textSecondary,
+                tint = selectionTextColor(),
             )
         }
         DropdownMenu(
@@ -213,7 +219,7 @@ internal fun WorkoutSetVariantPicker(
                         Text(
                             option.name,
                             style = MaterialTheme.typography.bodyLarge,
-                            color = palette.textPrimary,
+                            color = selectionTextColor(),
                         )
                     },
                     modifier = Modifier.semantics { selected = option.id == currentVariantId },

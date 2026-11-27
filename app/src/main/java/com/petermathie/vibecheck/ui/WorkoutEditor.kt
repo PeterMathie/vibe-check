@@ -64,6 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
@@ -71,10 +74,16 @@ import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.*
 import java.time.Instant
 import java.time.ZoneId
+import java.time.Duration
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.first
 import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 
@@ -94,6 +103,66 @@ private fun WorkoutEntryDraftEntity.isEntirelyEmpty(): Boolean =
         timeHeld, timeUnderTension,
     ).all(String::isEmpty) && attemptsFor(this).all(String::isEmpty) && bandIds(bandIds).isEmpty()
 
+internal fun workoutDurationText(
+    startedAt: Long,
+    finishedAt: Long?,
+    running: Boolean,
+    now: Long,
+): String {
+    val end = finishedAt ?: if (running) now else return "—"
+    if (end < startedAt) return "Invalid workout times"
+    val seconds = Duration.between(Instant.ofEpochMilli(startedAt), Instant.ofEpochMilli(end)).seconds
+    return String.format(Locale.ROOT, "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
+}
+
+@Composable
+private fun WorkoutTiming(workout: WorkoutEntity) {
+    val palette = LocalVibePalette.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val context = LocalContext.current
+    val running = workout.status == "DRAFT" && workout.finishedAt == null
+    var now by remember(workout.id, workout.startedAt) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lifecycle, workout.id, workout.startedAt, running) {
+        if (running) lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                now = System.currentTimeMillis()
+                val elapsed = Duration.between(Instant.ofEpochMilli(workout.startedAt), Instant.ofEpochMilli(now))
+                delay(1000L - elapsed.nano / 1_000_000L)
+            }
+        }
+    }
+    val formatter = DateTimeFormatter.ofPattern(
+        if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm:ss" else "h:mm:ss a",
+        Locale.getDefault(),
+    ).withZone(ZoneId.systemDefault())
+    val duration = workoutDurationText(workout.startedAt, workout.finishedAt, running, now)
+    val durationStyle = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum")
+    val measurer = rememberTextMeasurer()
+    val durationWidth = with(LocalDensity.current) {
+        maxOf(
+            measurer.measure("23:59:59", durationStyle).size.width,
+            measurer.measure(duration, durationStyle).size.width,
+        ).toDp()
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp).semantics { contentDescription = "Workout timing" },
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Started at ${formatter.format(Instant.ofEpochMilli(workout.startedAt))}", Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Duration", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+            Text(
+                duration,
+                Modifier.width(durationWidth).semantics { contentDescription = "Workout duration"; stateDescription = duration },
+                style = durationStyle, textAlign = TextAlign.End,
+                color = if (duration == "Invalid workout times") MaterialTheme.colorScheme.error else palette.textSecondary,
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun WorkoutEditor(
@@ -102,6 +171,7 @@ fun WorkoutEditor(
     onChoose: () -> Unit,
     onFinish: (String) -> Unit,
     onDoneEditing: () -> Unit = onChoose,
+    showWorkoutTiming: Boolean = false,
     onDeleted: () -> Unit = onChoose,
 ) {
     val workouts by vm.workouts.collectAsStateWithLifecycle()
@@ -312,7 +382,8 @@ fun WorkoutEditor(
     ) {
         item {
             Text(workout.name, style = MaterialTheme.typography.headlineSmall)
-            if (logged.isNotEmpty()) Text(
+            if (showWorkoutTiming) WorkoutTiming(workout)
+            else if (logged.isNotEmpty()) Text(
                 "Logged duration: ${((logged.maxOf { it.loggedAt } - logged.minOf { it.loggedAt }) / 60000)} min",
                 style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
             )

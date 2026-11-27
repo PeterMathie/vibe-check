@@ -5,6 +5,9 @@ import com.petermathie.vibecheck.domain.body.bodyweightInputError
 import com.petermathie.vibecheck.domain.body.convertBodyweight
 import com.petermathie.vibecheck.ui.copyBodyPhoto
 import com.petermathie.vibecheck.ui.formatBodyweight
+import com.petermathie.vibecheck.ui.bodyPhotos
+import com.petermathie.vibecheck.ui.bodyPhotoIndex
+import com.petermathie.vibecheck.ui.bodyPhotoStartPage
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
@@ -19,6 +22,48 @@ import org.junit.rules.TemporaryFolder
 
 class BodyweightTest {
     @get:Rule val files = TemporaryFolder()
+
+    @Test
+    fun galleryIndexesAllDatesChronologicallyWithoutChangingPhotoFiles() {
+        val directory = files.newFolder("gallery")
+        val zone = ZoneId.of("America/Toronto")
+        val day = LocalDate.of(2026, 3, 8)
+        val dates = listOf(day.atTime(20, 0), day.minusDays(1).atTime(12, 0), day.atTime(8, 0))
+        val originals = dates.mapIndexed { index, date ->
+            File(directory, "${date.atZone(zone).toInstant().toEpochMilli()}.jpg").apply { writeBytes(byteArrayOf(index.toByte())) }
+        }
+        val before = originals.associate { it.name to it.readBytes().toList() }
+        val indexed = bodyPhotos(directory, zone)
+        assertEquals(listOf(day.minusDays(1), day, day), indexed.map { it.day })
+        assertEquals(indexed.map { it.timestamp }.sorted(), indexed.map { it.timestamp })
+        assertEquals(2, indexed.count { it.day == day })
+        assertEquals(before, directory.listFiles()!!.associate { it.name to it.readBytes().toList() })
+    }
+
+    @Test
+    fun galleryPagesOpenAtSelectedPhotoAndWrapPreviousAndNext() {
+        listOf(1, 2, 3, 17).forEach { count ->
+            (0 until count).forEach { index ->
+                val page = bodyPhotoStartPage(index, count)
+                assertEquals(index, bodyPhotoIndex(page, count))
+                assertEquals((index + count - 1) % count, bodyPhotoIndex(page - 1, count))
+                assertEquals((index + 1) % count, bodyPhotoIndex(page + 1, count))
+            }
+        }
+        assertEquals(4, bodyPhotoIndex(-1, 5))
+        assertThrows(IllegalArgumentException::class.java) { bodyPhotoIndex(0, 0) }
+        assertThrows(IllegalArgumentException::class.java) { bodyPhotoStartPage(3, 3) }
+    }
+
+    @Test
+    fun missingPhotoStorageIsEmptyButUnreadableDatesReportErrors() {
+        assertTrue(bodyPhotos(File(files.root, "absent"), ZoneId.of("UTC")).isEmpty())
+        val directory = files.newFolder("bad-gallery")
+        val unknown = File(directory, "undated.jpg").apply { writeBytes(byteArrayOf(7)) }
+        assertThrows(IOException::class.java) { bodyPhotos(directory, ZoneId.of("UTC")) }
+        assertArrayEquals(byteArrayOf(7), unknown.readBytes())
+        assertThrows(IllegalStateException::class.java) { bodyPhotos(unknown, ZoneId.of("UTC")) }
+    }
 
     @Test
     fun kilogramsAndPoundsDescribeTheSameWeightInBothDirections() {

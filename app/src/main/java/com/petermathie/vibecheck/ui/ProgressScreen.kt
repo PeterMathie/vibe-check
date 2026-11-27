@@ -44,9 +44,9 @@ fun ProgressScreen(vm:EditorViewModel) {
     var exerciseId by rememberSaveable { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by rememberSaveable { mutableStateOf<String?>(null) }
     var variationMenu by remember { mutableStateOf(false) };var methodology by remember { mutableStateOf(false) }
     var rpeHelp by remember { mutableStateOf(false) }
-    var rangeMonths by rememberSaveable { mutableIntStateOf(1) }
+    var rangeMonths by rememberSaveable { mutableIntStateOf(12) }
     var customRange by rememberSaveable { mutableStateOf(false) }
-    var customStart by rememberSaveable { mutableLongStateOf(LocalDate.now().minusMonths(1).toEpochDay()) }
+    var customStart by rememberSaveable { mutableLongStateOf(LocalDate.now().minusYears(1).toEpochDay()) }
     var customEnd by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     var rangeDialog by remember { mutableStateOf(false) }
     val dateRange = if (customRange) {
@@ -328,10 +328,10 @@ private fun ExerciseProgressHeader(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                exercises.find { it.id == exerciseId }?.canonicalName?.let { "Track progress of $it" } ?: "Track progress of...",
+                exercises.find { it.id == exerciseId }?.canonicalName?.let { "Track progress of $it" } ?: "Choose...",
                 modifier = Modifier.weight(1f, fill = false),
                 style = MaterialTheme.typography.titleLarge,
-                color = LocalVibePalette.current.textPrimary,
+                color = selectionTextColor(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -341,14 +341,18 @@ private fun ExerciseProgressHeader(
         val exerciseVariations = variations.filter { it.exerciseId == exerciseId }
         if (exerciseVariations.isNotEmpty()) Box {
             IconButton(onClick = { onVariationMenu(true) }) {
-                Icon(Icons.Outlined.ExpandMore, "Variations: ${exerciseVariations.find { it.id == filter }?.name ?: "All variations"}")
+                Icon(
+                    Icons.Outlined.ExpandMore,
+                    "Variations: ${exerciseVariations.find { it.id == filter }?.name ?: "All variations"}",
+                    tint = selectionTextColor(),
+                )
             }
             DropdownMenu(
                 expanded = variationMenu,
                 onDismissRequest = { onVariationMenu(false) },
             ) {
                 DropdownMenuItem(
-                    text = { Text("All variations") },
+                    text = { Text("All variations", color = selectionTextColor()) },
                     onClick = {
                         onFilter(null)
                         onVariationMenu(false)
@@ -356,7 +360,7 @@ private fun ExerciseProgressHeader(
                 )
                 exerciseVariations.forEach { variation ->
                     DropdownMenuItem(
-                        text = { Text(variation.name) },
+                        text = { Text(variation.name, color = selectionTextColor()) },
                         onClick = {
                             onFilter(variation.id)
                             onVariationMenu(false)
@@ -382,18 +386,18 @@ internal fun ProgressRangeSelector(
             contentDescription = description
             stateDescription = if (custom) "Custom" else if (months == 12) "1 year" else if (months == 1) "1 month" else "$months months"
         }, contentPadding = PaddingValues(horizontal = 4.dp)) {
-            Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = LocalVibePalette.current.textPrimary)
-            Icon(Icons.Outlined.ExpandMore, null, tint = LocalVibePalette.current.textPrimary)
+            Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = selectionTextColor())
+            Icon(Icons.Outlined.ExpandMore, null, tint = selectionTextColor())
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         listOf(1 to ("1m" to "1 month"), 3 to ("3m" to "3 months"), 6 to ("6m" to "6 months"), 12 to ("1y" to "1 year")).forEach { (value, labels) ->
             DropdownMenuItem(
-                text = { Text(labels.second) },
+                text = { Text(labels.second, color = selectionTextColor()) },
                 onClick = { expanded = false; onChange(value) },
                 modifier = Modifier.semantics { contentDescription = labels.second },
             )
         }
-        DropdownMenuItem(text = { Text("Custom") }, onClick = { expanded = false; onCustom() })
+        DropdownMenuItem(text = { Text("Custom", color = selectionTextColor()) }, onClick = { expanded = false; onCustom() })
         }
     }
 }
@@ -449,6 +453,7 @@ private fun ProgressExercisePicker(
             "Overall training trend",
             Modifier.fillMaxWidth().clickable { onChoose(null) }.padding(vertical = 8.dp),
             style = MaterialTheme.typography.bodyLarge,
+            color = selectionTextColor(),
         )
         if (available.isEmpty()) Text("No matching exercises.")
         available.sortedBy { it.canonicalName }.forEach { exercise ->
@@ -456,6 +461,7 @@ private fun ProgressExercisePicker(
                 exercise.canonicalName,
                 Modifier.fillMaxWidth().clickable { onChoose(exercise) }.padding(vertical = 8.dp),
                 style = MaterialTheme.typography.bodyLarge,
+                color = selectionTextColor(),
             )
         }
     }

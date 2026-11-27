@@ -4,11 +4,38 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.ui.emptySet
 import com.petermathie.vibecheck.ui.setDescription
+import com.petermathie.vibecheck.ui.workoutDurationText
 import com.petermathie.vibecheck.domain.workout.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class TimingEntriesTest {
+    @Test
+    fun runningWorkoutUsesWholeElapsedSecondsIncludingTimeBeforeAnySet() {
+        val start = 1_700_000_000_321L
+        assertEquals("00:00:00", workoutDurationText(start, null, true, start + 999))
+        assertEquals("00:00:01", workoutDurationText(start, null, true, start + 1000))
+        assertEquals("01:01:01", workoutDurationText(start, null, true, start + 3_661_987))
+        assertEquals("23:59:59", workoutDurationText(start, null, true, start + 86_399_999))
+        assertEquals("24:00:00", workoutDurationText(start, null, true, start + 86_400_000))
+        assertEquals("100:00:00", workoutDurationText(start, null, true, start + 360_000_000))
+    }
+
+    @Test
+    fun finishedWorkoutStopsAtSavedFinishAndDoesNotInventMissingFinish() {
+        val start = 1_700_000_000_321L
+        val finish = start + 61_999
+        assertEquals("00:01:01", workoutDurationText(start, finish, false, finish))
+        assertEquals("00:01:01", workoutDurationText(start, finish, false, finish + 86_400_000))
+        assertEquals("—", workoutDurationText(start, null, false, finish))
+    }
+
+    @Test
+    fun reversedWorkoutTimestampsAreReportedWithoutClampingOrChangingThem() {
+        assertEquals("Invalid workout times", workoutDurationText(1000, 999, false, 2000))
+        assertEquals("Invalid workout times", workoutDurationText(1000, null, true, 999))
+    }
+
     @Test
     fun timingInputsRetainBlanksAndDecimalText() {
         val values = listOf("1.5", "", "2,25")

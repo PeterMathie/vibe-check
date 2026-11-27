@@ -12,9 +12,12 @@ interface EditorDao {
     @Query("DELETE FROM workout_muscles WHERE workoutExerciseId=:id") suspend fun clearWorkoutMuscles(id:String)
     @Upsert suspend fun workoutMuscles(rows:List<WorkoutMuscleEntity>)
     @Query("SELECT * FROM programmes WHERE isArchived = 0 ORDER BY position,name") fun programmes(): Flow<List<ProgrammeEntity>>
+    @Query("SELECT * FROM programmes WHERE id=:id") suspend fun programmeById(id: String): ProgrammeEntity?
     @Query("SELECT * FROM programmes WHERE isArchived = 1 ORDER BY name") fun archivedProgrammes(): Flow<List<ProgrammeEntity>>
     @Query("SELECT * FROM programme_days ORDER BY position") fun days(): Flow<List<ProgrammeDayEntity>>
     @Query("SELECT * FROM programme_exercises ORDER BY position") fun entries(): Flow<List<ProgrammeExerciseEntity>>
+    @Query("SELECT * FROM programme_exercises WHERE id=:id")
+    suspend fun programmeEntryById(id: String): ProgrammeExerciseEntity?
     @Query("SELECT * FROM exercises ORDER BY canonicalName") fun exercises(): Flow<List<ExerciseEntity>>
     @Query("SELECT * FROM muscles ORDER BY displayName") fun muscles(): Flow<List<MuscleEntity>>
     @Query("SELECT * FROM exercise_muscles") fun mappings(): Flow<List<ExerciseMuscleEntity>>
@@ -31,6 +34,10 @@ interface EditorDao {
     suspend fun setProgrammeArchived(id: String, archived: Boolean): Int
     @Upsert suspend fun day(row: ProgrammeDayEntity)
     @Upsert suspend fun entry(row: ProgrammeExerciseEntity)
+    @Query("UPDATE programme_exercises SET targetSets=:count WHERE id=:id")
+    suspend fun setProgrammeSetCount(id: String, count: Int?): Int
+    @Query("UPDATE programme_exercises SET restSeconds=:seconds WHERE id=:id")
+    suspend fun setProgrammeRestSeconds(id: String, seconds: Int): Int
     @Upsert suspend fun exercise(row: ExerciseEntity)
     @Upsert suspend fun variation(row: ExerciseVariationEntity)
     @Upsert suspend fun referenceVideo(row: ExerciseReferenceVideoEntity)

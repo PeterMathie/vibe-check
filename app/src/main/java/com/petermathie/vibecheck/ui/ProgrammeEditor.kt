@@ -1,6 +1,5 @@
 package com.petermathie.vibecheck.ui
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -10,7 +9,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,9 +20,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.ChevronLeft
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,18 +28,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.model.TrainingMode
-import com.petermathie.vibecheck.domain.model.programmeColour
 import com.petermathie.vibecheck.domain.model.recordColours
-import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
-import com.petermathie.vibecheck.domain.programme.prescriptionSummary
+import androidx.compose.material.icons.outlined.Close
 import com.petermathie.vibecheck.ui.theme.LocalVibeReducedMotion
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 
 @Composable
 fun ProgrammeEditor(
@@ -55,28 +59,29 @@ fun ProgrammeEditor(
     val days by vm.days.collectAsStateWithLifecycle()
     val entries by vm.entries.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
+    val error by vm.error.collectAsStateWithLifecycle()
     var selected by rememberSaveable { mutableStateOf<String?>(null) }
+    var prescriptionInputs by remember(selected) { mutableStateOf(mapOf<String, ProgrammePrescriptionInputs>()) }
     var expandedProgrammeIds by rememberSaveable { mutableStateOf(listOf<String>()) }
-    var creatingId by rememberSaveable { mutableStateOf<String?>(null) }
-    var creatingColour by rememberSaveable { mutableLongStateOf(0L) }
     var savingProgramme by remember { mutableStateOf(false) }
+    var confirmingDelete by rememberSaveable { mutableStateOf(false) }
+    var programmeName by rememberSaveable { mutableStateOf("") }
     var chooseColour by rememberSaveable { mutableStateOf(false) }
     var addExerciseDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var addExerciseActivityTag by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingAddDayChoice by rememberSaveable { mutableStateOf(false) }
     var pendingAddTypeDayId by rememberSaveable { mutableStateOf<String?>(null) }
-    var editPrescription by remember { mutableStateOf<ProgrammeExerciseEntity?>(null) }
+    var pendingRemoval by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingStartDayId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingStartWorkoutId by rememberSaveable { mutableStateOf<String?>(null) }
     val programmeRows = programmes.sortedBy { it.position }
     val selectedProgramme = programmes.find { it.id == selected }
-    val editing = selected != null || creatingId != null
-    val colourArgb = selectedProgramme?.colourArgb ?: creatingColour
-    var generatedEmptyDayId by rememberSaveable(selectedProgramme?.id) { mutableStateOf<String?>(null) }
-    var programmeName by rememberSaveable(selectedProgramme?.id, selectedProgramme?.name, creatingId) {
-        mutableStateOf(selectedProgramme?.name.orEmpty())
-    }
+    val editing = selected != null
+    val colourArgb = selectedProgramme?.colourArgb ?: 0L
     val dayRows = days.filter { it.programmeId == selected }.sortedBy { it.position }
+    val editingEntryIds = entries.filter { entry -> dayRows.any { it.id == entry.programmeDayId } }.map { it.id }.toSet()
+    val editedPrescriptions = prescriptionInputs.filterKeys { it in editingEntryIds }
+    val prescriptionsValid = editedPrescriptions.values.all { it.valid }
     val programmeOrder = rememberReorderState(programmeRows.map { it.id }) { key, from, to ->
         vm.moveProgramme(key as String, to - from)
     }
@@ -87,7 +92,8 @@ fun ProgrammeEditor(
     val palette = LocalVibePalette.current
     val haptics = rememberVibeHaptics()
     val listState = rememberLazyListState()
-    LaunchedEffect(selected, creatingId) { listState.scrollToItem(0) }
+    val editorScroll = rememberScrollState()
+    LaunchedEffect(selected) { editorScroll.scrollTo(0) }
     val activeWorkout = vm.workouts.collectAsStateWithLifecycle().value.find { it.status == "DRAFT" }
     fun requestStart(dayId: String) {
         when {
@@ -105,7 +111,7 @@ fun ProgrammeEditor(
         destination = AppFabDestination.ResumeWorkout,
         visible = activeWorkout != null && !isStartingWorkout && !editing &&
             addExerciseDayId == null && !pendingAddDayChoice && pendingAddTypeDayId == null &&
-            editPrescription == null && pendingStartDayId == null,
+            pendingRemoval == null && pendingStartDayId == null,
         onClick = onResume,
     )
     val availableAddTypes = exercises
@@ -123,160 +129,103 @@ fun ProgrammeEditor(
     }
     fun requestAddProgrammeItem() {
         when (dayRows.size) {
-            0 -> generatedEmptyDayId?.let(::chooseAddType) ?: selectedProgramme?.let { programme ->
-                val dayId = newId()
-                generatedEmptyDayId = dayId
-                val day = ProgrammeDayEntity(
-                    id = dayId,
-                    programmeId = programme.id,
-                    name = if (programme.mode == TrainingMode.STRETCHING.name) "Stretching" else "Workout",
-                    position = 0,
-                )
-                vm.save(day) { chooseAddType(day.id) }
+            0 -> selectedProgramme?.let { programme ->
+                vm.ensureProgrammeDay(programme.id) { dayId ->
+                    if (selected == programme.id) chooseAddType(dayId)
+                }
             }
             1 -> chooseAddType(dayRows.single().id)
             else -> pendingAddDayChoice = true
         }
     }
     fun closeEditor() {
+        if (savingProgramme) return
         selected = null
-        creatingId = null
         chooseColour = false
+        confirmingDelete = false
     }
-    fun saveName() {
+    fun openEditor(programme: ProgrammeEntity) {
+        programmeName = programme.name
+        selected = programme.id
+        haptics.perform(VibeHapticEvent.EDIT)
+    }
+    fun saveProgrammeEdits() {
         val name = programmeName.trim()
-        if (name.isBlank() || savingProgramme) return
-        val id = creatingId
-        if (id == null) {
-            selectedProgramme?.let { vm.renameProgramme(it.id, name) }
-        } else {
-            savingProgramme = true
-            vm.createProgramme(
-                ProgrammeEntity(id, name, defaultMode.name, false, position = programmeRows.size, colourArgb = creatingColour),
-                ProgrammeDayEntity(
-                    newId(), id,
-                    if (defaultMode == TrainingMode.STRENGTH) "Workout" else "Stretching", 0,
-                ),
-                onFailure = { savingProgramme = false },
-            ) {
-                selected = id
-                creatingId = null
-                savingProgramme = false
-                haptics.perform(VibeHapticEvent.SUCCESS)
-            }
-        }
+        val prescriptions = prescriptionInputs.filterKeys { it in editingEntryIds }
+        if (name.isBlank() || prescriptions.values.any { !it.valid } || savingProgramme) return
+        val id = selected ?: return
+        savingProgramme = true
+        vm.saveProgrammeEditor(
+            id, name,
+            prescriptions.map { (entryId, input) ->
+                ProgrammeEntryPrescriptionUpdate(entryId, input.setCount, requireNotNull(input.restSeconds))
+            },
+            onSaved = { savingProgramme = false; closeEditor() },
+            onFailure = { savingProgramme = false },
+        )
     }
-    BackHandler(editing) { if (!savingProgramme) closeEditor() }
     HabitGlassDialogHost { backdrop, _ ->
-    ScreenList(modifier = backdrop, listState = listState) {
-        item {
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-            ) {
-                if (editing) {
-                    IconButton(onClick = ::closeEditor, enabled = !savingProgramme) {
-                        Icon(Icons.Outlined.ChevronLeft, contentDescription = "Back")
-                    }
-                }
-                Text(
-                    if (!editing) "Programmes" else if (creatingId != null) "New programme" else "Edit programme",
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.headlineSmall,
-                )
-            }
-        }
-        if (!editing) {
-            if (programmeRows.isEmpty()) {
-                item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize your sessions.") }
+        ScreenList(modifier = backdrop, listState = listState) {
+            item { Text("Programmes", style = MaterialTheme.typography.headlineSmall) }
+            if (programmeRows.isEmpty()) item {
+                com.petermathie.vibecheck.ui.components.VibeStatePanel("Create a programme to organize your sessions.")
             }
             itemsIndexed(programmeOrder.ordered(programmeRows) { it.id }, key = { _, row -> row.id }) { index, p ->
                 val expanded = p.id in expandedProgrammeIds
                 val previewDays = days.filter { it.programmeId == p.id }.sortedBy { it.position }
-                ReorderItem(
-                    state = programmeOrder,
-                    itemKey = p.id,
-                    index = index,
-                    modifier = Modifier.fillMaxWidth().animateContentSize(),
-                ) {
-                    Box(
-                        Modifier.fillMaxWidth().habitGlow(Color(p.colourArgb.toInt()), palette.isDark),
-                    ) {
-                    Column(Modifier.fillMaxWidth()) {
+                val activeDay = previewDays.find { it.id == activeWorkout?.programmeDayId }
+                ReorderItem(programmeOrder, p.id, index, Modifier.fillMaxWidth().animateContentSize()) {
+                    Column(Modifier.fillMaxWidth().habitGlow(Color(p.colourArgb.toInt()), palette.isDark)) {
                         if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
-                        ReorderHandle(
-                            programmeOrder, p.id, p.name, enabled = programmeRows.size > 1, longPress = true,
-                        ) {
-                        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                            Text(
-                                p.name,
-                                Modifier
-                                    .weight(1f)
-                                    .clickable {
-                                        expandedProgrammeIds = if (expanded) {
-                                            expandedProgrammeIds - p.id
-                                        } else {
-                                            expandedProgrammeIds + p.id
-                                        }
-                                    }
-                                    .semantics {
+                        ReorderHandle(programmeOrder, p.id, p.name, enabled = programmeRows.size > 1, longPress = true) {
+                            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    p.name,
+                                    Modifier.weight(1f).combinedClickable(
+                                        onClick = {
+                                            expandedProgrammeIds = if (expanded) expandedProgrammeIds - p.id else expandedProgrammeIds + p.id
+                                        },
+                                        onDoubleClick = { openEditor(p) },
+                                    ).semantics {
                                         stateDescription = if (expanded) "Exercises shown" else "Exercises hidden"
+                                        customActions = listOf(CustomAccessibilityAction("Edit programme") { openEditor(p); true })
                                     },
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                            IconButton(onClick = {
-                                haptics.perform(VibeHapticEvent.EDIT)
-                                selected = p.id
-                            }) {
-                                Icon(Icons.Outlined.Edit, contentDescription = "Edit programme ${p.name}")
+                                    style = MaterialTheme.typography.titleLarge,
+                                )
+                                IconButton(
+                                    onClick = { (activeDay ?: previewDays.firstOrNull())?.let { requestStart(it.id) } },
+                                    enabled = previewDays.isNotEmpty() && !isStartingWorkout,
+                                    modifier = Modifier.semantics {
+                                        stateDescription = if (activeDay != null) "Workout in progress" else "Ready to start"
+                                    },
+                                ) {
+                                    Icon(
+                                        Icons.Outlined.PlayArrow, contentDescription = "Start ${p.name}",
+                                        tint = if (activeDay != null) palette.accent else palette.textSecondary,
+                                    )
+                                }
                             }
-                            IconButton(
-                                onClick = { previewDays.firstOrNull()?.let { requestStart(it.id) } },
-                                enabled = previewDays.isNotEmpty() && !isStartingWorkout,
-                            ) {
-                                Icon(Icons.Outlined.PlayArrow, contentDescription = "Start ${p.name}")
-                            }
-                        }
                         }
                         AnimatedVisibility(
                             visible = expanded,
                             enter = if (reducedMotion) EnterTransition.None else expandVertically() + fadeIn(),
                             exit = if (reducedMotion) ExitTransition.None else shrinkVertically() + fadeOut(),
                         ) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Column(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp)
-                                        .semantics { contentDescription = "Read-only exercises for ${p.name}" },
-                                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                                ) {
-                                    if (previewDays.isEmpty()) {
-                                        Text("No exercises yet", style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary)
-                                    }
-                                    previewDays.forEach { day ->
-                                        if (previewDays.size > 1) {
-                                            Text(day.name, style = MaterialTheme.typography.titleMedium)
-                                        }
-                                        val previewEntries = entries
-                                            .filter { it.programmeDayId == day.id }
-                                            .sortedBy { it.position }
-                                        if (previewEntries.isEmpty()) {
-                                            Text("No exercises yet", style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary)
-                                        } else {
-                                            previewEntries.forEach { entry ->
-                                                val exerciseName = exercises
-                                                    .find { it.id == entry.exerciseId }
-                                                    ?.canonicalName
-                                                    .orEmpty()
-                                                Column {
-                                                    Text(exerciseName, style = MaterialTheme.typography.bodyLarge)
-                                                    Text(prescriptionSummary(entry), style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
-                                                }
-                                            }
-                                        }
-                                        }
+                            Column(
+                                Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp, end = 12.dp, bottom = 12.dp)
+                                    .semantics { contentDescription = "Read-only exercises for ${p.name}" },
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (previewDays.isEmpty()) Text("No exercises yet", color = palette.textSecondary)
+                                previewDays.forEach { day ->
+                                    if (previewDays.size > 1) Text(day.name, style = MaterialTheme.typography.titleMedium)
+                                    val previewEntries = entries.filter { it.programmeDayId == day.id }.sortedBy { it.position }
+                                    if (previewEntries.isEmpty()) Text("No exercises yet", color = palette.textSecondary)
+                                    previewEntries.forEach { entry ->
+                                        ProgrammeExercisePreview(
+                                            entry.id, exercises.find { it.id == entry.exerciseId }?.canonicalName.orEmpty(),
+                                            entry.targetSets, entry.restSeconds,
+                                        )
                                     }
                                 }
                             }
@@ -287,10 +236,18 @@ fun ProgrammeEditor(
             item(key = "add-programme") {
                 TextButton(
                     onClick = {
-                        val id = newId()
-                        creatingColour = programmeColour(id)
-                        creatingId = id
+                        savingProgramme = true
+                        val programme = ProgrammeEntity(newId(), "Program ${programmeRows.size + 1}", defaultMode.name, false, position = programmeRows.size)
+                        vm.createProgramme(
+                            programme,
+                            ProgrammeDayEntity(newId(), programme.id, if (defaultMode == TrainingMode.STRENGTH) "Workout" else "Stretching", 0),
+                            onFailure = { savingProgramme = false },
+                        ) {
+                            savingProgramme = false
+                            openEditor(programme)
+                        }
                     },
+                    enabled = !savingProgramme,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Outlined.Add, null)
@@ -298,97 +255,184 @@ fun ProgrammeEditor(
                     Text("New programme")
                 }
             }
-        } else {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = { chooseColour = true },
-                        enabled = !savingProgramme,
-                        modifier = Modifier.semantics { contentDescription = "Change programme colour" },
-                    ) {
-                        Box(Modifier.size(28.dp).background(Color(colourArgb.toInt()), CircleShape))
+        }
+        val childDialogOpen = chooseColour || confirmingDelete || pendingAddDayChoice || pendingAddTypeDayId != null ||
+            addExerciseDayId != null || pendingRemoval != null || pendingStartDayId != null
+        if (selectedProgramme != null && !childDialogOpen) HabitGlassDialog(
+            title = "Edit programme",
+            onDismiss = ::closeEditor,
+            scrollState = editorScroll,
+            actions = {
+                if (savingProgramme) LinearProgressIndicator(Modifier.fillMaxWidth())
+                else {
+                    BoxWithConstraints(Modifier.fillMaxWidth()) {
+                        val labels = listOf("Save", "Archive", "Duplicate", "Delete")
+                        val measurer = rememberTextMeasurer()
+                        val density = LocalDensity.current
+                        val widths = labels.map { label ->
+                            with(density) { measurer.measure(label, MaterialTheme.typography.labelLarge).size.width.toDp() }
+                        }
+                        val available = (maxWidth - 24.dp).coerceAtLeast(0.dp)
+                        val scale = (available.value / widths.sumOf { it.value.toDouble() }.toFloat()).coerceAtMost(1f)
+                        // Visual widths follow the labels; pointer targets still expand independently.
+                        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                            Row(
+                                Modifier.fillMaxWidth().testTag("Programme editor actions"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                ProgrammeFooterButton(
+                                    "Save", ::saveProgrammeEdits,
+                                    enabled = programmeName.isNotBlank() && prescriptionsValid,
+                                    textAlign = TextAlign.Start,
+                                    width = widths[0] * scale,
+                                )
+                                ProgrammeFooterButton("Archive", {
+                                    savingProgramme = true
+                                    vm.archiveProgramme(
+                                        selectedProgramme.id,
+                                        onSaved = { savingProgramme = false; closeEditor() },
+                                        onFailure = { savingProgramme = false },
+                                    )
+                                }, width = widths[1] * scale)
+                                ProgrammeFooterButton("Duplicate", {
+                                    savingProgramme = true
+                                    vm.duplicate(
+                                        selectedProgramme,
+                                        onDuplicated = { savingProgramme = false; haptics.perform(VibeHapticEvent.SUCCESS) },
+                                        onFailure = { savingProgramme = false },
+                                    )
+                                }, width = widths[2] * scale)
+                                ProgrammeFooterButton("Delete", { confirmingDelete = true }, textAlign = TextAlign.End, width = widths[3] * scale)
+                            }
+                        }
                     }
+                }
+            },
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { chooseColour = true }, enabled = !savingProgramme,
+                    modifier = Modifier.semantics { contentDescription = "Change programme colour" },
+                ) { Box(Modifier.size(28.dp).background(Color(colourArgb.toInt()), CircleShape)) }
                 TextField(
                     value = programmeName,
-                    onValueChange = { programmeName = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text("Programme name") },
-                    singleLine = true,
-                    enabled = !savingProgramme,
-                    shape = MaterialTheme.shapes.small,
-                    colors = programmeFieldColors(),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = ::saveName,
-                            enabled = !savingProgramme && programmeName.isNotBlank() &&
-                                (creatingId != null || programmeName.trim() != selectedProgramme?.name),
-                        ) { Icon(Icons.Outlined.Check, "Save programme name") }
+                    onValueChange = { name ->
+                        programmeName = name
+                        if (name.isNotBlank()) vm.renameProgramme(selectedProgramme.id, name)
                     },
-                )
-                }
-                if (creatingId != null) Text(
-                    "Name your programme and save it to add exercises.",
-                    style = MaterialTheme.typography.bodySmall, color = palette.textSecondary,
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "Programme name" },
+                    label = { Text("Programme name") },
+                    isError = programmeName.isBlank(),
+                    supportingText = if (programmeName.isBlank()) {
+                        { Text("Programme name cannot be blank") }
+                    } else null,
+                    singleLine = true, enabled = !savingProgramme, shape = MaterialTheme.shapes.small,
+                    colors = programmeFieldColors(),
                 )
             }
-            itemsIndexed(dayOrder.ordered(dayRows) { it.id }, key = { _, row -> row.id }) { dayIndex, d ->
-                val dayEntries = entries.filter { it.programmeDayId == d.id }.sortedBy { it.position }
-                val entryOrder = rememberReorderState(dayEntries.map { it.id }) { key, from, to ->
-                    vm.moveEntry(key as String, to - from)
-                }
-                ReorderItem(dayOrder, d.id, dayIndex, Modifier.fillMaxWidth()) {
-                    Box(Modifier.fillMaxWidth().habitGlow(Color(colourArgb.toInt()), palette.isDark)) {
-                        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            dayOrder.ordered(dayRows) { it.id }.forEachIndexed { dayIndex, day ->
+                key(day.id) {
+                    val dayEntries = entries.filter { it.programmeDayId == day.id }.sortedBy { it.position }
+                    val entryOrder = rememberReorderState(dayEntries.map { it.id }) { item, from, to -> vm.moveEntry(item as String, to - from) }
+                    ReorderItem(dayOrder, day.id, dayIndex, Modifier.fillMaxWidth()) {
+                        Column(Modifier.fillMaxWidth().habitGlow(Color(colourArgb.toInt()), palette.isDark), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             if (dayIndex > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
-                            if (dayRows.size > 1) {
-                                ReorderHandle(dayOrder, d.id, d.name, longPress = true) {
-                                    Text(d.name, Modifier.fillMaxWidth().padding(vertical = 8.dp), style = MaterialTheme.typography.titleLarge)
-                                }
+                            if (dayRows.size > 1) ReorderHandle(dayOrder, day.id, day.name, longPress = true) {
+                                Text(day.name, Modifier.fillMaxWidth().padding(vertical = 8.dp), style = MaterialTheme.typography.titleLarge)
                             }
-                            VibeActionButton(
-                                "Start workout",
-                                { requestStart(d.id) },
-                                modifier = Modifier.fillMaxWidth(),
-                                importance = ActionImportance.PRIMARY,
-                                icon = Icons.Outlined.PlayArrow,
-                                enabled = !isStartingWorkout,
-                            )
-                            if (dayEntries.isEmpty()) {
-                                Text("No exercises yet", style = MaterialTheme.typography.bodyMedium, color = palette.textSecondary)
-                            }
+                            if (dayEntries.isEmpty()) Text("No exercises yet", color = palette.textSecondary)
                             entryOrder.ordered(dayEntries) { it.id }.forEachIndexed { index, entry ->
                                 key(entry.id) {
-                                    val exerciseName = exercises.find { it.id == entry.exerciseId }?.canonicalName.orEmpty()
-                                    ReorderItem(
-                                        entryOrder,
-                                        entry.id,
-                                        index,
-                                        Modifier.fillMaxWidth().animateContentSize(),
-                                    ) {
-                                        StagedSwipeToDelete(
-                                            label = "programme exercise $exerciseName",
-                                            onDelete = { vm.removeEntry(entry.id).join() },
-                                        ) {
+                                    val name = exercises.find { it.id == entry.exerciseId }?.canonicalName.orEmpty()
+                                    ReorderItem(entryOrder, entry.id, index, Modifier.fillMaxWidth().animateContentSize()) {
                                             Column(Modifier.fillMaxWidth()) {
                                                 if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.2f))
-                                                ReorderHandle(
-                                                    entryOrder, entry.id, exerciseName,
-                                                    enabled = dayEntries.size > 1, longPress = true,
-                                                ) {
-                                                    Column(
-                                                        Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable(
-                                                            onClickLabel = "Edit prescription for $exerciseName",
+                                                val input = prescriptionInputs[entry.id] ?: ProgrammePrescriptionInputs(
+                                                    entry.targetSets?.toString().orEmpty(), entry.restSeconds.toString(),
+                                                )
+                                                val density = LocalDensity.current
+                                                val measurer = rememberTextMeasurer()
+                                                val numberStyle = MaterialTheme.typography.bodyLarge
+                                                val suffixStyle = MaterialTheme.typography.labelSmall
+                                                val setsSuffix = if (input.setCount == 1) "set" else "sets"
+                                                fun fieldWidth(value: String, suffix: String): Dp = with(density) {
+                                                    val digits = maxOf(
+                                                        measurer.measure("999", numberStyle).size.width,
+                                                        measurer.measure(value, numberStyle).size.width,
+                                                    ).toDp()
+                                                    maxOf(56.dp, digits + measurer.measure(suffix, suffixStyle).size.width.toDp() + 22.dp)
+                                                }
+                                                val setsWidth = fieldWidth(input.sets, setsSuffix)
+                                                val restWidth = fieldWidth(input.rest, "s")
+                                                val prescriptionFields: @Composable () -> Unit = {
+                                                    HabitTextField(
+                                                        "Sets", input.sets,
+                                                        onValueChange = { text ->
+                                                            val updated = (prescriptionInputs[entry.id] ?: input).copy(sets = text)
+                                                            prescriptionInputs = prescriptionInputs + (entry.id to updated)
+                                                            if (updated.setsValid) vm.setProgrammeSetCount(entry.id, updated.setCount)
+                                                        },
+                                                        modifier = Modifier.width(setsWidth).semantics { contentDescription = "Sets for $name" },
+                                                        numeric = true, plain = true, inset = true, readOnly = savingProgramme,
+                                                        textAlign = TextAlign.End,
+                                                        suffix = setsSuffix,
+                                                        error = if (input.setsValid) null else "Enter a positive whole number",
+                                                    )
+                                                    HabitTextField(
+                                                        "Rest (s)", input.rest,
+                                                        onValueChange = { text ->
+                                                            val updated = (prescriptionInputs[entry.id] ?: input).copy(rest = text)
+                                                            prescriptionInputs = prescriptionInputs + (entry.id to updated)
+                                                            if (updated.restValid) vm.setProgrammeRestSeconds(entry.id, requireNotNull(updated.restSeconds))
+                                                        },
+                                                        modifier = Modifier.width(restWidth).semantics { contentDescription = "Rest seconds for $name" },
+                                                        numeric = true, plain = true, inset = true, readOnly = savingProgramme,
+                                                        textAlign = TextAlign.End,
+                                                        suffix = "s",
+                                                        error = if (input.restValid) null else "Enter zero or positive whole seconds",
+                                                    )
+                                                }
+                                                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                                                    val stacked = maxWidth < 48.dp + 12.dp + 80.dp * density.fontScale + setsWidth + restWidth
+                                                    Column {
+                                                        Row(
+                                                            Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                            verticalAlignment = Alignment.CenterVertically,
                                                         ) {
-                                                            haptics.perform(VibeHapticEvent.EDIT)
-                                                            editPrescription = entry
-                                                        }.semantics { contentDescription = "Edit prescription for $exerciseName" },
-                                                    ) {
-                                                        Text(exerciseName, style = MaterialTheme.typography.titleLarge)
-                                                        Text(prescriptionSummary(entry), style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
-                                                        entry.supersetGroup?.let { Text("Circuit: $it", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary) }
+                                                            IconButton(
+                                                                onClick = { pendingRemoval = entry.id },
+                                                                enabled = !savingProgramme,
+                                                            ) {
+                                                                Icon(
+                                                                    Icons.Outlined.Close, "Remove $name from programme",
+                                                                    modifier = Modifier.size(18.dp), tint = palette.textSecondary,
+                                                                )
+                                                            }
+                                                            ReorderHandle(
+                                                                entryOrder, entry.id, name, modifier = Modifier.weight(1.4f),
+                                                                enabled = dayEntries.size > 1, longPress = true,
+                                                            ) {
+                                                                Text(
+                                                                    name,
+                                                                    Modifier.fillMaxWidth().padding(vertical = 8.dp).semantics {
+                                                                        contentDescription = "Programme exercise $name"
+                                                                    },
+                                                                    style = MaterialTheme.typography.bodyLarge,
+                                                                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                                )
+                                                            }
+                                                            if (!stacked) prescriptionFields()
+                                                        }
+                                                        if (stacked) FlowRow(
+                                                            Modifier.fillMaxWidth(),
+                                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                                        ) { prescriptionFields() }
                                                     }
                                                 }
-                                            }
+                                                entry.supersetGroup?.let { Text("Circuit: $it", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary) }
                                         }
                                     }
                                 }
@@ -397,37 +441,39 @@ fun ProgrammeEditor(
                     }
                 }
             }
-                item(key = "add-programme-exercise") {
-                    TextButton(
-                        onClick = ::requestAddProgrammeItem,
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = selectedProgramme != null && availableAddTypes.isNotEmpty(),
-                    ) {
-                        Icon(Icons.Outlined.Add, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Add exercise")
-                    }
-                }
-                if (selectedProgramme != null) item {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        VibeActionButton("Duplicate", { selectedProgramme?.let(vm::duplicate) }, modifier = Modifier.weight(1f), importance = ActionImportance.COMPACT)
-                        VibeActionButton(
-                            "Delete",
-                            { selectedProgramme?.let { vm.removeProgramme(it.id); selected = null } },
-                            modifier = Modifier.weight(1f),
-                            importance = ActionImportance.COMPACT,
+            TextButton(
+                onClick = ::requestAddProgrammeItem,
+                enabled = !savingProgramme && availableAddTypes.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Outlined.Add, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Add exercise")
+            }
+            error?.let { message ->
+                TextButton(onClick = { vm.error.value = null }) { Text(message, color = MaterialTheme.colorScheme.error) }
+            }
+        }
+        if (confirmingDelete && selectedProgramme != null) HabitGlassDialog(
+            title = "Delete programme?",
+            onDismiss = { if (!savingProgramme) confirmingDelete = false },
+            actions = {
+                TextButton(onClick = { confirmingDelete = false }, enabled = !savingProgramme) { Text("Cancel") }
+                TextButton(
+                    onClick = {
+                        savingProgramme = true
+                        vm.removeProgramme(
+                            selectedProgramme.id,
+                            onRemoved = { savingProgramme = false; closeEditor() },
+                            onFailure = { savingProgramme = false },
                         )
-                        VibeActionButton(
-                            "Archive",
-                            { selectedProgramme?.let { vm.archiveProgramme(it.id); selected = null } },
-                            modifier = Modifier.weight(1f),
-                            importance = ActionImportance.COMPACT,
-                        )
-                    }
-                }
+                    }, enabled = !savingProgramme,
+                ) { Text("Delete") }
+            },
+        ) {
+            Text("Delete ${selectedProgramme.name} and its programmed exercises? Recorded workout history will be kept.")
+            error?.let { message ->
+                TextButton(onClick = { vm.error.value = null }) { Text(message, color = MaterialTheme.colorScheme.error) }
             }
         }
     pendingStartDayId?.let { dayId ->
@@ -481,8 +527,7 @@ fun ProgrammeEditor(
         HabitOptionsGrid(recordColours) { (name, colour), modifier ->
             IconButton(
                 onClick = {
-                    if (creatingId != null) creatingColour = colour
-                    else selectedProgramme?.let { vm.setProgrammeColour(it.id, colour) }
+                    selectedProgramme?.let { vm.setProgrammeColour(it.id, colour) }
                     chooseColour = false
                 },
                 modifier = modifier.semantics { contentDescription = "Set programme colour $name" },
@@ -506,7 +551,7 @@ fun ProgrammeEditor(
                             },
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text(day.name)
+                            Text(day.name, color = selectionTextColor())
                         }
                     }
                 }
@@ -516,9 +561,6 @@ fun ProgrammeEditor(
         HabitGlassDialog(
             onDismiss = { pendingAddTypeDayId = null },
             title = "Add to programme",
-            actions = {
-                TextButton(onClick = { pendingAddTypeDayId = null }) { Text("Cancel") }
-            },
         ) {
                 Column {
                     if (TrainingMode.STRENGTH.name in availableAddTypes) {
@@ -573,79 +615,99 @@ fun ProgrammeEditor(
             addExerciseActivityTag = null
         }
     }
-    editPrescription?.let { assignment ->
-        ProgrammePrescriptionDialog(
-            assignment = assignment,
-            exercise = exercises.find { it.id == assignment.exerciseId },
-            onDismiss = { editPrescription = null },
-            onSave = {
-                vm.save(it)
-                editPrescription = null
+    pendingRemoval?.let { id ->
+        val name = entries.find { it.id == id }?.let { assignment ->
+            exercises.find { it.id == assignment.exerciseId }?.canonicalName
+        }.orEmpty()
+        HabitGlassDialog(
+            title = "Remove $name from programme?",
+            onDismiss = { if (!savingProgramme) pendingRemoval = null },
+            actions = {
+                TextButton(onClick = { pendingRemoval = null }, enabled = !savingProgramme) { Text("Cancel") }
+                TextButton(
+                    enabled = !savingProgramme,
+                    onClick = {
+                        savingProgramme = true
+                        vm.removeEntry(
+                            id,
+                            onRemoved = {
+                                prescriptionInputs = prescriptionInputs - id
+                                savingProgramme = false
+                                pendingRemoval = null
+                            },
+                            onFailure = { savingProgramme = false },
+                        )
+                    },
+                ) { Text("Remove") }
             },
-        )
+        ) {
+            Text("Only this programme assignment is removed. The exercise catalogue and workout history stay intact.")
+            if (savingProgramme) LinearProgressIndicator(Modifier.fillMaxWidth())
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
     }
     }
 }
 
-private fun prescriptionSummary(assignment: ProgrammeExerciseEntity): String =
-    prescriptionSummary(
-        assignment.targetSets,
-        assignment.targetRepsMin,
-        assignment.targetRepsMax,
-        assignment.targetHoldSeconds,
-        assignment.targetRpe,
-    ) + " · ${assignment.restSeconds}s rest"
+internal data class ProgrammePrescriptionInputs(val sets: String, val rest: String) {
+    val setCount: Int? get() = sets.trim().toIntOrNull()
+    val restSeconds: Int? get() = rest.trim().toIntOrNull()
+    val setsValid: Boolean get() = sets.isBlank() || setCount?.let { it > 0 } == true
+    val restValid: Boolean get() = restSeconds?.let { it >= 0 } == true
+    val valid: Boolean get() = setsValid && restValid
+}
 
 @Composable
-internal fun ProgrammePrescriptionDialog(
-    assignment: ProgrammeExerciseEntity,
-    exercise: ExerciseEntity?,
-    onDismiss: () -> Unit,
-    onSave: (ProgrammeExerciseEntity) -> Unit,
+private fun ProgrammeFooterButton(
+    label: String, onClick: () -> Unit, width: Dp, enabled: Boolean = true, textAlign: TextAlign = TextAlign.Center,
 ) {
-    val config = ExerciseInputConfig.decode(exercise?.inputConfig.orEmpty(), exercise?.trackingType.orEmpty())
-    val tracksReps = config.reps
-    var sets by remember(assignment.id) { mutableStateOf(assignment.targetSets?.toString().orEmpty()) }
-    var minimum by remember(assignment.id) { mutableStateOf(assignment.targetRepsMin?.toString().orEmpty()) }
-    var maximum by remember(assignment.id) { mutableStateOf(assignment.targetRepsMax?.toString().orEmpty()) }
-    var rest by remember(assignment.id) { mutableStateOf(assignment.restSeconds.toString()) }
-    val parsedSets = sets.toIntOrNull()
-    val parsedMinimum = minimum.toIntOrNull()
-    val parsedMaximum = maximum.toIntOrNull()
-    val parsedRest = rest.toIntOrNull()
-    val valid = (sets.isBlank() || parsedSets?.let { it > 0 } == true) &&
-        (minimum.isBlank() || parsedMinimum?.let { it >= 0 } == true) &&
-        (maximum.isBlank() || parsedMaximum?.let { it >= 0 } == true) &&
-        (parsedMinimum == null || parsedMaximum == null || parsedMaximum >= parsedMinimum) &&
-        parsedRest?.let { it >= 0 } == true
-
-    HabitGlassDialog(
-        onDismiss = onDismiss,
-        title = "Programme prescription",
-        actions = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-            TextButton(
-                enabled = valid,
-                onClick = {
-                    onSave(
-                        assignment.copy(
-                            targetSets = parsedSets,
-                            targetRepsMin = if (tracksReps) parsedMinimum else assignment.targetRepsMin,
-                            targetRepsMax = if (tracksReps) parsedMaximum else assignment.targetRepsMax,
-                            restSeconds = requireNotNull(parsedRest),
-                        ),
-                    )
-                },
-            ) { Text("Save") }
-        },
+    TextButton(
+        onClick = onClick, enabled = enabled, modifier = Modifier.width(width).heightIn(min = 48.dp),
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp),
     ) {
-        Text(exercise?.canonicalName.orEmpty(), style = MaterialTheme.typography.titleMedium)
-        EditField("Sets", sets, borderless = true) { sets = it }
-        if (tracksReps) {
-            EditField("Minimum reps", minimum, borderless = true) { minimum = it }
-            EditField("Maximum reps", maximum, borderless = true) { maximum = it }
-        }
-        EditField("Rest seconds", rest, borderless = true) { rest = it }
+        Text(
+            label, Modifier.fillMaxWidth(), style = MaterialTheme.typography.labelLarge,
+            textAlign = textAlign, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ProgrammePreviewDivider(id: String, index: Int) {
+    VerticalDivider(
+        Modifier.padding(horizontal = 4.dp, vertical = 4.dp).fillMaxHeight()
+            .testTag("Programme preview divider $index $id"),
+        color = LocalVibePalette.current.border.copy(alpha = 0.3f),
+    )
+}
+
+@Composable
+internal fun ProgrammeExercisePreview(
+    id: String,
+    name: String,
+    sets: Int?,
+    restSeconds: Int?,
+) {
+    val palette = LocalVibePalette.current
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            name, Modifier.weight(1f).testTag("Programme preview name $id"),
+            style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        ProgrammePreviewDivider(id, 0)
+        Text(
+            sets?.let { "$it ${if (it == 1) "set" else "sets"}" }.orEmpty(),
+            Modifier.weight(1f).testTag("Programme preview sets $id"),
+            textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        ProgrammePreviewDivider(id, 1)
+        Text(
+            restSeconds?.let { "${it}s rest" }.orEmpty(),
+            Modifier.weight(1f).testTag("Programme preview rest $id"),
+            textAlign = TextAlign.End, style = MaterialTheme.typography.bodySmall,
+            color = palette.textSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -720,6 +782,7 @@ fun ExercisePicker(
                     e.canonicalName,
                     Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark)
                         .clickable { onChoose(e) }.padding(horizontal = 8.dp, vertical = 14.dp),
+                    color = selectionTextColor(),
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
@@ -733,6 +796,7 @@ fun EditField(
     value: String,
     modifier: Modifier = Modifier,
     borderless: Boolean = false,
+    enabled: Boolean = true,
     onChange: (String) -> Unit,
 ) {
     if (borderless) {
@@ -740,7 +804,7 @@ fun EditField(
             value, onChange,
             label = { Text(label) },
             modifier = modifier.fillMaxWidth().semantics { contentDescription = label },
-            singleLine = true, shape = MaterialTheme.shapes.small,
+            singleLine = true, enabled = enabled, shape = MaterialTheme.shapes.small,
             colors = programmeFieldColors(),
         )
     } else {
@@ -749,7 +813,7 @@ fun EditField(
             onChange,
             label = { Text(label) },
             modifier = modifier.fillMaxWidth().semantics { contentDescription = label },
-            singleLine = true,
+            singleLine = true, enabled = enabled,
         )
     }
 }

@@ -137,9 +137,17 @@ internal fun HabitEditorDialog(
             if (saving) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             } else when (page) {
-                HabitEditorPage.MAIN -> TextButton(
-                    onClick = { save() }, enabled = configurationValid && !saving,
-                ) { Text(if (saving) "Saving..." else "Save") }
+                HabitEditorPage.MAIN -> Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (!seed.creating) TextButton(
+                        onClick = { page = HabitEditorPage.ARCHIVE },
+                        enabled = canArchive,
+                    ) { Text("Archive") }
+                    TextButton(onClick = { save() }, enabled = configurationValid) { Text("Save") }
+                }
                 HabitEditorPage.FIELD -> TextButton(
                     onClick = { if (commitField()) page = HabitEditorPage.MAIN }, enabled = formValid,
                 ) { Text("Done") }
@@ -225,10 +233,6 @@ internal fun HabitEditorDialog(
                         }) { Text("Restore") }
                     }
                 }
-                if (!seed.creating) TextButton(
-                    onClick = { page = HabitEditorPage.ARCHIVE },
-                    enabled = canArchive,
-                ) { Text("Archive habit") }
             }
             HabitEditorPage.FIELD -> fieldDraft?.let { field ->
                 fieldForm?.let { form ->

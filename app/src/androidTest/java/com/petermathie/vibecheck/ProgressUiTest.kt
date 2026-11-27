@@ -151,6 +151,7 @@ class ProgressUiTest {
             viewModel.exercises.value.size == 2 && viewModel.workouts.value.size == 5 && viewModel.sets.value.size == 5
         }
         compose.onNodeWithText("Overall training trend").assertExists()
+        assertRange("1 year")
         compose.onAllNodes(hasContentDescription("Progress chart", substring = true)).assertCountEquals(1)
         compose.onNodeWithText("Personal records").assertDoesNotExist()
         compose.onNodeWithText("Bodyweight").assertDoesNotExist()
@@ -162,17 +163,19 @@ class ProgressUiTest {
         compose.onNodeWithText("Bench press").performClick()
         compose.onNodeWithText("Track progress of Bench press").assertExists()
         compose.onNodeWithText("Overall training trend").assertDoesNotExist()
-        assertRange("1 month")
+        assertRange("1 year")
         val inExercise = hasAnyAncestor(hasContentDescription("Exercise progress"))
         compose.onNodeWithText("Estimated 1RM trend").assertExists()
         val e1rmChart = hasContentDescription("kg", substring = true) and hasContentDescription("Progress chart", substring = true) and inExercise
         val latestReadout = hasContentDescription("Graph readout") and hasAnyDescendant(hasText("64.17 kg")) and inExercise
+        compose.onNode(e1rmChart).assert(hasContentDescription("58.33 to 93.33 kg", substring = true))
         scrollToNode(latestReadout)
         compose.onNode(latestReadout).assertIsDisplayed()
         scrollToNode(hasText("Heaviest weight"))
         compose.onNodeWithText("80 kg").assertIsDisplayed()
-        listOf("3 months", "6 months", "1 year").forEach { range ->
+        listOf("1 month", "3 months", "6 months", "1 year").forEach { range ->
             chooseRange(range)
+            assertRange(range)
             scrollToNode(latestReadout)
             compose.onNode(latestReadout).assertIsDisplayed()
             scrollToNode(hasText("Heaviest weight"))
@@ -191,6 +194,13 @@ class ProgressUiTest {
             scrollToNode(hasText(text))
             compose.onNodeWithText(text).assertIsDisplayed()
         }
+        chooseRange("Custom")
+        chooseDate("Beginning", beginning.plusDays(1))
+        compose.onNodeWithText("Cancel").performClick()
+        assertRange("Custom")
+        chooseRange("Custom")
+        compose.onNode(hasContentDescription("Choose Beginning date") and hasText(formatDisplayDate(beginning))).assertExists()
+        compose.onNodeWithText("Cancel").performClick()
         chooseRange("1 year")
         scrollToNode(latestReadout)
         val graph = compose.onNode(e1rmChart)
