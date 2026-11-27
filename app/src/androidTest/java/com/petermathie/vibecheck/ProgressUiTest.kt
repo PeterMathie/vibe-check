@@ -115,7 +115,9 @@ class ProgressUiTest {
 
         compose.runOnIdle { showBody.value = true }
         compose.onNodeWithText("Bodyweight trend").performScrollTo().assertIsDisplayed()
+        scrollToNode(hasContentDescription("Progress chart", substring = true))
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
+        scrollToNode(hasContentDescription("Graph readout"))
         compose.onNode(hasText("75.00 kg") and hasAnyAncestor(hasContentDescription("Graph readout"))).assertIsDisplayed()
         assertEquals(retained, runBlocking { database.editorDao().measurements().first().single() })
     }
@@ -326,6 +328,7 @@ class ProgressUiTest {
         compose.setContent { VibeCheckTheme { CompositionLocalProvider(LocalContext provides context) { ProgressScreen(viewModel) } } }
         compose.waitUntil(15_000) { viewModel.sets.value.size == 6 && viewModel.workouts.value.size == 5 }
         compose.onNodeWithContentDescription("Choose exercise").assertIsDisplayed()
+        chooseRange("1 month")
         scrollToNode(hasContentDescription("Progress chart", substring = true))
         compose.onNodeWithText("Weekly average points").assertIsDisplayed()
         compose.onNodeWithText("Week ending").assertDoesNotExist()
@@ -410,6 +413,7 @@ class ProgressUiTest {
         compose.waitUntil(15_000) { viewModel.workouts.value.size == 4 && viewModel.sets.value.size == 4 }
         compose.onNodeWithContentDescription("Choose exercise").performClick()
         compose.onNodeWithText("Bench press").performClick()
+        chooseRange("1 month")
         val header = compose.onNodeWithText("Track progress of Bench press")
         val before = header.fetchSemanticsNode().boundsInRoot.top
         compose.onNode(hasScrollToIndexAction()).performTouchInput {
@@ -531,7 +535,7 @@ class ProgressUiTest {
     private fun chooseRange(label: String) {
         scrollToNode(hasContentDescription("Progress date range"))
         compose.onNodeWithContentDescription("Progress date range").performClick()
-        compose.onNodeWithText(label).performClick()
+        compose.onNode(hasText(label) and hasAnyAncestor(isPopup())).performClick()
         if (label != "Custom") assertRange(label)
     }
 

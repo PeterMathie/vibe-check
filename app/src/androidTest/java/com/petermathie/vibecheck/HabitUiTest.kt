@@ -440,7 +440,9 @@ class HabitUiTest {
                 }
             }
         }
-        input(field.name).assertTextEquals("")
+        input(field.name).assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString(""),
+        ))
         compose.onNodeWithContentDescription("20th of November 2026: $note").performClick()
         input(field.name).assertTextContains(note)
         compose.onNodeWithTag("Habit entry ${tracker.id}").assertDoesNotExist()
@@ -1069,11 +1071,15 @@ class HabitUiTest {
         })
         val empty = month.atDay(3)
         compose.onNodeWithContentDescription("${formatDisplayDate(empty)}: No entry").performClick()
-        input("g").assertTextEquals("")
+        input("g").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString(""),
+        ))
         compose.onNodeWithContentDescription("Previous month for Wellbeing").performClick()
         val earlier = month.minusMonths(1).atDay(3)
         compose.onNodeWithContentDescription("${formatDisplayDate(earlier)}: No entry").performClick()
-        input("g").assertTextEquals("")
+        input("g").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString(""),
+        ))
         input("g").performTextReplacement("7")
         awaitSaved { database.editorDao().values().first().any { it.epochDay == earlier.toEpochDay() && it.numericValue == 7.0 } }
         compose.onNodeWithContentDescription("Next month for Wellbeing").performClick()

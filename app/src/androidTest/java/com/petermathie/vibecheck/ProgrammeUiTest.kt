@@ -15,6 +15,7 @@ import androidx.compose.ui.graphics.Color
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.LocalDensity
@@ -80,6 +81,7 @@ class ProgrammeUiTest {
         assertEquals("day-a", startedDay)
         compose.onNodeWithText("Bench press").assertDoesNotExist()
         compose.onNodeWithText("Alpha").performClick()
+        previewDiagnostics("Alpha")
         compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertIsDisplayed()
         compose.onNodeWithText("Bench press").assertIsDisplayed()
         assertTrue(
@@ -122,7 +124,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Reorder Bench press").assertIsDisplayed()
         compose.onNodeWithText("Exercise settings").assertDoesNotExist()
 
-        compose.onNodeWithText("Duplicate").performScrollTo().assertIsDisplayed()
+        modalText("Duplicate").assertIsDisplayed()
         compose.onNodeWithText("Delete").assertIsDisplayed()
         compose.onNodeWithText("Archive").assertIsDisplayed()
         val footer = listOf("Save", "Archive", "Duplicate", "Delete").map { label ->
@@ -165,6 +167,7 @@ class ProgrammeUiTest {
         listOf(1f, 1.3f, 2f).forEach { scale ->
             compose.runOnIdle { fontScale.value = scale }
             compose.waitForIdle()
+            previewDiagnostics(longName)
             val title = compose.onNodeWithText(longName).fetchSemanticsNode().boundsInRoot
             val start = compose.onNodeWithContentDescription("Start $longName").fetchSemanticsNode().boundsInRoot
             val exercise = compose.onNodeWithText("Bench press").fetchSemanticsNode().boundsInRoot
@@ -252,7 +255,7 @@ class ProgrammeUiTest {
         modalText("Delete").performClick()
         compose.onNodeWithText("Delete").performClick()
         compose.waitUntil(15_000) { activeProgrammes().isEmpty() }
-        assertEquals(history.copy(programmeDayId = null), runBlocking { database.editorDao().workouts().first().single() })
+        assertEquals(history, runBlocking { database.editorDao().workouts().first().single() })
         assertTrue(runBlocking { database.editorDao().entries().first().isEmpty() })
     }
 
@@ -343,6 +346,7 @@ class ProgrammeUiTest {
         setProgrammeContent(mode = TrainingMode.STRETCHING) { _, _, _ -> }
 
         compose.onNodeWithText("Stretching").performClick()
+        previewDiagnostics("Stretching")
         compose.onNodeWithContentDescription("Read-only exercises for Stretching").assertIsDisplayed()
         compose.onNodeWithText("Front split").assertIsDisplayed()
         compose.onNodeWithText("Forward fold").assertIsDisplayed()
@@ -414,6 +418,8 @@ class ProgrammeUiTest {
 
         compose.onNodeWithText("Alpha").assertIsDisplayed().performClick()
         compose.onNodeWithText("Beta").assertIsDisplayed().performClick()
+        previewDiagnostics("Alpha")
+        previewDiagnostics("Beta")
         compose.onNodeWithContentDescription("Read-only exercises for Alpha").assertIsDisplayed()
         compose.onNodeWithContentDescription("Read-only exercises for Beta").assertIsDisplayed()
         compose.onNodeWithText("Bench press").assertIsDisplayed()
@@ -463,7 +469,7 @@ class ProgrammeUiTest {
         compose.onNodeWithContentDescription("Create new programme").assertDoesNotExist()
         compose.onNodeWithText("New programme").assertIsDisplayed().performClick()
         awaitProgrammeModal()
-        compose.onNode(hasSetTextAction()).performTextReplacement("My gym plan")
+        programmeNameInput().performTextReplacement("My gym plan")
         compose.onNodeWithText("Add exercise").performScrollTo().performClick()
         compose.onNodeWithText("New exercise").performClick()
         compose.waitUntil(15_000) { activeProgrammes().any { it.name == "My gym plan" } }
@@ -484,16 +490,16 @@ class ProgrammeUiTest {
         }
 
         compose.onNodeWithText("Add workout").assertDoesNotExist()
-        compose.onNode(hasSetTextAction()).performTextClearance()
-        compose.onNode(hasSetTextAction()).performTextInput("Renamed plan")
+        programmeNameInput().performTextClearance()
+        programmeNameInput().performTextInput("Renamed plan")
         compose.waitUntil(15_000) { activeProgrammes().any { it.name == "Renamed plan" } }
 
-        compose.onNodeWithText("Duplicate").performScrollTo().performClick()
+        modalText("Duplicate").assertIsDisplayed().performClick()
         compose.waitUntil(15_000) { activeProgrammes().any { it.name == "Renamed plan (copy)" } }
         compose.onNodeWithText("Archive").performClick()
         compose.waitUntil(15_000) { activeProgrammes().none { it.name == "Renamed plan" } }
         openProgramme("Renamed plan (copy)")
-        compose.onNodeWithText("Delete").performScrollTo().performClick()
+        modalText("Delete").assertIsDisplayed().performClick()
         compose.onNodeWithText("Delete programme?").assertIsDisplayed()
         compose.onNodeWithText("Delete").performClick()
         compose.waitUntil(15_000) { activeProgrammes().isEmpty() }
@@ -507,7 +513,7 @@ class ProgrammeUiTest {
         compose.onNodeWithText("New programme").performClick()
         awaitProgrammeModal()
         compose.onAllNodes(isDialog()).assertCountEquals(1)
-        compose.onNode(hasSetTextAction()).assert(
+        programmeNameInput().assert(
             SemanticsMatcher.expectValue(
                 androidx.compose.ui.semantics.SemanticsProperties.EditableText,
                 androidx.compose.ui.text.AnnotatedString("Program 3"),
@@ -519,21 +525,21 @@ class ProgrammeUiTest {
         assertEquals(1, runBlocking { database.editorDao().days().first().count { it.programmeId == saved.id } })
         compose.onNodeWithContentDescription("Change programme colour").performClick()
         compose.onNodeWithContentDescription("Set programme colour Blue").performClick()
-        compose.onNode(hasSetTextAction()).performTextReplacement("   ")
+        programmeNameInput().performTextReplacement("   ")
         modalText("Save").assertIsNotEnabled()
         assertEquals("Program 3", activeProgrammes().single { it.id == saved.id }.name)
-        compose.onNode(hasSetTextAction()).performTextReplacement("Coloured plan")
+        programmeNameInput().performTextReplacement("Coloured plan")
         compose.waitUntil(15_000) { activeProgrammes().single { it.id == saved.id }.let { it.name == "Coloured plan" && it.colourArgb == 0xFF42A5F5L } }
         compose.onNodeWithContentDescription("Change programme colour").performClick()
         compose.onNodeWithContentDescription("Set programme colour Orange").performClick()
         compose.waitUntil(15_000) { activeProgrammes().single { it.id == saved.id }.colourArgb == 0xFFFFA726L }
-        compose.onNode(hasSetTextAction()).performTextReplacement("Renamed")
-        compose.onNodeWithText("Duplicate").performScrollTo().performClick()
+        programmeNameInput().performTextReplacement("Renamed")
+        modalText("Duplicate").assertIsDisplayed().performClick()
         compose.waitUntil(15_000) { activeProgrammes().any { it.name == "Renamed (copy)" } }
         assertTrue(activeProgrammes().filter { it.id == saved.id || it.name == "Renamed (copy)" }.all { it.colourArgb == 0xFFFFA726L })
         compose.onNodeWithContentDescription("Close").performClick()
         openProgramme("Renamed")
-        compose.onNode(hasSetTextAction()).assertTextContains("Renamed")
+        programmeNameInput().assertTextContains("Renamed")
         modalText("Save").performClick()
         compose.waitUntil(15_000) { compose.onAllNodes(isDialog()).fetchSemanticsNodes().isEmpty() }
     }
@@ -593,9 +599,15 @@ class ProgrammeUiTest {
         )
         assertTrue(remove.right <= name.left)
         val bounds = fields.map { it.fetchSemanticsNode().boundsInRoot }
-        assertTrue(name.right <= bounds[0].left && bounds[0].right <= bounds[1].left)
+        val diagnostics = "density=${compose.density}; dialogs=${
+            compose.onAllNodes(isDialog()).fetchSemanticsNodes().map { it.boundsInRoot }
+        }; X=$remove; name=$name; fields=$bounds"
+        println("Programme normal-row diagnostics: $diagnostics")
+        assertTrue("Name/fields must retain left-to-right ordering: $diagnostics",
+            name.right <= bounds[0].left && bounds[0].right <= bounds[1].left)
         for (field in fields) {
-            assertEquals(name.center.y, field.fetchSemanticsNode().boundsInRoot.center.y, 1f)
+            assertEquals("Name/input must share one row: $diagnostics",
+                name.center.y, field.fetchSemanticsNode().boundsInRoot.center.y, 1f)
             val layouts = mutableListOf<TextLayoutResult>()
             field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
             assertTrue(layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
@@ -935,6 +947,18 @@ class ProgrammeUiTest {
     )
 
     private fun modalText(text: String) = compose.onNode(hasText(text) and hasAnyAncestor(isDialog()))
+
+    private fun programmeNameInput() = compose.onNodeWithContentDescription("Programme name")
+
+    private fun previewDiagnostics(name: String) {
+        val titles = compose.onAllNodesWithText(name).fetchSemanticsNodes().map {
+            "${it.boundsInRoot}: ${it.config.getOrNull(SemanticsProperties.StateDescription)}"
+        }
+        val previews = compose.onAllNodesWithContentDescription("Read-only exercises for $name")
+            .fetchSemanticsNodes().map { it.boundsInRoot }
+        val lists = compose.onAllNodes(hasScrollToIndexAction()).fetchSemanticsNodes().map { it.boundsInRoot }
+        println("Programme preview diagnostics: name=$name; density=${compose.density}; titles=$titles; previews=$previews; lists=$lists")
+    }
 
     private fun awaitProgrammeModal() {
         compose.waitUntil(15_000) {

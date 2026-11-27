@@ -499,7 +499,9 @@ class MeasurementsUiTest {
     }
 
     private fun showPhotos() {
-        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToKey("photos")
+        compose.onNode(
+            hasContentDescription("Body page") and SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex),
+        ).performScrollToKey("photos")
         compose.onNodeWithTag("Body photos tile").assertIsDisplayed()
     }
 
