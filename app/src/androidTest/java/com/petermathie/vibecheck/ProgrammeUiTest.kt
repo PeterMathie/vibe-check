@@ -49,6 +49,7 @@ import com.petermathie.vibecheck.ui.theme.VibePalettes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -612,9 +613,37 @@ class ProgrammeUiTest {
         for (suffix in listOf("sets", "s")) {
             val layouts = mutableListOf<TextLayoutResult>()
             val node = compose.onNode(hasText(suffix) and hasAnyAncestor(isDialog()), useUnmergedTree = true)
+            node.assertIsDisplayed().assertTextEquals(suffix)
             node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
             val textDiagnostics = textLayoutDiagnostics("suffix $suffix", node, layouts)
-            assertTrue(textDiagnostics, layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
+            assertEquals(textDiagnostics, 1, layouts.size)
+            val layout = layouts.single()
+            val textBounds = node.fetchSemanticsNode().boundsInWindow
+            val paneBounds = compose.onNode(
+                SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, "Edit programme"),
+            ).fetchSemanticsNode().boundsInWindow
+            assertTrue(textDiagnostics, listOf(textBounds.width, textBounds.height, paneBounds.width, paneBounds.height)
+                .all { it.isFinite() && it > 0f })
+            assertEquals(textDiagnostics, layout.size.width.toFloat(), textBounds.width, 0f)
+            assertEquals(textDiagnostics, layout.size.height.toFloat(), textBounds.height, 0f)
+            assertEquals(textDiagnostics, suffix, layout.layoutInput.text.text)
+            assertEquals(textDiagnostics, 1, layout.lineCount)
+            assertEquals(textDiagnostics, suffix.length, layout.getLineEnd(0, visibleEnd = true))
+            assertFalse(textDiagnostics, layout.isLineEllipsized(0))
+            assertFalse(textDiagnostics, layout.didOverflowHeight)
+            assertFalse(textDiagnostics, layout.multiParagraph.didExceedMaxLines)
+            assertTrue(textDiagnostics,
+                layout.getLineLeft(0) >= 0f && layout.getLineRight(0) <= textBounds.width &&
+                    layout.getLineTop(0) >= 0f && layout.getLineBottom(0) <= textBounds.height)
+            for (index in suffix.indices) {
+                val character = layout.getBoundingBox(index)
+                assertTrue("$textDiagnostics; character $index=$character",
+                    character.left >= 0f && character.right <= textBounds.width &&
+                        character.top >= 0f && character.bottom <= textBounds.height)
+            }
+            assertTrue(textDiagnostics,
+                textBounds.left >= paneBounds.left && textBounds.right <= paneBounds.right &&
+                    textBounds.top >= paneBounds.top && textBounds.bottom <= paneBounds.bottom)
         }
     }
 
