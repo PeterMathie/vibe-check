@@ -64,7 +64,10 @@ class ProgressUiTest {
 
     private fun isolatedContext(): Context {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val preferenceName = "progress-presentation-fixture-${java.util.UUID.randomUUID()}"
+        val runId = androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("bodyFixtureRunId")
+            ?: java.util.UUID.randomUUID().toString()
+        require(runId.matches(Regex("[A-Za-z0-9-]{1,64}"))) { "Invalid presentation fixture run ID" }
+        val preferenceName = "progress-presentation-fixture-$runId"
         fixturePreferenceName = preferenceName
         val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
         val directory = File(context.cacheDir, preferenceName)
@@ -112,13 +115,22 @@ class ProgressUiTest {
 
         compose.runOnIdle { showBody.value = true }
         compose.onNodeWithText("Bodyweight trend").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithContentDescription("Bodyweight date range").performClick()
+        compose.onNode(hasText("Custom") and hasAnyAncestor(isPopup())).performClick()
+        chooseDate("Beginning", java.time.Instant.ofEpochMilli(retained.recordedAt)
+            .atZone(ZoneId.systemDefault()).toLocalDate())
+        compose.onNodeWithText("Apply").performClick()
+        compose.onNodeWithContentDescription("Bodyweight date range")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Custom"))
+        scrollToNode(hasContentDescription("Progress chart", substring = true))
         compose.onNodeWithContentDescription("Progress chart", substring = true).assertIsDisplayed()
-        compose.onNode(hasText("75 kg") and hasAnyAncestor(hasContentDescription("Graph readout"))).assertIsDisplayed()
+        scrollToNode(hasContentDescription("Graph readout"))
+        compose.onNode(hasText("75.00 kg") and hasAnyAncestor(hasContentDescription("Graph readout"))).assertIsDisplayed()
         assertEquals(retained, runBlocking { database.editorDao().measurements().first().single() })
     }
 
     @Test
-    fun pointsRangesKeepTheBaselineAndAllTimeRecordsWithoutSessionClutter() {
+    fun estimatedOneRepMaxRangesKeepDailyEstimatesAndAllTimeRecordsWithoutSessionClutter() {
         val context = isolatedContext()
         val preferences = context.getSharedPreferences("progress-layout", Context.MODE_PRIVATE)
         preferences.edit().putString("card-order", "bodyweight|training|overall")
@@ -148,6 +160,7 @@ class ProgressUiTest {
             viewModel.exercises.value.size == 2 && viewModel.workouts.value.size == 5 && viewModel.sets.value.size == 5
         }
         compose.onNodeWithText("Overall training trend").assertExists()
+        assertRange("1 year")
         compose.onAllNodes(hasContentDescription("Progress chart", substring = true)).assertCountEquals(1)
         compose.onNodeWithText("Personal records").assertDoesNotExist()
         compose.onNodeWithText("Bodyweight").assertDoesNotExist()
@@ -159,16 +172,19 @@ class ProgressUiTest {
         compose.onNodeWithText("Bench press").performClick()
         compose.onNodeWithText("Track progress of Bench press").assertExists()
         compose.onNodeWithText("Overall training trend").assertDoesNotExist()
-        assertRange("1 month")
+        assertRange("1 year")
         val inExercise = hasAnyAncestor(hasContentDescription("Exercise progress"))
-        val pointsChart = hasContentDescription("points", substring = true) and hasContentDescription("Progress chart", substring = true) and inExercise
-        val latestReadout = hasContentDescription("Graph readout") and hasAnyDescendant(hasText("78.57 points")) and inExercise
+        compose.onNodeWithText("Estimated 1RM trend").assertExists()
+        val e1rmChart = hasContentDescription("kg", substring = true) and hasContentDescription("Progress chart", substring = true) and inExercise
+        val latestReadout = hasContentDescription("Graph readout") and hasAnyDescendant(hasText("64.17 kg")) and inExercise
+        compose.onNode(e1rmChart).assert(hasContentDescription("58.33 to 93.33 kg", substring = true))
         scrollToNode(latestReadout)
         compose.onNode(latestReadout).assertIsDisplayed()
         scrollToNode(hasText("Heaviest weight"))
         compose.onNodeWithText("80 kg").assertIsDisplayed()
-        listOf("3 months", "6 months", "1 year").forEach { range ->
+        listOf("1 month", "3 months", "6 months", "1 year").forEach { range ->
             chooseRange(range)
+            assertRange(range)
             scrollToNode(latestReadout)
             compose.onNode(latestReadout).assertIsDisplayed()
             scrollToNode(hasText("Heaviest weight"))
@@ -183,31 +199,38 @@ class ProgressUiTest {
         compose.onNode(hasContentDescription("Choose End date") and hasText(formatDisplayDate(ending))).assertExists()
         compose.onNodeWithText("Apply").performClick()
         assertRange("Custom")
-        listOf("No points recorded in this date range.", "No effort recorded in this date range.", "80 kg").forEach { text ->
+        listOf("No estimated 1RM recorded in this date range.", "No effort recorded in this date range.", "80 kg").forEach { text ->
             scrollToNode(hasText(text))
             compose.onNodeWithText(text).assertIsDisplayed()
         }
+        chooseRange("Custom")
+        chooseDate("Beginning", beginning.plusDays(1))
+        compose.onNodeWithText("Cancel").performClick()
+        assertRange("Custom")
+        chooseRange("Custom")
+        compose.onNode(hasContentDescription("Choose Beginning date") and hasText(formatDisplayDate(beginning))).assertExists()
+        compose.onNodeWithText("Cancel").performClick()
         chooseRange("1 year")
         scrollToNode(latestReadout)
-        val graph = compose.onNode(pointsChart)
+        val graph = compose.onNode(e1rmChart)
         val previous = graph.fetchSemanticsNode().config[SemanticsActions.CustomActions].first { it.label == "Previous data point" }
         compose.runOnIdle { assertTrue(previous.action()) }
         compose.waitForIdle()
-        compose.onNode(hasContentDescription("Graph readout") and hasAnyDescendant(hasText("71.43 points")) and inExercise)
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "${formatDisplayDate(today.minusDays(5))}, 71.43 points"))
+        compose.onNode(hasContentDescription("Graph readout") and hasAnyDescendant(hasText("58.33 kg")) and inExercise)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "${formatDisplayDate(today.minusDays(5))}, 58.33 kg"))
         compose.onNodeWithText("Do not show exercise notes").assertDoesNotExist()
         compose.onAllNodes(hasClickAction() and hasText(" · ", substring = true)).assertCountEquals(0)
         listOf("Falling", "Rising", "Flat", "Gradually improving").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
         scrollToNode(hasContentDescription("Variations: All variations"))
         compose.onNodeWithContentDescription("Variations: All variations").performClick()
         compose.onNodeWithText("Paused").performClick()
-        compose.onNodeWithText("Complete a working set for this exercise to see its progress.").assertExists()
+        compose.onNodeWithText("Record weight and repetitions in a completed working set to see estimated 1RM.").assertExists()
         scrollToNode(hasContentDescription("Variations: Paused"))
         compose.onNodeWithContentDescription("Variations: Paused").performClick()
         compose.onNodeWithText("All variations").performClick()
         val effortChart = hasContentDescription("Progress chart", substring = true) and hasContentDescription("0 to 10 RPE", substring = true)
         val sections = listOf(
-            pointsChart,
+            e1rmChart,
             effortChart,
             hasContentDescription("exercise sessions calendar"),
             hasText("Personal records"),
@@ -218,16 +241,15 @@ class ProgressUiTest {
             compose.onNode(hasScrollToIndexAction()).fetchSemanticsNode()
                 .config[SemanticsProperties.VerticalScrollAxisRange].value()
         }
-        assertTrue("Points, RPE, calendar and records follow the approved order",
+        assertTrue("Estimated 1RM, RPE, calendar and records follow the approved order",
             scrollPositions.zipWithNext().all { (before, after) -> before <= after })
         compose.onNodeWithText("Best performance").assertExists()
         compose.onNodeWithText("Heaviest weight").assertExists()
         compose.onNodeWithText("Estimated 1RM").assertExists()
         scrollToNode(latestReadout)
-        compose.onNodeWithContentDescription("What are points?").performClick()
-        compose.onNodeWithText("How points are calculated").assertExists()
+        compose.onNodeWithContentDescription("About estimated 1RM").performClick()
+        compose.onNodeWithText("How estimated 1RM is calculated").assertExists()
         compose.onAllNodes(hasText("index", substring = true)).assertCountEquals(0)
-        compose.onAllNodes(hasText("score", substring = true)).assertCountEquals(0)
         compose.onNodeWithContentDescription("Close").performClick()
         scrollToNode(hasContentDescription("Choose exercise"))
         compose.onNodeWithContentDescription("Choose exercise").performClick()
@@ -281,7 +303,7 @@ class ProgressUiTest {
         compose.onNodeWithText("Eligible 104").assertIsDisplayed()
         compose.onNodeWithText("Eligible 104").performClick()
         compose.onNodeWithText("Track progress of Eligible 104").assertExists()
-        compose.onNodeWithText("Complete a working set for this exercise to see its progress.").assertExists()
+        compose.onNodeWithText("Record weight and repetitions in a completed working set to see estimated 1RM.").assertExists()
         compose.onNodeWithContentDescription("Scroll dialog").assertDoesNotExist()
     }
 
@@ -313,6 +335,7 @@ class ProgressUiTest {
         compose.setContent { VibeCheckTheme { CompositionLocalProvider(LocalContext provides context) { ProgressScreen(viewModel) } } }
         compose.waitUntil(15_000) { viewModel.sets.value.size == 6 && viewModel.workouts.value.size == 5 }
         compose.onNodeWithContentDescription("Choose exercise").assertIsDisplayed()
+        chooseRange("1 month")
         scrollToNode(hasContentDescription("Progress chart", substring = true))
         compose.onNodeWithText("Weekly average points").assertIsDisplayed()
         compose.onNodeWithText("Week ending").assertDoesNotExist()
@@ -353,6 +376,17 @@ class ProgressUiTest {
         compose.onNodeWithText("No workouts recorded on this day.").assertDoesNotExist()
         assertEquals(before, runBlocking { database.editorDao().sets().first() })
         assertEquals(workoutsBefore, runBlocking { database.editorDao().workouts().first() })
+        scrollToNode(hasContentDescription("Choose exercise"))
+        compose.onNodeWithContentDescription("Choose exercise").performClick()
+        compose.onNodeWithText("Renamed bench").performClick()
+        val dailyBest = hasContentDescription("Graph readout") and hasAnyDescendant(hasText("74.67 kg"))
+        scrollToNode(dailyBest)
+        compose.onNode(dailyBest)
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "${formatDisplayDate(day)}, 74.67 kg"))
+        scrollToNode(hasContentDescription("exercise sessions calendar"))
+        compose.onNodeWithContentDescription("${formatDisplayDate(day)}: 2 exercise sessions").performClick().assertIsSelected()
+        compose.onNodeWithText("2 exercise sessions").assertExists()
+        assertEquals(before, runBlocking { database.editorDao().sets().first() })
     }
 
     @Test
@@ -386,6 +420,7 @@ class ProgressUiTest {
         compose.waitUntil(15_000) { viewModel.workouts.value.size == 4 && viewModel.sets.value.size == 4 }
         compose.onNodeWithContentDescription("Choose exercise").performClick()
         compose.onNodeWithText("Bench press").performClick()
+        chooseRange("1 month")
         val header = compose.onNodeWithText("Track progress of Bench press")
         val before = header.fetchSemanticsNode().boundsInRoot.top
         compose.onNode(hasScrollToIndexAction()).performTouchInput {
@@ -507,7 +542,7 @@ class ProgressUiTest {
     private fun chooseRange(label: String) {
         scrollToNode(hasContentDescription("Progress date range"))
         compose.onNodeWithContentDescription("Progress date range").performClick()
-        compose.onNodeWithText(label).performClick()
+        compose.onNode(hasText(label) and hasAnyAncestor(isPopup())).performClick()
         if (label != "Custom") assertRange(label)
     }
 
@@ -520,11 +555,17 @@ class ProgressUiTest {
         compose.onNodeWithContentDescription("Choose $field date").performClick()
         val inCalendar = hasAnyAncestor(hasContentDescription("$field calendar"))
         compose.onNode(hasContentDescription("year", substring = true) and hasClickAction() and inCalendar).performClick()
-        compose.onNode((hasText(date.year.toString(), substring = true) or hasContentDescription(date.year.toString(), substring = true)) and hasClickAction() and inCalendar).performClick()
+        val year = hasText("Navigate to year ${date.year}") and hasClickAction() and inCalendar
+        compose.onNode(
+            hasScrollToIndexAction() and inCalendar and
+                SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange),
+        ).performScrollToNode(year)
+        compose.onNode(year).performClick()
         compose.onNodeWithText("Choose month").performClick()
         compose.onNodeWithText(date.month.getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())).performClick()
         val bounds = compose.onNodeWithContentDescription("$field calendar").fetchSemanticsNode().boundsInWindow
-        compose.onAllNodes(hasText(date.dayOfMonth.toString(), substring = true) and hasClickAction() and inCalendar)
+        val fullDate = date.format(java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.FULL))
+        compose.onAllNodes(hasText(fullDate, substring = true) and hasClickAction() and inCalendar)
             .filterToOne(SemanticsMatcher("Visible date") {
                 it.boundsInWindow.width > 0 && it.boundsInWindow.height > 0 && bounds.contains(it.boundsInWindow.center)
             }).performClick()

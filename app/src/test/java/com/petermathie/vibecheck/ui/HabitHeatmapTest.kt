@@ -16,6 +16,46 @@ class HabitHeatmapTest {
     private val tracker = TrackerEntity("tracker", "Mood", false)
 
     @Test
+    fun browsingAnyPastMonthRetainsTheEditingDayAndFutureSelectionIsIgnored() {
+        val today = LocalDate.of(2026, 11, 20)
+        val state = HabitCalendarState("2026-11", today.toEpochDay())
+        state.show(YearMonth.of(1926, 1))
+        assertEquals("1926-01", state.monthText)
+        assertEquals(today.toEpochDay(), state.selectedDay)
+        val selected = LocalDate.of(1926, 1, 8)
+        state.select(selected, today)
+        state.show(YearMonth.from(today))
+        assertEquals(selected.toEpochDay(), state.selectedDay)
+        state.select(today.plusDays(1), today)
+        assertEquals(selected.toEpochDay(), state.selectedDay)
+        assertEquals("2026-11", state.monthText)
+    }
+
+    @Test
+    fun weekSelectionUpdatesTheSameTargetAndMonthIndependentlyForEachHabit() {
+        val today = LocalDate.of(2026, 10, 1)
+        val first = HabitCalendarState("2026-10", today.toEpochDay())
+        val second = HabitCalendarState("2026-10", today.toEpochDay())
+        first.select(LocalDate.of(2026, 9, 28), today)
+        assertEquals("2026-09", first.monthText)
+        assertEquals(LocalDate.of(2026, 9, 28).toEpochDay(), first.selectedDay)
+        assertEquals(today.toEpochDay(), second.selectedDay)
+        assertEquals("2026-10", second.monthText)
+    }
+
+    @Test
+    fun restoredCalendarAcceptsTheLegacyUnselectedAndWeekSelectionState() {
+        val today = LocalDate.now().toEpochDay()
+        val unselected = requireNotNull(HabitCalendarState.Saver.restore(listOf("2026-11", "", "")))
+        assertEquals(today, unselected.selectedDay)
+        val historical = LocalDate.of(2026, 10, 1).toEpochDay()
+        val selected = requireNotNull(HabitCalendarState.Saver.restore(listOf("2026-11", "", historical.toString())))
+        assertEquals(historical, selected.selectedDay)
+        val current = requireNotNull(HabitCalendarState.Saver.restore(listOf("2026-10", historical.toString())))
+        assertEquals(historical, current.selectedDay)
+    }
+
+    @Test
     fun displayDatesUseOrdinalsWithMonthAndYear() {
         mapOf(
             1 to "1st of November 2026",

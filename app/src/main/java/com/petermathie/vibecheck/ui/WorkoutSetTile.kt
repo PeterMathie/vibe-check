@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,6 +30,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.AlignmentLine
 import androidx.compose.ui.layout.HorizontalAlignmentLine
@@ -36,6 +38,7 @@ import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -165,6 +168,8 @@ internal fun WorkoutSetVariantPicker(
 ) {
     var expanded by remember(ordinal) { mutableStateOf(false) }
     val palette = LocalVibePalette.current
+    val glassTint = if (palette.isDark) lerp(palette.surfaceFloating, palette.textPrimary, 0.06f)
+        else palette.surfaceFloating
     val selectable = variations.isNotEmpty()
     if (!selectable && (!showName || variantName.isBlank())) return
     Box(modifier) {
@@ -179,24 +184,44 @@ internal fun WorkoutSetVariantPicker(
                 .padding(horizontal = 2.dp),
             contentAlignment = Alignment.CenterStart,
         ) {
-            if (showName && variantName.isNotBlank()) Text(
-                variantName,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
-                color = palette.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.setBorderLabelBackground(parentBackgroundColor, backgroundColor)
-                    .semantics { contentDescription = "Variant for $identity" },
-            ) else if (variations.isNotEmpty()) Icon(
+            if (showName && (selectable || variantName.isNotBlank())) Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    variantName.ifBlank { "Choose..." },
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold),
+                    color = selectionTextColor(), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                        .setBorderLabelBackground(parentBackgroundColor, backgroundColor)
+                        .semantics { contentDescription = "Variant for $identity" },
+                )
+                if (selectable) Icon(
+                    Icons.Outlined.ExpandMore, null,
+                    Modifier.size(16.dp).setBorderLabelBackground(parentBackgroundColor, backgroundColor),
+                    tint = selectionTextColor(),
+                )
+            } else if (variations.isNotEmpty()) Icon(
                 Icons.Outlined.ExpandMore, null,
                 Modifier.size(16.dp).setBorderLabelBackground(parentBackgroundColor, backgroundColor),
-                tint = palette.textSecondary,
+                tint = selectionTextColor(),
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            shape = MaterialTheme.shapes.large,
+            containerColor = glassTint.copy(alpha = 0.94f),
+            tonalElevation = 0.dp,
+            shadowElevation = 4.dp,
+            border = BorderStroke(1.dp, palette.border.copy(alpha = 0.5f)),
+        ) {
             variations.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.name) },
+                    text = {
+                        Text(
+                            option.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = selectionTextColor(),
+                        )
+                    },
                     modifier = Modifier.semantics { selected = option.id == currentVariantId },
                     leadingIcon = if (option.id == currentVariantId) {
                         { Icon(Icons.Outlined.Check, null) }
@@ -225,6 +250,7 @@ internal fun WorkoutSetTile(
     feedback: @Composable () -> Unit,
 ) {
     val rowHeight = timingCellHeight()
+    val dividerColour = LocalVibePalette.current.border.copy(alpha = 0.4f)
     val compactLargeGroups = listOfNotNull(
         resistanceLayout.takeIf { showResistance }, measurementLayout,
     ).count { it.large } >= 2
@@ -246,9 +272,19 @@ internal fun WorkoutSetTile(
                 },
                 { Box(Modifier.semantics { contentDescription = "RPE column for $identity" }) { rpe() } },
                 { Box(Modifier.semantics { contentDescription = "Completion column for $identity" }) { completion() } },
+                {
+                    repeat(if (showResistance) 2 else 1) {
+                        Box(
+                            Modifier.width(1.dp).height(16.dp).background(dividerColour)
+                                .testTag("Value divider for $identity"),
+                        )
+                    }
+                },
             ).filterIndexed { index, _ -> showResistance || index != 0 },
             modifier = Modifier.fillMaxWidth(),
-        ) { columns, constraints ->
+        ) { groups, constraints ->
+            val columns = groups.dropLast(1)
+            val dividers = groups.last().map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
             val gap = 8.dp.roundToPx()
             val rowGap = 2.dp.roundToPx()
             val loose = constraints.copy(minWidth = 0, minHeight = 0)
@@ -289,10 +325,18 @@ internal fun WorkoutSetTile(
             val opticalGap = if (slack in 0 until gap) (slack + checkInset * 2) / 3 else 0
             val tickOffset = if (opticalGap > 0) checkInset - opticalGap else 0
             layout(constraints.maxWidth, height, mapOf(SetBoxCenter to center)) {
+                var dividerIndex = 0
                 rows.forEachIndexed { index, row ->
                     var x = 0
-                    row.forEach { field ->
+                    row.forEachIndexed { fieldIndex, field ->
                         if (field === effort) x += opticalGap
+                        if (fieldIndex > 0) {
+                            val divider = dividers[dividerIndex++]
+                            divider.placeRelative(
+                                x - (gap + divider.width) / 2,
+                                offsets[index] + centers[index] - divider.height / 2,
+                            )
+                        }
                         field.placeRelative(x, offsets[index] + centers[index] - field.boxCenter())
                         x += field.width + gap
                     }
@@ -595,8 +639,9 @@ private fun TimingDeletePopup(label: String, onDismiss: () -> Unit, onDelete: ()
                 Surface(
                     modifier = Modifier.size(16.dp),
                     shape = CircleShape,
-                    color = LocalVibePalette.current.surface,
+                    color = LocalVibePalette.current.surfaceFloating.copy(alpha = 0.94f),
                     contentColor = LocalVibePalette.current.textSecondary,
+                    border = BorderStroke(1.dp, LocalVibePalette.current.border.copy(alpha = 0.5f)),
                     shadowElevation = 2.dp,
                 ) {
                     Box(contentAlignment = Alignment.Center) {

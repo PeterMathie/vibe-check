@@ -1,6 +1,7 @@
 package com.petermathie.vibecheck.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 
@@ -139,6 +140,8 @@ data class ProgrammeEntity(
     val isDemo: Boolean,
     val isArchived: Boolean = false,
     @androidx.room.ColumnInfo(defaultValue = "0") val position: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "4282549749")
+    val colourArgb: Long = com.petermathie.vibecheck.domain.model.programmeColour(id),
 )
 
 @Entity(
@@ -458,4 +461,5 @@ data class BodyMeasurementEntity(
     val unit: String,
     val notes: String,
     val isDemo: Boolean,
+    @ColumnInfo(defaultValue = "0") val isWeightCleared: Boolean = false,
 )

@@ -227,10 +227,13 @@ class ComposableSetTileTest {
             val unitBefore = compose.onNode(
                 hasText("RPE") and hasAnyAncestor(hasContentDescription("Focused field")), useUnmergedTree = true,
             ).getUnclippedBoundsInRoot()
-            assertNotEquals("Empty and populated fields have distinct fills", background("Empty"), background("Populated"))
-            assertNotEquals("Completed values have no editable-field fill", background("Populated"), background("Completed"))
+            states.forEach { state ->
+                assertEquals("${theme.id}/${theme.isDark}: inactive $state field is transparent",
+                    theme.surface, background(state))
+            }
             compose.onNodeWithContentDescription("Completed field").assert(hasSetTextAction().not())
             compose.onNodeWithContentDescription("Focused field").performClick().assertIsFocused()
+            assertEquals("Focused field uses its selected fill", theme.surfaceSelected, background("Focused"))
             states.forEach { state ->
                 val field = compose.onNodeWithContentDescription("$state field")
                 val bounds = field.getUnclippedBoundsInRoot()
@@ -246,8 +249,10 @@ class ComposableSetTileTest {
                 evidence.appendLine("${theme.id}/${theme.isDark} $state: $bounds; unit contrast=$ratio")
             }
             val focusedPixels = compose.onNodeWithContentDescription("Focused field").captureToImage().toPixelMap()
-            val ringContrast = contrast(focusedPixels[0, focusedPixels.height / 2], theme.surface)
-            assertTrue("Focus has a visible outline, not only a cursor: $ringContrast", ringContrast >= 3f)
+            val underlineContrast = contrast(
+                focusedPixels[focusedPixels.width / 2, focusedPixels.height - 1], theme.surface,
+            )
+            assertTrue("Focus has a visible underline, not only a cursor: $underlineContrast", underlineContrast >= 3f)
             assertEquals("Focus does not move the trailing unit", unitBefore, compose.onNode(
                 hasText("RPE") and hasAnyAncestor(hasContentDescription("Focused field")), useUnmergedTree = true,
             ).getUnclippedBoundsInRoot())
@@ -255,7 +260,7 @@ class ComposableSetTileTest {
             java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir,
                 "typography-states-${theme.id}-${if (theme.isDark) "dark" else "light"}.png")
                 .outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-            evidence.appendLine("Focus ring contrast=$ringContrast")
+            evidence.appendLine("Focus underline contrast=$underlineContrast")
         }
         compose.runOnIdle { focusManager.clearFocus() }
         java.io.File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "typography-states-geometry.txt")

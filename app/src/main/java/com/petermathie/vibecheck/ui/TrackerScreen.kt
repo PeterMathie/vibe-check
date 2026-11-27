@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -33,6 +34,9 @@ import com.petermathie.vibecheck.domain.tracker.habitMeasurement
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import kotlin.random.Random
 
 internal const val COLLAPSED_HABITS = "collapsedHabits"
@@ -94,8 +98,9 @@ internal fun Modifier.habitGlow(
 }
 
 @Composable
-private fun HabitHeadingAndEntry(
+internal fun HabitHeadingAndEntry(
     heading: @Composable () -> Unit,
+    minimumEntryWidth: androidx.compose.ui.unit.Dp? = null,
     entry: @Composable () -> Unit,
 ) {
     Layout(
@@ -107,6 +112,20 @@ private fun HabitHeadingAndEntry(
     ) { measurables, constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         val gap = 12.dp.roundToPx().coerceAtMost(constraints.maxWidth)
+        if (minimumEntryWidth != null) {
+            val title = measurables[0].measure(loose)
+            val inline = constraints.maxWidth - title.width - gap >= minimumEntryWidth.toPx() * fontScale
+            val entryWidth = if (inline) constraints.maxWidth - title.width - gap else constraints.maxWidth
+            val input = measurables[1].measure(loose.copy(minWidth = entryWidth, maxWidth = entryWidth))
+            val height = if (inline) maxOf(title.height, input.height) else title.height + input.height
+            return@Layout layout(constraints.maxWidth, height) {
+                title.placeRelative(0, if (inline) (height - title.height) / 2 else 0)
+                input.placeRelative(
+                    if (inline) constraints.maxWidth - input.width else 0,
+                    if (inline) (height - input.height) / 2 else title.height,
+                )
+            }
+        }
         val minimumEntryWidth = minOf(
             (128.dp.toPx() * fontScale).toInt(),
             ((constraints.maxWidth - gap) * 0.4f).toInt(),
@@ -136,7 +155,6 @@ fun TrackerScreen(
         mutableStateOf(preferences.getStringSet(COLLAPSED_HABITS, emptySet()).orEmpty().toSet())
     }
     val today = LocalDate.now()
-    val epoch = today.toEpochDay()
     var editor by remember { mutableStateOf<HabitEditorSeed?>(null) }
     var deleteCandidate by remember { mutableStateOf<TrackerEntity?>(null) }
     val trackers = data?.trackers.orEmpty()
@@ -170,7 +188,7 @@ fun TrackerScreen(
                 itemsIndexed(order.ordered(active) { it.id }, key = { _, tracker -> tracker.id }) { index, tracker ->
                     val trackerFields = fields.filter { it.trackerId == tracker.id }
                     val calendarState = rememberSaveable(tracker.id, saver = HabitCalendarState.Saver) {
-                        HabitCalendarState(YearMonth.from(today).toString())
+                        HabitCalendarState(YearMonth.from(today).toString(), today.toEpochDay())
                     }
                     val expanded = tracker.id !in collapsedIds
                     val glowOrigin = remember(tracker.id) {
@@ -187,6 +205,7 @@ fun TrackerScreen(
                             if (index > 0) HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
                             val field = habitMeasurement(trackerFields)
                             HabitHeadingAndEntry(
+                                minimumEntryWidth = 240.dp,
                                 heading = {
                                     ReorderHandle(
                                         order, tracker.id, tracker.name, enabled = active.size > 1, longPress = true,
@@ -223,10 +242,26 @@ fun TrackerScreen(
                                 },
                             ) {
                                 if (field != null) {
-                                    HabitDailyInput(
-                                        vm, field, values.find { it.fieldId == field.id && it.epochDay == epoch },
-                                        epoch, Color(tracker.colourArgb.toInt()),
-                                    )
+                                    val day = minOf(calendarState.selectedDay, today.toEpochDay())
+                                    val date = LocalDate.ofEpochDay(day)
+                                    Row(
+                                        Modifier.fillMaxWidth().testTag("Habit editing target ${tracker.id}"),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        Text(
+                                            date.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG).withLocale(Locale.getDefault())),
+                                            Modifier.weight(1f).semantics {
+                                                contentDescription = "Editing ${tracker.name} for ${formatDisplayDate(date)}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = palette.textSecondary,
+                                        )
+                                        Box(Modifier.weight(0.85f)) { HabitDailyInput(
+                                            vm, field, values.find { it.fieldId == field.id && it.epochDay == day },
+                                            day, Color(tracker.colourArgb.toInt()),
+                                        ) }
+                                    }
                                 }
                             }
                             HabitMonthHeatmap(

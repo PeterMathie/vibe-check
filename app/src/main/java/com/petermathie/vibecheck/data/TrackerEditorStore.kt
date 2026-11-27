@@ -113,7 +113,9 @@ class TrackerEditorStore(
                 if (error != null) throw IllegalArgumentException(error)
             }
             retireExtraMeasurements(dao.fieldsForTracker(field.trackerId), field.id)
-            db.trackerDao().upsertValue(row)
+            val trackerDao = db.trackerDao()
+            val existing = trackerDao.valuesForDay(field.trackerId, row.epochDay).find { it.fieldId == row.fieldId }
+            trackerDao.upsertValue(row.copy(notes = existing?.notes ?: row.notes))
         }
     }
 
@@ -121,7 +123,16 @@ class TrackerEditorStore(
         db.withTransaction {
             val field = requireWritableMeasurement(fieldId)
             retireExtraMeasurements(dao.fieldsForTracker(field.trackerId), field.id)
-            db.trackerDao().clearValue(fieldId, day)
+            val trackerDao = db.trackerDao()
+            val existing = trackerDao.valuesForDay(field.trackerId, day).find { it.fieldId == fieldId }
+            if (existing != null && existing.notes.isNotEmpty()) {
+                trackerDao.upsertValue(existing.copy(
+                    numericValue = null, booleanValue = null, textValue = null,
+                    choiceOptionId = null, choiceIntensity = null, updatedAt = System.currentTimeMillis(),
+                ))
+            } else {
+                trackerDao.clearValue(fieldId, day)
+            }
         }
     }
 

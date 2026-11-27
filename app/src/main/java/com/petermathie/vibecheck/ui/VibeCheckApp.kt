@@ -43,7 +43,10 @@ import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.FitnessCenter
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material.icons.outlined.SportsGymnastics
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -281,6 +284,7 @@ fun VibeCheckApp(viewModel: MainViewModel = hiltViewModel()) {
                         },
                         onChoose = { destination = Destination.PROGRAMMES },
                         onDoneEditing = { destination = Destination.HOME },
+                        showWorkoutTiming = true,
                         onDeleted = { destination = Destination.HOME },
                     )
                     Destination.EXERCISES -> ExerciseEditor(editor)
@@ -352,7 +356,7 @@ internal fun ModeSelector(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            if (item == TrainingMode.STRENGTH) Icons.Outlined.FitnessCenter else Icons.Outlined.SportsGymnastics,
+                            if (item == TrainingMode.STRENGTH) Icons.Outlined.FitnessCenter else SplitsIcon,
                             contentDescription = if (item == TrainingMode.STRENGTH) "Strength" else "Stretch",
                             modifier = Modifier.size(24.dp),
                             tint = if (selected) palette.textPrimary else palette.textSecondary,
@@ -377,6 +381,29 @@ internal fun ModeSelector(
             )
         }
     }
+}
+
+private val SplitsIcon by lazy {
+    ImageVector.Builder("Splits", 24.dp, 24.dp, 24f, 24f).apply {
+        path(fill = SolidColor(Color.Black)) {
+            moveTo(14f, 4f)
+            curveTo(14f, 5.1f, 13.1f, 6f, 12f, 6f)
+            curveTo(10.9f, 6f, 10f, 5.1f, 10f, 4f)
+            curveTo(10f, 2.9f, 10.9f, 2f, 12f, 2f)
+            curveTo(13.1f, 2f, 14f, 2.9f, 14f, 4f)
+            close()
+        }
+        path(
+            stroke = SolidColor(Color.Black), strokeLineWidth = 2f,
+            strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round,
+        ) {
+            moveTo(12f, 8f); lineTo(12f, 18f)
+            moveTo(8f, 13f); lineTo(12f, 9f); lineTo(16f, 13f)
+            moveTo(2f, 18f); lineTo(22f, 18f)
+            moveTo(2f, 18f); lineTo(2f, 16f)
+            moveTo(22f, 18f); lineTo(22f, 16f)
+        }
+    }.build()
 }
 
 private val primaryDestinations = listOf(

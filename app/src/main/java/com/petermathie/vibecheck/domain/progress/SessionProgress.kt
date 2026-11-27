@@ -1,8 +1,11 @@
 package com.petermathie.vibecheck.domain.progress
 
 import com.petermathie.vibecheck.data.local.*
+import java.time.Instant
+import java.time.ZoneId
 
 data class ProgressPoint(val date: Long, val score: Double, val performance: WorkoutSetEntity, val notes: String, val variation: String?, val bands: List<String>, val index: Double? = null, val trend: Double? = null, val rank: Int = 0)
+data class DailyEstimatedOneRepMaxPoint(val date: Long, val kilograms: Double, val trendKilograms: Double? = null)
 data class PersonalRecords(
     val weightKg: Double?,
     val holdMillis: Long?,
@@ -18,6 +21,37 @@ data class PersonalRecordVisibility(
 data class AggregateProgressPoint(val date: Long, val averageIndex: Double, val exerciseCount: Int)
 
 object SessionProgress {
+    fun dailyEstimatedOneRepMax(
+        exerciseId: String,
+        workouts: List<WorkoutEntity>,
+        exercises: List<WorkoutExerciseEntity>,
+        sets: List<WorkoutSetEntity>,
+        filter: String? = null,
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): List<DailyEstimatedOneRepMaxPoint> {
+        val finished = workouts.filter { it.status == "FINISHED" }.associateBy { it.id }
+        val rows = exercises.filter { it.actualExerciseId == exerciseId }.associateBy { it.id }
+        val daily = sets.mapNotNull { set ->
+            val row = rows[set.workoutExerciseId] ?: return@mapNotNull null
+            val workout = finished[row.workoutId] ?: return@mapNotNull null
+            if (filter != null && (set.variationId ?: "default") != filter) return@mapNotNull null
+            if (!valid(set)) return@mapNotNull null
+            val weight = set.weightKg?.takeIf { it.isFinite() && it > 0.0 } ?: return@mapNotNull null
+            val reps = (set.reps ?: listOfNotNull(set.leftReps, set.rightReps).minOrNull())
+                ?.takeIf { it.isFinite() && it > 0.0 } ?: return@mapNotNull null
+            val estimate = ProgressScorer.weightedReps(weight, reps).takeIf(Double::isFinite)
+                ?: return@mapNotNull null
+            val day = Instant.ofEpochMilli(workout.finishedAt ?: workout.startedAt).atZone(zone).toLocalDate()
+            day to estimate
+        }.groupBy({ it.first }, { it.second }).entries.sortedBy { it.key }.map { (day, values) ->
+            DailyEstimatedOneRepMaxPoint(day.atStartOfDay(zone).toInstant().toEpochMilli(), values.max())
+        }
+        return daily.mapIndexed { index, point ->
+            val recent = daily.take(index + 1).takeLast(3)
+            point.copy(trendKilograms = if (recent.size == 3) recent.sumOf { it.kilograms / 3.0 } else null)
+        }
+    }
+
     fun aggregate(pointsByExercise: Map<String, List<ProgressPoint>>): List<AggregateProgressPoint> {
         val weeklyByExercise = pointsByExercise.mapValues { (_, points) ->
             points.filter { it.index != null }

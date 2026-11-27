@@ -30,6 +30,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.layout.boundsInWindow
@@ -55,6 +58,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -73,6 +77,7 @@ import kotlin.math.roundToInt
 
 internal val LocalHabitOverlay = compositionLocalOf<(Boolean) -> Unit> { {} }
 private val LocalHabitDialogBounds = compositionLocalOf<Rect?> { null }
+internal val LocalHabitDialogContentMaxHeight = compositionLocalOf { Dp.Infinity }
 
 @Composable
 internal fun HabitGlassDialogHost(
@@ -100,6 +105,7 @@ internal fun HabitGlassDialog(
     onBack: (() -> Unit)? = null,
     actions: @Composable FlowRowScope.() -> Unit = {},
     titleStyle: TextStyle = MaterialTheme.typography.titleLarge,
+    scrollState: ScrollState? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val palette = LocalVibePalette.current
@@ -173,17 +179,19 @@ internal fun HabitGlassDialog(
                                 IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") }
                             }
                             key(title) {
-                                val scroll = rememberScrollState()
+                                val scroll = scrollState ?: rememberScrollState()
                                 val reorderContext = rememberReorderScrollContext(scroll)
                                 CompositionLocalProvider(LocalReorderScrollContext provides reorderContext) {
-                                    Box(Modifier.weight(1f, fill = false).fillMaxWidth()) {
-                                        Column(
-                                            Modifier.fillMaxWidth().padding(end = 8.dp)
-                                                .reorderScrollViewport(reorderContext).verticalScroll(scroll),
-                                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                                            content = content,
-                                        )
-                                        HabitDialogScrollIndicator(scroll)
+                                    BoxWithConstraints(Modifier.weight(1f, fill = false).fillMaxWidth()) {
+                                        CompositionLocalProvider(LocalHabitDialogContentMaxHeight provides maxHeight) {
+                                            Column(
+                                                Modifier.fillMaxWidth().padding(end = 8.dp)
+                                                    .reorderScrollViewport(reorderContext).verticalScroll(scroll),
+                                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                                content = content,
+                                            )
+                                            HabitDialogScrollIndicator(scroll)
+                                        }
                                     }
                                 }
                             }
@@ -265,15 +273,47 @@ internal fun HabitTextField(
     textAlign: TextAlign = TextAlign.Start,
     hint: String? = null,
     accessibilityLabel: String = label,
+    suffix: String? = null,
+    inset: Boolean = false,
 ) {
     val palette = LocalVibePalette.current
+    if (plain && suffix != null) {
+        BasicTextField(
+            value = value, onValueChange = onValueChange, readOnly = readOnly,
+            singleLine = true, modifier = modifier.fillMaxWidth().semantics { error?.let { error(it) } },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = palette.textPrimary, textAlign = textAlign),
+            keyboardOptions = KeyboardOptions(keyboardType = if (numeric) KeyboardType.Decimal else KeyboardType.Text),
+            cursorBrush = SolidColor(palette.accent),
+            decorationBox = { input ->
+                Column {
+                    Box(
+                        Modifier.fillMaxWidth().heightIn(min = 56.dp).then(
+                            if (inset) Modifier.background(palette.surfaceInset, MaterialTheme.shapes.small).padding(horizontal = 8.dp)
+                            else Modifier,
+                        ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Box(Modifier.weight(1f).alignByBaseline()) { input() }
+                            Text(
+                                suffix, Modifier.alignByBaseline(), style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                            )
+                        }
+                    }
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+        )
+        return
+    }
     val container = if (plain) Color.Transparent else palette.surfaceInset.copy(alpha = 0.3f)
     val defaults = TextFieldDefaults.colors()
     val input: @Composable () -> Unit = {
         TextField(
             value = value,
             onValueChange = onValueChange,
-            label = if (plain) {
+            label = if (plain && suffix == null) {
                 {
                     Text(
                         label,
@@ -282,6 +322,9 @@ internal fun HabitTextField(
                     )
                 }
             } else null,
+            suffix = suffix?.let {
+                { Text(it, style = MaterialTheme.typography.labelSmall, color = palette.textSecondary) }
+            },
             placeholder = hint?.let { { Text(it, color = palette.textSecondary) } },
             modifier = if (plain) modifier.fillMaxWidth()
                 else Modifier.fillMaxWidth().semantics { contentDescription = accessibilityLabel },
@@ -326,6 +369,7 @@ internal fun HabitSettingValue(
     modifier: Modifier = Modifier,
     detail: String? = null,
     trailingIcon: ImageVector? = null,
+    valueColor: Color? = null,
     onClick: (() -> Unit)? = null,
 ) {
     val palette = LocalVibePalette.current
@@ -336,10 +380,10 @@ internal fun HabitSettingValue(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(value, style = MaterialTheme.typography.bodyLarge)
+                Text(value, style = MaterialTheme.typography.bodyLarge, color = valueColor ?: palette.textPrimary)
                 detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = palette.textSecondary) }
             }
-            trailingIcon?.let { Icon(it, null, tint = palette.textSecondary) }
+            trailingIcon?.let { Icon(it, null, tint = valueColor ?: palette.textSecondary) }
         }
     }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -359,6 +403,10 @@ internal fun HabitSettingValue(
 }
 
 internal data class HabitSettingOption(val value: String, val label: String)
+
+@Composable
+internal fun selectionTextColor(): Color =
+    if (LocalVibePalette.current.isDark) Color.White else LocalVibePalette.current.textPrimary
 
 private object HabitDropdownPosition : PopupPositionProvider {
     override fun calculatePosition(
@@ -402,15 +450,17 @@ internal fun HabitSettingDropdown(
     ) {
         HabitSettingValue(
             label,
-            options.single { it.value == value }.label,
+            if (value.isBlank() && options.none { it.value == value }) "Choose..."
+            else options.single { it.value == value }.label,
             modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                 .semantics { contentDescription = label },
             trailingIcon = Icons.Outlined.ExpandMore,
+            valueColor = selectionTextColor(),
         )
         val menuContent: @Composable ColumnScope.() -> Unit = {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.label) },
+                    text = { Text(option.label, color = selectionTextColor()) },
                     trailingIcon = {
                         if (option.value == value) Icon(Icons.Outlined.Check, "Selected")
                     },

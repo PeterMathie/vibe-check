@@ -127,15 +127,15 @@ fun ActivityHeatmap(
 @Composable
 internal fun CalendarMonthHeader(
     month: YearMonth,
-    firstMonth: YearMonth,
-    currentMonth: YearMonth,
+    firstMonth: YearMonth?,
+    currentMonth: YearMonth?,
     label: String,
     onMoveMonth: (Int) -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(
             onClick = { onMoveMonth(-1) },
-            enabled = month > firstMonth,
+            enabled = firstMonth == null || month > firstMonth,
             modifier = Modifier.semantics { contentDescription = "Previous month for $label" },
         ) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowLeft, null) }
         Text(
@@ -144,7 +144,7 @@ internal fun CalendarMonthHeader(
         )
         IconButton(
             onClick = { onMoveMonth(1) },
-            enabled = month < currentMonth,
+            enabled = currentMonth == null || month < currentMonth,
             modifier = Modifier.semantics { contentDescription = "Next month for $label" },
         ) { Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null) }
     }
@@ -160,6 +160,7 @@ internal fun CalendarHeatmapGrid(
     onDayClick: (LocalDate) -> Unit,
     compact: Boolean = false,
     opaqueCells: Boolean = false,
+    allowFutureDates: Boolean = false,
 ) {
     val palette = LocalVibePalette.current
     val cellHeight = (if (compact) 14.dp else 22.dp) * LocalDensity.current.fontScale.coerceAtLeast(1f)
@@ -178,7 +179,7 @@ internal fun CalendarHeatmapGrid(
                     if (date == null) {
                         Spacer(Modifier.weight(1f).height(cellHeight))
                     } else {
-                        val future = date > today
+                        val future = date > today && !allowFutureDates
                         val fill = colorForDay(date)
                         val selected = (selectedDay ?: today.toEpochDay()) == date.toEpochDay()
                         val outline = if (selected || date == today) Modifier.border(

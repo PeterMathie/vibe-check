@@ -994,6 +994,14 @@ class WorkoutSetTilesTest {
         assertTrue(fields.zipWithNext().all { (left, right) ->
             kotlin.math.abs(left.center.y - right.center.y) < 2f && left.right <= right.left
         })
+        val dividers = compose.onAllNodesWithTag("Value divider for Back extension set 1", useUnmergedTree = true)
+            .assertCountEquals(2).fetchSemanticsNodes().map { it.boundsInRoot }.sortedBy { it.left }
+        dividers.zip(fields.zipWithNext()).forEach { (divider, neighbours) ->
+            val (left, right) = neighbours
+            assertTrue("Divider stays within the inter-field gap", divider.left >= left.right && divider.right <= right.left)
+            assertTrue("Divider is shorter than the input", divider.height < left.height)
+            assertTrue("Divider remains vertically centred", kotlin.math.abs(divider.center.y - left.center.y) < 2f)
+        }
         assertTrue("Single-row inputs share a fixed height", fields.map { it.height }.distinct().size == 1)
         val completion = compose.onNodeWithContentDescription("Complete set 1 for Back extension")
             .assertHasClickAction().fetchSemanticsNode().boundsInRoot
@@ -1014,21 +1022,19 @@ class WorkoutSetTilesTest {
     }
 
     @Test
-    fun activeAndInactiveTilesKeepAContrastingBoundary() {
+    fun borderlessTilesRetainOneAccessibleActiveSelection() {
         val workout = start()
         show(workout)
-        fun assertBoundary() {
-            val tile = compose.onNodeWithContentDescription("Set 1 for Handstand")
-                .performScrollTo().captureToImage().toPixelMap()
-            val border = tile[0, tile.height / 2].luminance()
-            val fill = tile[4, tile.height / 2].luminance()
-            val contrast = (maxOf(border, fill) + 0.05f) / (minOf(border, fill) + 0.05f)
-            assertTrue("Quiet decorative set outline must remain visible: contrast=$contrast", contrast >= 1.5f)
-        }
-        assertBoundary()
+        val first = compose.onNodeWithContentDescription("Set 1 for Handstand").performScrollTo()
+        first.assertIsSelected()
+        val pixels = first.captureToImage().toPixelMap()
+        assertEquals("No left set outline", pixels[0, pixels.height / 2], pixels[4, pixels.height / 2])
+        compose.onAllNodesWithTag("Value divider for Handstand set 1", useUnmergedTree = true)
+            .assertCountEquals(1)
         compose.onNodeWithContentDescription("Set 2 for Handstand")
             .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { it() }
-        assertBoundary()
+        first.assertIsNotSelected()
+        compose.onNodeWithContentDescription("Set 2 for Handstand").assertIsSelected()
     }
 
     @Test

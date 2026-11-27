@@ -15,6 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
@@ -57,6 +59,81 @@ class WorkoutLoggingUiTest {
     private val compose get() = lifecycle.compose
 
     @Test
+    fun loggerClockUpdatesBeforeAnySetsWithoutWritingAndStopsAtSavedFinish() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val original = runBlocking {
+            database.editorDao().workouts().first().first { it.id == workoutId }.copy(bodyweightKg = 80.0)
+        }
+        runBlocking { database.editorDao().workout(original) }
+        val originalSets = runBlocking { database.editorDao().sets().first() }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent {
+            VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}, showWorkoutTiming = true) }
+        }
+        val clock = compose.onNodeWithContentDescription("Workout duration")
+        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Workout duration").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Started at ", substring = true).assertExists()
+        compose.onNodeWithText("Finished:", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Logged duration:", substring = true).assertDoesNotExist()
+        val initial = clock.fetchSemanticsNode().config[SemanticsProperties.StateDescription]
+        compose.waitUntil(5_000) { clock.fetchSemanticsNode().config[SemanticsProperties.StateDescription] != initial }
+        assertEquals(original, runBlocking { database.editorDao().workouts().first().first { it.id == workoutId } })
+        assertEquals(originalSets, runBlocking { database.editorDao().sets().first() })
+        val finished = original.copy(status = "FINISHED", finishedAt = original.startedAt + 61_000)
+        compose.runOnIdle { viewModel.save(finished) }
+        compose.waitUntil(15_000) {
+            clock.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == "00:01:01"
+        }
+        compose.onNodeWithText("Finished:", substring = true).assertDoesNotExist()
+        compose.mainClock.advanceTimeBy(2_000)
+        clock.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "00:01:01"))
+        assertEquals(finished, runBlocking { database.editorDao().workouts().first().first { it.id == workoutId } })
+    }
+
+    @Test
+    fun timingRowReservesSixDigitsAndKeepsDurationAtTheRightEdge() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
+        val workoutId = startPushWorkout(context)
+        val original = runBlocking {
+            database.editorDao().workouts().first().first { it.id == workoutId }.copy(bodyweightKg = 80.0)
+        }
+        runBlocking { database.editorDao().workout(original) }
+        val viewModel = lifecycle.own(EditorViewModel(database))
+        compose.setContent { VibeCheckTheme { WorkoutEditor(viewModel, workoutId, {}, {}, showWorkoutTiming = true) } }
+        val clock = compose.onNodeWithContentDescription("Workout duration")
+        compose.waitUntil(15_000) { compose.onAllNodesWithContentDescription("Workout duration").fetchSemanticsNodes().isNotEmpty() }
+        val row = compose.onNodeWithContentDescription("Workout timing").fetchSemanticsNode().boundsInRoot
+        val started = compose.onNodeWithText("Started at ", substring = true).fetchSemanticsNode().boundsInRoot
+        val initial = clock.fetchSemanticsNode().boundsInRoot
+        assertEquals(row.left, started.left, 1f)
+        assertEquals(row.right, initial.right, 1f)
+        assertEquals(started.center.y, initial.center.y, 1f)
+        val longer = original.copy(startedAt = System.currentTimeMillis() - (23 * 60L + 58) * 60_000L)
+        compose.runOnIdle { viewModel.save(longer) }
+        compose.waitUntil(15_000) {
+            clock.fetchSemanticsNode().config[SemanticsProperties.StateDescription].startsWith("23:58:")
+        }
+        val fullHours = clock.fetchSemanticsNode().boundsInRoot
+        assertEquals(initial.width, fullHours.width, 1f)
+        assertEquals(row.right, fullHours.right, 1f)
+        val missingFinish = longer.copy(status = "FINISHED", finishedAt = null)
+        compose.runOnIdle { viewModel.save(missingFinish) }
+        compose.waitUntil(15_000) { clock.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == "—" }
+        assertEquals(initial.width, clock.fetchSemanticsNode().boundsInRoot.width, 1f)
+        assertEquals(row.right, clock.fetchSemanticsNode().boundsInRoot.right, 1f)
+        val layouts = mutableListOf<TextLayoutResult>()
+        clock.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue(layouts.isNotEmpty() && layouts.none { it.hasVisualOverflow })
+        assertTrue(layouts.single().getLineLeft(0) > 0f)
+        assertEquals(layouts.single().size.width.toFloat(), layouts.single().getLineRight(0), 1f)
+        compose.onNodeWithText("Finished:", substring = true).assertDoesNotExist()
+        assertEquals(missingFinish, runBlocking { database.editorDao().workouts().first().first { it.id == workoutId } })
+    }
+
+    @Test
     fun rpeRejectsValuesAboveTenAndExplainsRepsInReserve() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         database = Room.inMemoryDatabaseBuilder(context, VibeDatabase::class.java).build()
@@ -66,6 +143,7 @@ class WorkoutLoggingUiTest {
         compose.waitUntil(15_000) {
             compose.onAllNodesWithContentDescription("RPE for Handstand set 1").fetchSemanticsNodes().isNotEmpty()
         }
+        compose.onNodeWithContentDescription("Workout duration").assertDoesNotExist()
         val rpe = compose.onNodeWithContentDescription("RPE for Handstand set 1").performScrollTo()
         rpe.performTextInput("9")
         rpe.performTextInput("9")

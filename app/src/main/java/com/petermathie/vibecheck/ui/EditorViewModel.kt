@@ -6,6 +6,8 @@ import androidx.room.withTransaction
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.data.TrackerEditorStore
 import com.petermathie.vibecheck.domain.editor.moveItem
+import com.petermathie.vibecheck.domain.body.BodyweightUnit
+import com.petermathie.vibecheck.domain.body.convertBodyweight
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.*
@@ -17,6 +19,8 @@ import java.util.UUID
 import android.content.Context
 import android.net.Uri
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneId
 
 fun newId(): String = UUID.randomUUID().toString()
 
@@ -34,6 +38,8 @@ internal data class HabitEditorData(
     val fields: List<TrackerFieldEntity>,
     val values: List<TrackerDailyValueEntity>,
 )
+
+internal data class ProgrammeEntryPrescriptionUpdate(val id: String, val sets: Int?, val restSeconds: Int)
 
 @HiltViewModel
 class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewModel() {
@@ -73,6 +79,8 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         dao.trackers(), dao.fields(), dao.values(), ::HabitEditorData,
     ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val measurements = dao.measurements().live()
+    internal val bodyMeasurements: StateFlow<List<BodyMeasurementEntity>?> = dao.measurements()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000, replayExpirationMillis = 0), null)
     val error = MutableStateFlow<String?>(null)
     private val writes = Mutex()
     private fun write(onSuccess: () -> Unit = {}, onFailure: () -> Unit = {}, block: suspend () -> Unit) =
@@ -89,12 +97,53 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
                 }
             }
         }
-    fun save(row: ProgrammeEntity) = write { dao.programme(row) }
-    fun createProgramme(row: ProgrammeEntity, day: ProgrammeDayEntity, onCreated: () -> Unit = {}) = write(onCreated) {
+    fun save(row: ProgrammeEntity) = write {
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid programme colour" }
+        dao.programme(row)
+    }
+    fun renameProgramme(
+        id: String,
+        name: String,
+        onSaved: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onSaved, onFailure) {
+        require(name.isNotBlank()) { "Programme name cannot be blank" }
+        require(dao.renameProgramme(id, name.trim()) == 1) { "Programme no longer exists" }
+    }
+    fun setProgrammeColour(id: String, colour: Long) = write {
+        require(colour in 0..0xFFFFFFFFL) { "Invalid programme colour" }
+        require(dao.setProgrammeColour(id, colour) == 1) { "Programme no longer exists" }
+    }
+    fun archiveProgramme(
+        id: String,
+        onSaved: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onSaved, onFailure) {
+        require(dao.setProgrammeArchived(id, true) == 1) { "Programme no longer exists" }
+    }
+    fun createProgramme(
+        row: ProgrammeEntity,
+        day: ProgrammeDayEntity,
+        onFailure: () -> Unit = {},
+        onCreated: () -> Unit = {},
+    ) = write(onCreated, onFailure) {
+        require(row.name.isNotBlank()) { "Programme name cannot be blank" }
+        require(row.colourArgb in 0..0xFFFFFFFFL) { "Invalid programme colour" }
         db.withTransaction {
             dao.programme(row)
             dao.day(day)
         }
+    }
+    fun ensureProgrammeDay(id: String, onReady: (String) -> Unit) = write {
+        val day = db.withTransaction {
+            val programme = requireNotNull(dao.programmeById(id)) { "Programme no longer exists" }
+            val current = dao.days().first().filter { it.programmeId == id }
+            require(current.size <= 1) { "Programme days changed. Choose Add exercise again." }
+            current.singleOrNull() ?: ProgrammeDayEntity(
+                newId(), id, if (programme.mode == "STRETCHING") "Stretching" else "Workout", 0,
+            ).also { dao.day(it) }
+        }
+        onReady(day.id)
     }
     fun moveProgramme(id: String, delta: Int) = write {
         moveItem(dao.programmes().first(), id, delta) { it.id }?.let { rows ->
@@ -125,6 +174,54 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     }
     fun save(row: ProgrammeDayEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.day(row) }
     fun save(row: ProgrammeExerciseEntity, onSaved: () -> Unit = {}) = write(onSaved) { dao.entry(row) }
+    fun setProgrammeSetCount(id: String, count: Int?) = write {
+        require(count == null || count > 0) { "Sets must be a positive whole number" }
+        require(dao.setProgrammeSetCount(id, count) == 1) { "Programme exercise no longer exists" }
+    }
+    fun setProgrammeRestSeconds(id: String, seconds: Int) = write {
+        require(seconds >= 0) { "Rest seconds must be zero or a positive whole number" }
+        require(dao.setProgrammeRestSeconds(id, seconds) == 1) { "Programme exercise no longer exists" }
+    }
+    fun prepareProgrammePrescription(
+        id: String, onReady: (ProgrammeExerciseEntity) -> Unit, onFailure: () -> Unit,
+    ) = write(onFailure = onFailure) {
+        onReady(requireNotNull(dao.programmeEntryById(id)) { "Programme exercise no longer exists" })
+    }
+    fun saveProgrammePrescription(
+        row: ProgrammeExerciseEntity, onSaved: () -> Unit, onFailure: () -> Unit,
+    ) = write(onSaved, onFailure) {
+        require(row.targetSets == null || row.targetSets > 0) { "Sets must be a positive whole number" }
+        require(row.restSeconds >= 0) { "Rest seconds must be zero or a positive whole number" }
+        db.withTransaction {
+            val current = requireNotNull(dao.programmeEntryById(row.id)) { "Programme exercise no longer exists" }
+            require(current.programmeDayId == row.programmeDayId) { "Programme exercise changed. Open the programme again." }
+            dao.entry(current.copy(
+                targetSets = row.targetSets, restSeconds = row.restSeconds,
+                targetRepsMin = row.targetRepsMin, targetRepsMax = row.targetRepsMax,
+            ))
+        }
+    }
+    internal fun saveProgrammeEditor(
+        id: String,
+        name: String,
+        prescriptions: List<ProgrammeEntryPrescriptionUpdate>,
+        onSaved: () -> Unit,
+        onFailure: () -> Unit,
+    ) = write(onSaved, onFailure) {
+        require(name.isNotBlank()) { "Programme name cannot be blank" }
+        db.withTransaction {
+            require(dao.renameProgramme(id, name.trim()) == 1) { "Programme no longer exists" }
+            val dayIds = dao.days().first().filter { it.programmeId == id }.map { it.id }.toSet()
+            prescriptions.forEach { update ->
+                require(update.sets == null || update.sets > 0) { "Sets must be a positive whole number" }
+                require(update.restSeconds >= 0) { "Rest seconds must be zero or a positive whole number" }
+                val entry = requireNotNull(dao.programmeEntryById(update.id)) { "Programme exercise no longer exists" }
+                require(entry.programmeDayId in dayIds) { "Programme exercise changed. Open the programme again." }
+                require(dao.setProgrammeSetCount(update.id, update.sets) == 1) { "Programme exercise no longer exists" }
+                require(dao.setProgrammeRestSeconds(update.id, update.restSeconds) == 1) { "Programme exercise no longer exists" }
+            }
+        }
+    }
     fun save(row: WorkoutEntity) = write { dao.workout(row) }
     fun changeWorkoutDate(row: WorkoutEntity, end: Long) = write {
         val delta=end-(row.finishedAt ?: row.startedAt)
@@ -171,6 +268,35 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
     fun save(row: TrackerFieldEntity) = write { trackerStore.saveField(row) }
     fun save(row: TrackerDailyValueEntity, onSaved: () -> Unit = {}) = write(onSaved) { trackerStore.saveValue(row) }
     fun save(row: BodyMeasurementEntity) = write { dao.measurement(row) }
+    internal fun setBodyweight(
+        day: LocalDate,
+        value: Double?,
+        displayUnit: BodyweightUnit,
+        zone: ZoneId = ZoneId.systemDefault(),
+        onSaved: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onSaved, onFailure) {
+        require(value == null || value.isFinite() && value > 0.0) { "Enter a finite bodyweight greater than zero" }
+        val start = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        db.withTransaction {
+            if (value == null) {
+                dao.clearBodyweightsForDay(start, end)
+            } else {
+                val existing = dao.bodyweightsForDay(start, end).firstOrNull()
+                val storageUnit = existing?.let { BodyweightUnit.stored(it.unit) } ?: BodyweightUnit.KILOGRAMS
+                val storedValue = convertBodyweight(value, displayUnit, storageUnit)
+                require(storedValue > 0.0) { "Bodyweight is outside the supported numeric range" }
+                dao.measurement(
+                    existing?.copy(value = storedValue, isWeightCleared = false)
+                        ?: BodyMeasurementEntity(
+                            newId(), day.atTime(12, 0).atZone(zone).toInstant().toEpochMilli(),
+                            "Bodyweight", storedValue, storageUnit.symbol, "", false,
+                        ),
+                )
+            }
+        }
+    }
     fun save(row: ExerciseVariationEntity) = write { dao.variation(row) }
     fun saveBand(row: BandEntity, onSaved: () -> Unit, onFailure: () -> Unit) = write(onSaved, onFailure) {
         require(!isSeededBandId(row.id)) { "Built-in band definitions cannot be changed" }
@@ -243,9 +369,21 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
             db.withTransaction { rows.forEachIndexed { i,v -> dao.variation(v.copy(progressionRank=start+i)) } }
         }
     }
-    fun removeProgramme(id: String) = write { dao.deleteProgramme(id) }
+    fun removeProgramme(
+        id: String,
+        onRemoved: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onRemoved, onFailure) {
+        db.withTransaction {
+            requireNotNull(dao.programmeById(id)) { "Programme no longer exists" }
+            dao.deleteProgramme(id)
+        }
+    }
     fun removeDay(id: String) = write { dao.deleteDay(id) }
-    fun removeEntry(id: String) = write { dao.deleteEntry(id) }
+    fun removeEntry(id: String, onRemoved: () -> Unit = {}, onFailure: () -> Unit = {}) = write(onFailure = onFailure) {
+        dao.deleteEntry(id)
+        onRemoved()
+    }
     fun removeSet(id: String) = write { dao.deleteSet(id) }
     fun removeWorkoutSet(id: String, ordinal: Int, remaining: Int, onRemoved: () -> Unit) =
         write(onRemoved) { dao.deleteWorkoutSet(id, ordinal, remaining) }
@@ -267,12 +405,17 @@ class EditorViewModel @Inject constructor(private val db: VibeDatabase) : ViewMo
         dao.saveSetWithSnapshots(row, bandIds, consumeDraft = true, inputConfigOverride = inputConfigOverride)
         onSaved()
     }
-    fun duplicate(programme: ProgrammeEntity) = write {
-        val sourceDays = dao.days().first().filter { it.programmeId == programme.id }
-        val sourceEntries = dao.entries().first()
+    fun duplicate(
+        programme: ProgrammeEntity,
+        onDuplicated: () -> Unit = {},
+        onFailure: () -> Unit = {},
+    ) = write(onDuplicated, onFailure) {
         db.withTransaction {
+            val current = requireNotNull(dao.programmeById(programme.id)) { "Programme no longer exists" }
+            val sourceDays = dao.days().first().filter { it.programmeId == current.id }
+            val sourceEntries = dao.entries().first()
             val id = newId()
-            dao.programme(programme.copy(id = id, name = programme.name + " (copy)", isDemo = false))
+            dao.programme(current.copy(id = id, name = current.name + " (copy)", isDemo = false))
             sourceDays.forEach { day ->
                 val dayId = newId()
                 dao.day(day.copy(id = dayId, programmeId = id))

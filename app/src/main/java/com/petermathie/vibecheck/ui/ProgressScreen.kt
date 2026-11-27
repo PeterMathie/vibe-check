@@ -44,15 +44,22 @@ fun ProgressScreen(vm:EditorViewModel) {
     var exerciseId by rememberSaveable { mutableStateOf<String?>(null) };var picker by remember { mutableStateOf(false) };var filter by rememberSaveable { mutableStateOf<String?>(null) }
     var variationMenu by remember { mutableStateOf(false) };var methodology by remember { mutableStateOf(false) }
     var rpeHelp by remember { mutableStateOf(false) }
-    var rangeMonths by rememberSaveable { mutableIntStateOf(1) }
+    var rangeMonths by rememberSaveable { mutableIntStateOf(12) }
     var customRange by rememberSaveable { mutableStateOf(false) }
-    var customStart by rememberSaveable { mutableLongStateOf(LocalDate.now().minusMonths(1).toEpochDay()) }
+    var customStart by rememberSaveable { mutableLongStateOf(LocalDate.now().minusYears(1).toEpochDay()) }
     var customEnd by rememberSaveable { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     var rangeDialog by remember { mutableStateOf(false) }
     val dateRange = if (customRange) {
         progressDateRange(LocalDate.ofEpochDay(customStart), LocalDate.ofEpochDay(customEnd), ZoneId.systemDefault())
     } else progressDateRange(rangeMonths, LocalDate.now(), ZoneId.systemDefault())
     val points=exerciseId?.let { SessionProgress.points(it,workouts,rows,sets,links,bands,filter,variations) }.orEmpty()
+    val showEstimatedOneRepMax = exercises.find { it.id == exerciseId }?.trackingType == "WEIGHT_REPS"
+    val zone = ZoneId.systemDefault()
+    val dailyEstimatedOneRepMax = remember(exerciseId, showEstimatedOneRepMax, workouts, rows, sets, filter, zone) {
+        exerciseId?.takeIf { showEstimatedOneRepMax }?.let {
+            SessionProgress.dailyEstimatedOneRepMax(it, workouts, rows, sets, filter, zone)
+        }.orEmpty()
+    }
     val finishedIds=workouts.filter { it.status=="FINISHED" }.map { it.id }.toSet()
     val trackableSetRowIds = sets.filter { SessionProgress.valid(it) || it.romValue != null }.map { it.workoutExerciseId }.toSet()
     val eligibleExerciseIds = rows.filter { it.workoutId in finishedIds && it.id in trackableSetRowIds }.map { it.actualExerciseId }.toSet()
@@ -66,6 +73,7 @@ fun ProgressScreen(vm:EditorViewModel) {
     val valid=sets.filter { it.workoutExerciseId in exerciseRows && SessionProgress.valid(it) && (filter==null || it.variationId==filter) }
     val records=SessionProgress.records(valid,points)
     val visiblePoints = points.filter { it.date in dateRange }
+    val visibleEstimatedOneRepMax = dailyEstimatedOneRepMax.filter { it.date in dateRange }
     val recordVisibility=SessionProgress.recordVisibility(exercises.find { it.id==exerciseId }?.trackingType)
     val selectedDay = rememberSaveable { mutableStateOf<Long?>(LocalDate.now().toEpochDay()) }
     var selectedWorkoutId by remember { mutableStateOf<String?>(null) }
@@ -135,7 +143,14 @@ fun ProgressScreen(vm:EditorViewModel) {
                         verticalArrangement = Arrangement.spacedBy(VibeSpacing.small),
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (exerciseId == null) "Overall training trend" else "Training trend", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                when {
+                                    exerciseId == null -> "Overall training trend"
+                                    showEstimatedOneRepMax -> "Estimated 1RM trend"
+                                    else -> "Training trend"
+                                },
+                                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                            )
                             ProgressRangeSelector(rangeMonths, customRange, onCustom = { rangeDialog = true }) {
                                 rangeMonths = it
                                 customRange = false
@@ -153,22 +168,29 @@ fun ProgressScreen(vm:EditorViewModel) {
                                 onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
                                 graphState = if (visibleAggregate.isEmpty()) VibeGraphState.Empty("No training points recorded in this date range.") else VibeGraphState.Data,
                             )
-                        } else if (points.isEmpty()) Text("Complete a working set for this exercise to see its progress.")
+                        } else if (showEstimatedOneRepMax && dailyEstimatedOneRepMax.isEmpty()) {
+                            Text("Record weight and repetitions in a completed working set to see estimated 1RM.")
+                        } else if (!showEstimatedOneRepMax && points.isEmpty()) Text("Complete a working set for this exercise to see its progress.")
                         else VibeGraph(
-                                values = visiblePoints.map { it.index ?: it.score },
-                                secondaryValues = visiblePoints.map { it.trend },
-                                dates = visiblePoints.map { it.date },
-                                unit = "points",
+                                values = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.kilograms } else visiblePoints.map { it.index ?: it.score },
+                                secondaryValues = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.trendKilograms } else visiblePoints.map { it.trend },
+                                dates = if (showEstimatedOneRepMax) visibleEstimatedOneRepMax.map { it.date } else visiblePoints.map { it.date },
+                                unit = if (showEstimatedOneRepMax) "kg" else "points",
                                 dateRange = dateRange,
                                 readoutBelow = true,
                                 edgeToEdge = true,
                                 plotHeight = plotHeight,
                                 compactLayout = true,
                                 onValueHelp = { methodology = true },
+                                valueHelpDescription = if (showEstimatedOneRepMax) "About estimated 1RM" else "What are points?",
                                 valueFormatter = ::formatProgressValue,
                                 selectedDate = selectedDay.value?.let { LocalDate.ofEpochDay(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() },
                                 onDateSelect = { selectedDay.value = Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate().toEpochDay() },
-                                graphState = if (visiblePoints.isEmpty()) VibeGraphState.Empty("No points recorded in this date range.") else VibeGraphState.Data,
+                                graphState = when {
+                                    showEstimatedOneRepMax && visibleEstimatedOneRepMax.isEmpty() -> VibeGraphState.Empty("No estimated 1RM recorded in this date range.")
+                                    !showEstimatedOneRepMax && visiblePoints.isEmpty() -> VibeGraphState.Empty("No points recorded in this date range.")
+                                    else -> VibeGraphState.Data
+                                },
                             )
                     }
                 }
@@ -254,9 +276,17 @@ fun ProgressScreen(vm:EditorViewModel) {
             customRange = true
             rangeDialog = false
         }
-        if(methodology)HabitGlassDialog(title="How points are calculated",onDismiss={methodology=false}) {
+        if(methodology)HabitGlassDialog(
+            title = if (showEstimatedOneRepMax) "How estimated 1RM is calculated" else "How points are calculated",
+            onDismiss = { methodology = false },
+        ) {
             if (exerciseId == null) Text("Overall training trend averages each exercise's personal points for the week, using UTC weeks. Weeks overlapping the date range remain visible, with partial weeks positioned at the range boundary without changing their averages. Weekly points are separate from the selected local day and its workout list. The date range only changes what is shown, not the personal baselines.")
-            Text("The strongest valid working set supplies each session's points. The first three valid sessions establish a personal baseline of 100 points. Before that, points reflect raw performance. For skills, points are a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")
+            if (showEstimatedOneRepMax) {
+                Text("Each local calendar day shows the highest estimated one-rep max across this exercise's completed working sets and workouts, respecting the selected variation. The Epley estimate uses recorded weight and repetitions; warm-ups, failed sets and ROM measurements are excluded. Bilateral repetitions use the lower recorded side.")
+                Text("Values are kilograms, not normalized points. The rolling line averages the last three recorded daily bests. The date range only changes what is shown, not the estimates or their rolling average. Overall training and other exercise scores are unchanged.")
+            } else {
+                Text("The strongest valid working set supplies each session's points. The first three valid sessions establish a personal baseline of 100 points. Before that, points reflect raw performance. For skills, points are a heuristic: variation order sets the main difficulty; holds, reps and assistance adjust progress only within the same variation.")
+            }
             Text("RPE is perceived effort on a 0–10 scale: how hard the working set felt, not a measure of progress.")
         }
         if (rpeHelp) RpeInformationDialog { rpeHelp = false }
@@ -298,10 +328,10 @@ private fun ExerciseProgressHeader(
         ) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                exercises.find { it.id == exerciseId }?.canonicalName?.let { "Track progress of $it" } ?: "Track progress of...",
+                exercises.find { it.id == exerciseId }?.canonicalName?.let { "Track progress of $it" } ?: "Choose...",
                 modifier = Modifier.weight(1f, fill = false),
                 style = MaterialTheme.typography.titleLarge,
-                color = LocalVibePalette.current.textPrimary,
+                color = selectionTextColor(),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -311,14 +341,18 @@ private fun ExerciseProgressHeader(
         val exerciseVariations = variations.filter { it.exerciseId == exerciseId }
         if (exerciseVariations.isNotEmpty()) Box {
             IconButton(onClick = { onVariationMenu(true) }) {
-                Icon(Icons.Outlined.ExpandMore, "Variations: ${exerciseVariations.find { it.id == filter }?.name ?: "All variations"}")
+                Icon(
+                    Icons.Outlined.ExpandMore,
+                    "Variations: ${exerciseVariations.find { it.id == filter }?.name ?: "All variations"}",
+                    tint = selectionTextColor(),
+                )
             }
             DropdownMenu(
                 expanded = variationMenu,
                 onDismissRequest = { onVariationMenu(false) },
             ) {
                 DropdownMenuItem(
-                    text = { Text("All variations") },
+                    text = { Text("All variations", color = selectionTextColor()) },
                     onClick = {
                         onFilter(null)
                         onVariationMenu(false)
@@ -326,7 +360,7 @@ private fun ExerciseProgressHeader(
                 )
                 exerciseVariations.forEach { variation ->
                     DropdownMenuItem(
-                        text = { Text(variation.name) },
+                        text = { Text(variation.name, color = selectionTextColor()) },
                         onClick = {
                             onFilter(variation.id)
                             onVariationMenu(false)
@@ -339,25 +373,31 @@ private fun ExerciseProgressHeader(
 }
 
 @Composable
-private fun ProgressRangeSelector(months: Int, custom: Boolean, onCustom: () -> Unit, onChange: (Int) -> Unit) {
+internal fun ProgressRangeSelector(
+    months: Int,
+    custom: Boolean,
+    onCustom: () -> Unit,
+    description: String = "Progress date range",
+    onChange: (Int) -> Unit,
+) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         TextButton(onClick = { expanded = true }, modifier = Modifier.semantics {
-            contentDescription = "Progress date range"
+            contentDescription = description
             stateDescription = if (custom) "Custom" else if (months == 12) "1 year" else if (months == 1) "1 month" else "$months months"
         }, contentPadding = PaddingValues(horizontal = 4.dp)) {
-            Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = LocalVibePalette.current.textPrimary)
-            Icon(Icons.Outlined.ExpandMore, null, tint = LocalVibePalette.current.textPrimary)
+            Text(if (custom) "Custom" else if (months == 12) "1y" else "${months}m", color = selectionTextColor())
+            Icon(Icons.Outlined.ExpandMore, null, tint = selectionTextColor())
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
         listOf(1 to ("1m" to "1 month"), 3 to ("3m" to "3 months"), 6 to ("6m" to "6 months"), 12 to ("1y" to "1 year")).forEach { (value, labels) ->
             DropdownMenuItem(
-                text = { Text(labels.second) },
+                text = { Text(labels.second, color = selectionTextColor()) },
                 onClick = { expanded = false; onChange(value) },
                 modifier = Modifier.semantics { contentDescription = labels.second },
             )
         }
-        DropdownMenuItem(text = { Text("Custom") }, onClick = { expanded = false; onCustom() })
+        DropdownMenuItem(text = { Text("Custom", color = selectionTextColor()) }, onClick = { expanded = false; onCustom() })
         }
     }
 }
@@ -413,6 +453,7 @@ private fun ProgressExercisePicker(
             "Overall training trend",
             Modifier.fillMaxWidth().clickable { onChoose(null) }.padding(vertical = 8.dp),
             style = MaterialTheme.typography.bodyLarge,
+            color = selectionTextColor(),
         )
         if (available.isEmpty()) Text("No matching exercises.")
         available.sortedBy { it.canonicalName }.forEach { exercise ->
@@ -420,6 +461,7 @@ private fun ProgressExercisePicker(
                 exercise.canonicalName,
                 Modifier.fillMaxWidth().clickable { onChoose(exercise) }.padding(vertical = 8.dp),
                 style = MaterialTheme.typography.bodyLarge,
+                color = selectionTextColor(),
             )
         }
     }

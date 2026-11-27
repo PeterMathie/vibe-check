@@ -104,17 +104,12 @@ class HabitHeatmapTest {
         assertEquals(1f, result.getValue(thursday.toEpochDay()).intensity)
     }
 
-    @Test fun calendarStartsAtFirstRecordedMonthOfItsOwnMeasurement() {
-        val first = month.minusMonths(3)
-        val rows = listOf(
-            value(1, 0.0).copy(epochDay = first.atDay(8).toEpochDay()),
-            value(1, 10.0).copy(fieldId = "another", epochDay = first.minusMonths(1).atDay(1).toEpochDay()),
-            value(20, 100.0),
-        )
-        assertEquals(first, firstHabitMonth(field.id, rows, today))
-        assertEquals(month, firstHabitMonth(field.id, listOf(value(20, 100.0)), today))
-        assertEquals(month, firstHabitMonth(field.id, emptyList(), today))
-        val no = rows.first().copy(numericValue = null, booleanValue = false)
-        assertEquals(first, firstHabitMonth(field.id, listOf(no), today))
+    @Test fun monthsBeforeHistoryRemainEmptyUntilThatDayIsRecorded() {
+        val earlier = month.minusMonths(1200)
+        val row = value(1, 0.0).copy(epochDay = earlier.atDay(8).toEpochDay())
+        assertTrue(habitMonthHeatmap(tracker, field, listOf(value(1, 10.0)), earlier, today).isEmpty())
+        val result = habitMonthHeatmap(tracker, field, listOf(row, value(1, 10.0)), earlier, today)
+        assertEquals(setOf(row.epochDay), result.keys)
+        assertEquals(row, result.getValue(row.epochDay).value)
     }
 }

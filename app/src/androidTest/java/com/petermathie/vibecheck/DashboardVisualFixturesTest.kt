@@ -354,13 +354,16 @@ class DashboardVisualFixturesTest {
         assertEquals(bounds, habitCell.fetchSemanticsNode().boundsInRoot)
         val habitPixels = habitCell.captureToImage().toPixelMap()
         assertEquals(pixels[3, pixels.height / 2], habitPixels[3, habitPixels.height / 2])
-        assertEquals(calendarBounds, compose.onNodeWithTag("Habit calendar ${tracker.id}").fetchSemanticsNode().boundsInRoot)
+        val habitBounds = compose.onNodeWithTag("Habit calendar ${tracker.id}").fetchSemanticsNode().boundsInRoot
+        assertEquals(calendarBounds.top, habitBounds.top)
+        assertEquals(calendarBounds.width, habitBounds.width)
+        assertTrue("Habits no longer reserves the activity readout", habitBounds.height < calendarBounds.height)
         habitCell.performClick().assertIsSelected()
-        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertTextEquals("Yes")
+        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertDoesNotExist()
         compose.runOnIdle { expanded.value = false }
         compose.onNodeWithContentDescription("Previous month for ${tracker.name}").assertDoesNotExist()
         compose.onNodeWithContentDescription("10th of March 2026: Yes").performClick().assertIsSelected()
-        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertTextEquals("Yes")
+        compose.onNodeWithTag("Habit entry value ${tracker.id}").assertDoesNotExist()
     }
 
     @Test

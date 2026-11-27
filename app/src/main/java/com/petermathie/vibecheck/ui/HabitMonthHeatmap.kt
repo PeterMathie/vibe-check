@@ -17,30 +17,37 @@ import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.domain.tracker.*
 import com.petermathie.vibecheck.domain.workout.formatQuantitative
 import com.petermathie.vibecheck.ui.theme.*
-import com.petermathie.vibecheck.ui.components.DateValueReadout
 import java.time.LocalDate
 import java.time.YearMonth
 import java.util.Locale
 
-internal class HabitCalendarState(initialMonth: String, initialDay: Long? = null, initialWeekDay: Long? = null) {
+internal class HabitCalendarState(initialMonth: String, initialDay: Long = LocalDate.now().toEpochDay()) {
     var monthText by mutableStateOf(initialMonth)
         private set
     var selectedDay by mutableStateOf(initialDay)
-    var selectedWeekDay by mutableStateOf(initialWeekDay)
+        private set
 
     fun show(month: YearMonth) {
-        if (monthText != month.toString()) {
-            monthText = month.toString()
-            selectedDay = null
+        monthText = month.toString()
+    }
+
+    fun select(date: LocalDate, today: LocalDate) {
+        if (date <= today) {
+            selectedDay = date.toEpochDay()
+            show(YearMonth.from(date))
         }
     }
 
     companion object {
         val Saver = listSaver<HabitCalendarState, String>(
-            save = { listOf(it.monthText, it.selectedDay?.toString().orEmpty(), it.selectedWeekDay?.toString().orEmpty()) },
-            restore = { HabitCalendarState(
-                it[0], it[1].takeIf(String::isNotEmpty)?.toLong(), it[2].takeIf(String::isNotEmpty)?.toLong(),
-            ) },
+            save = { listOf(it.monthText, it.selectedDay.toString()) },
+            restore = {
+                HabitCalendarState(
+                    it[0], it[1].takeIf(String::isNotEmpty)?.toLong()
+                        ?: it.getOrNull(2)?.takeIf(String::isNotEmpty)?.toLong()
+                        ?: LocalDate.now().toEpochDay(),
+                )
+            },
         )
     }
 }
@@ -56,9 +63,12 @@ internal fun HabitMonthHeatmap(
     onChooseMeasurement: () -> Unit,
 ) {
     val currentMonth = YearMonth.from(today)
-    val firstMonth = remember(field?.id, values, today) { firstHabitMonth(field?.id, values, today) }
+    val firstMonth = YearMonth.from(LocalDate.MIN)
     val month = YearMonth.parse(state.monthText).coerceIn(firstMonth, currentMonth)
-    LaunchedEffect(firstMonth, currentMonth) { state.show(month) }
+    LaunchedEffect(currentMonth) {
+        state.show(month)
+        if (state.selectedDay > today.toEpochDay()) state.select(today, today)
+    }
     fun moveMonth(delta: Int) {
         state.show(when {
             delta < 0 && month > firstMonth -> month.minusMonths(1)
@@ -74,7 +84,7 @@ internal fun HabitMonthHeatmap(
     val colour = Color(tracker.colourArgb.toInt())
     val shades = palette.habitHeatmapColors(colour)
     val cells = if (expanded) habitMonthCells(month) else habitWeekCells(today)
-    val selectedDay = if (expanded) state.selectedDay else state.selectedWeekDay
+    val selectedDay = state.selectedDay
     Column(
         Modifier.fillMaxWidth().testTag("Habit calendar ${tracker.id}")
             .animateContentSize(if (LocalVibeReducedMotion.current) snap() else tween(LocalVibeMotion.current.expandMillis))
@@ -99,21 +109,10 @@ internal fun HabitMonthHeatmap(
                     ?: shades.forLevel(day?.level ?: 0)
             },
             descriptionForDay = { date -> habitDayDescription(date, days[date.toEpochDay()], field) },
-            onDayClick = { date ->
-                if (expanded) state.selectedDay = date.toEpochDay() else state.selectedWeekDay = date.toEpochDay()
-            },
+            onDayClick = { date -> state.select(date, today) },
         )
         if (field == null) {
             TextButton(onClick = onChooseMeasurement) { Text("Configure a measurement") }
-        }
-        key(expanded, month, selectedDay) {
-            DateValueReadout(
-                date = selectedDay?.takeIf { epoch -> cells.any { it?.toEpochDay() == epoch } }?.let(LocalDate::ofEpochDay),
-                value = if (selectedDay == null) "" else habitDayEntry(days[selectedDay], field),
-                modifier = Modifier.testTag("Habit entry ${tracker.id}"),
-                dateModifier = Modifier.testTag("Habit entry date ${tracker.id}"),
-                valueModifier = Modifier.testTag("Habit entry value ${tracker.id}"),
-            )
         }
     }
 }
