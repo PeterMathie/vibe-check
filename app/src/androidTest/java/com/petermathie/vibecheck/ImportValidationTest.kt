@@ -59,6 +59,109 @@ class ImportValidationTest {
     private fun rows(table: String, row: JSONObject): JSONObject = JSONObject().put(table, JSONArray().put(row))
     private fun document(tables: JSONObject): String = JSONObject().put("format", "vibe-trainer").put("version", 1).put("tables", tables).toString()
 
+    @Test fun legacyOmissionsRetainProgrammeAndIndependentDistanceAndFreshRowsDefaultAbsent() = runBlocking {
+        val dao = db.editorDao()
+        val workout = fixture("workouts").apply { remove("programmeNameSnapshot") }
+        val current = dao.workoutById(workout.getString("id"))!!
+        dao.workout(current.copy(programmeNameSnapshot = "Recorded programme"))
+        val set = fixture("workout_sets").apply {
+            remove("distanceValue"); remove("distanceUnit"); remove("musclesSnapshotPresent")
+        }
+        val saved = dao.setById(set.getString("id"))!!
+        dao.set(saved.copy(distanceValue = 18.75, distanceUnit = "cm", musclesSnapshotPresent = true))
+        DataTransfer.import(db, document(rows("workouts", workout).put("workout_sets", JSONArray().put(set))))
+        assertEquals("Recorded programme", dao.workoutById(current.id)!!.programmeNameSnapshot)
+        assertEquals(18.75, dao.setById(saved.id)!!.distanceValue!!, 0.0)
+        assertTrue(dao.setById(saved.id)!!.musclesSnapshotPresent)
+        val freshWorkout = JSONObject(workout.toString()).put("id", "fresh-legacy")
+        val freshSet = JSONObject(set.toString()).put("id", "fresh-legacy-set")
+        DataTransfer.import(db, document(rows("workouts", freshWorkout).put("workout_sets", JSONArray().put(freshSet))))
+        assertNull(dao.workoutById("fresh-legacy")!!.programmeNameSnapshot)
+        assertNull(dao.setById("fresh-legacy-set")!!.distanceValue)
+        assertFalse(dao.setById("fresh-legacy-set")!!.musclesSnapshotPresent)
+        workout.put("programmeNameSnapshot", JSONObject.NULL)
+        set.put("distanceValue", JSONObject.NULL).put("distanceUnit", "")
+        DataTransfer.import(db, document(rows("workouts", workout).put("workout_sets", JSONArray().put(set))))
+        assertNull(dao.workoutById(current.id)!!.programmeNameSnapshot)
+        assertNull(dao.setById(saved.id)!!.distanceValue)
+        assertEquals("", dao.setById(saved.id)!!.distanceUnit)
+    }
+
+    @Test fun portableOverridesAndEmptyMappingsStayIndependentAndLegacyImportsDoNotEraseThem() = runBlocking {
+        val exercise = fixture("exercises")
+        val id = exercise.getString("id")
+        val original = db.editorDao().exerciseById(id)
+        val override = JSONObject().put("exerciseId", id).put("name", "Local name").put("musclesPresent", true)
+        val muscle = fixture("muscles").getString("id")
+        val mapping = JSONObject().put("exerciseId", id).put("muscleId", muscle).put("role", "PRIMARY")
+        DataTransfer.import(db, document(rows("exercise_overrides", override).put("exercise_muscle_overrides", JSONArray().put(mapping))))
+        assertEquals("Local name", db.editorDao().effectiveExerciseById(id)!!.canonicalName)
+        assertEquals(original, db.editorDao().exerciseById(id))
+        DataTransfer.import(db, document(rows("exercises", exercise)))
+        assertEquals(listOf(muscle), db.editorDao().muscleMappings(id).map { it.muscleId })
+        DataTransfer.import(db, document(rows("exercise_overrides", override).put("exercise_muscle_overrides", JSONArray())))
+        assertTrue(db.editorDao().muscleMappings(id).isEmpty())
+        val backup = DataTransfer.export(db)
+        DataTransfer.import(db, backup)
+        assertTrue(db.editorDao().muscleMappings(id).isEmpty())
+        rejected(rows("exercise_overrides", JSONObject(override.toString()).put("name", " ")), "name")
+        rejected(rows("exercise_muscle_overrides", JSONObject(mapping.toString()).put("muscleId", "unknown")), "FOREIGN KEY")
+        rejected(rows("exercise_overrides", JSONObject(override.toString()).put("unexpected", 1)), "columns")
+    }
+
+    @Test fun rawDistanceAndVariantCacheRoundTripWithOmissionRetentionAndWrongOwnerRollback() = runBlocking {
+        val variants = db.editorDao().variations().first()
+        val exerciseRows = exported.getJSONArray("workout_exercises")
+        val row = (0 until exerciseRows.length()).map { exerciseRows.getJSONObject(it) }.first { candidate ->
+            variants.any { it.exerciseId == candidate.getString("actualExerciseId") }
+        }
+        val variant = variants.first { it.exerciseId == row.getString("actualExerciseId") }
+        val draft = com.petermathie.vibecheck.ui.emptyEntryDraft(row.getString("id"), 4).copy(
+            setId = "raw-distance", romValue = "42.125", romUnit = "cm", distanceValue = "18.7500",
+            variationId = variant.id,
+        )
+        val cached = com.petermathie.vibecheck.ui.encodeVariantDraft(
+            draft, "measurementMetric=DISTANCE;reps=false", variant.name, variant.trackingType, variant.progressionRank,
+        )
+        val key = com.petermathie.vibecheck.ui.variantDraftKey(draft.setId, draft.variationId)
+        val cache = JSONObject().put(key, cached).toString()
+        db.editorDao().entryDraft(draft.copy(variantDraftCache = cache))
+        val export = JSONObject(DataTransfer.export(db)).getJSONObject("tables").getJSONArray("workout_entry_drafts")
+        val legacy = export.getJSONObject(0).apply {
+            remove("distanceValue"); remove("distanceUnit"); remove("variantDraftCache")
+        }
+        DataTransfer.import(db, document(rows("workout_entry_drafts", legacy)))
+        assertEquals(draft.copy(variantDraftCache = cache), db.editorDao().entryDrafts(draft.workoutExerciseId).single())
+        val backup = DataTransfer.export(db)
+        db.editorDao().deleteEntryDrafts(draft.workoutExerciseId)
+        DataTransfer.import(db, backup)
+        assertEquals(draft.copy(variantDraftCache = cache), db.editorDao().entryDrafts(draft.workoutExerciseId).single())
+        val portable = JSONObject(DataTransfer.export(db)).getJSONObject("tables")
+            .getJSONArray("workout_entry_drafts").getJSONObject(0)
+        listOf<Any>(cached, JSONObject(cached)).forEach { representation ->
+            val encodedCache = JSONObject().put(key, representation).toString()
+            val imported = JSONObject(portable.toString()).put("variantDraftCache", encodedCache)
+            DataTransfer.import(db, document(rows("workout_entry_drafts", imported)))
+            val loaded = db.editorDao().entryDrafts(draft.workoutExerciseId).single()
+            val decoded = com.petermathie.vibecheck.ui.decodeVariantDraftCache(loaded.variantDraftCache)
+            val restored = com.petermathie.vibecheck.ui.restoreVariantDraft(
+                loaded.copy(romValue = "", romUnit = "degrees", distanceValue = "", distanceUnit = ""),
+                decoded.getValue(key),
+            )
+            assertEquals(draft.setId, restored.setId)
+            assertEquals(draft.variationId, restored.variationId)
+            assertEquals("42.125", restored.romValue)
+            assertEquals("cm", restored.romUnit)
+            assertEquals("18.7500", restored.distanceValue)
+            assertEquals("cm", restored.distanceUnit)
+            assertEquals(loaded, restored)
+        }
+        val malformed = JSONObject(legacy.toString()).put("variantDraftCache", JSONObject().put("[\"other-set\",null]", cached).toString())
+        rejected(rows("workout_entry_drafts", malformed), "identity")
+        rejected(rows("workout_sets", fixture("workout_sets").put("distanceValue", -1).put("distanceUnit", "cm")), "negative")
+        rejected(rows("workout_sets", fixture("workout_sets").put("distanceValue", 3).put("distanceUnit", "degrees")), "unit")
+    }
+
     @Test
     fun programmeColoursRoundTripAndLegacyImportsKeepExistingChoices() = runBlocking {
         val legacy = fixture("programmes").apply { remove("colourArgb") }

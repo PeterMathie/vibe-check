@@ -52,6 +52,7 @@ fun hasInvalidQuantitativeInput(draft: WorkoutEntryDraftEntity): Boolean {
             draft.addedWeight,
             draft.assistance,
             draft.romValue,
+            draft.distanceValue,
             draft.timeHeld,
             draft.timeUnderTension,
         ).plus(timingInputs(draft.tutEntries)).any { it.isNotEmpty() && !quantitativeInput(it).isValid }

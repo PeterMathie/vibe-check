@@ -15,9 +15,34 @@ Debug builds automatically load removable representative data: three strength pr
 - Proper seeded database, canonical names, aliases, Strength/Stretching/Both tags and tracking types.
 - Search by name, alias or muscle.
 - Exercise-to-muscle mappings use the same canonical IDs as every tappable SVG region.
-- Seeded catalogue identities are read-only; duplicate them to customise. Measurement settings, including one/many TUT entry, are editable and portable in backups.
+- **FB-079:** seeded and custom items share the same editing controls. Original seeded identities/definitions remain protected internally; portable local name/muscle overrides resolve consistently in search, programme selection and future recording. Existing historical snapshots are never renamed or remapped by a catalogue edit.
 - Custom exercises and custom additions to seeded skill-variation lists.
 - Exercises with history are archived, never destructively removed.
+
+**FB-081:** Exercises uses a small chevron-only Back control and Home's icon-based
+Strength/Stretch switch beside its title. Lists use transparent fading glows and
+subtle separators, without filled cards, enclosing borders or a solid stacked backdrop.
+Tile-surface double-tap and the title's accessible Settings action open the shared glass menu;
+dedicated buttons and horizontal paging retain their own actions.
+There is no separate settings gear:
+**New variant**, **Modify name**, **Modify resistance**, **Modify measurements**,
+**Change muscle groups**, **Reference video**. New variant replaces copying an
+exercise. Each exercise forms a bounded horizontal stack, base first then progression
+order, with visible position and accessible previous/next actions. Swiping changes
+only the viewed page; explicit custom-order controls remain separate.
+
+A new sibling captures the selected item's resolved configuration and copies its
+current muscles into independent mappings. It starts without videos. Names,
+configuration, muscles and local videos belong to the selected base/variant; picker
+results cannot be retargeted by a later swipe. Creation/search, aliases, classification,
+legacy tracking, archive and band maintenance remain available. Future sets capture
+variant-aware muscle snapshots; legacy sets retain their original workout mappings.
+Add and New variant use one creation editor with name, resistance, measurement and
+muscle choices, in that order, using the existing shared glass dialog.
+Base creation retains aliases, classification and legacy tracking controls afterward;
+variant creation retains its resolved prescriptions/rest and
+independent ownership rather than creating another base exercise. Exercise dialogs
+leave at least24dp above the app's bottom tabs and respect keyboard/safe-drawing insets.
 
 ## Programmes and workouts
 
@@ -46,7 +71,17 @@ A substitution changes only the exercise performed in that workout slot. The sub
 
 ## Set data and bands
 
-Support weights, reps, holds, left/right values, bodyweight, added weight, assistance, RPE, ROM measurements and notes. The nearest bodyweight measurement is copied into a workout when its bodyweight is missing. The logger has no workout-level Bodyweight button, replacement label or edit dialog; automatic measurement copying, stored workout bodyweight, historical snapshots and existing units remain unchanged.
+Support weights, reps, holds, left/right values, bodyweight, added weight, assistance, RPE, ROM, Distance and notes. The nearest bodyweight measurement is copied into a workout when its bodyweight is missing. The logger has no workout-level Bodyweight button, replacement label or edit dialog; automatic measurement copying, stored workout bodyweight, historical snapshots and existing units remain unchanged.
+
+**FB-079:** one resistance combines with exactly one primary measurement:
+Repetitions, Hold, Skill hold, **ROM (degrees)** or **Distance (cm)**. Skill hold
+retains attempts plus independently entered total time; ROM+Distance dual completion
+is not enabled. ROM and Distance have separate recorded fields, raw buffers and
+unit-specific series. Existing ROM(cm) stays ROM(cm), without conversion or relabelling.
+Inactive buffers survive metric/variant round trips and restart but are not newly
+logged or counted towards completion. Deliberately clearing either measurement
+changes only that field. Numeric validation and the positive working-result Finish
+requirement remain; display formatting never rounds stored values.
 
 Bands share material, thickness and length, so width is the relative assistance proxy:
 
@@ -65,7 +100,7 @@ Editing a set's measurements or RPE retains the recorded name and width of every
 
 Logging follows the page/exercise/set/measurement hierarchy. Each exercise surface contains its set tiles and footer; its heading/background still collapses the section, with a pinned heading during editing. Set tiles have no header row. A small variant name sits at the top-left edge on the first set of each consecutive run; repeats use a tiny selector chevron. A, A, B, B, A therefore shows names on sets 1, 3 and 5. Runs preserve distinct variant identities and meaningful recorded-name changes, and recompute after edits/deletion. Selection remains available on completed sets. Truly variant-less sets omit redundant exercise-name titles and dead selectors; exercise headings and meaningful recorded/current names remain. Selectable headers have a wider horizontal hit area without increasing measured header/set heights or covering neighbouring fields.
 
-One shared composable tile supports all 12 combinations of three resistance types (bodyweight, kilograms, bands) and four measurement types (repetitions, hold duration, skill hold, ROM). Renderer groups have presentation-only preferred sizing metadata named `large: Boolean`; only bands and skill hold prefer large. The shared tile resolves two or more large-preferring groups to compact, otherwise retaining each preference. It never mutates the preferred flags or counts selected bands/populated inputs. Completion/unlocking therefore cannot change profiles. This is not persistent exercise configuration or a transfer/schema field.
+One shared composable tile supports all 15 combinations of three resistance types (bodyweight, kilograms, bands) and five primary measurement types (repetitions, hold duration, skill hold, ROM, Distance). Renderer groups have presentation-only preferred sizing metadata named `large: Boolean`; only bands and skill hold prefer large. The shared tile resolves two or more large-preferring groups to compact, otherwise retaining each preference. It never mutates the preferred flags or counts selected bands/populated inputs. Completion/unlocking therefore cannot change profiles. This is not persistent exercise configuration or a transfer/schema field.
 
 Controls have fixed dimensions within a profile at a given accessibility setting, consistent across exercises, variants and attempt counts. All numeric boxes use the same 24dp ordinary height; font scaling increases their height together. Single-duration fields use the same 64dp ordinary width as Reps/RPE. The independent Total time input has exactly the same width as each N-time/accumulated timing input in its effective profile: 28dp ordinarily when compact. Large skill hold uses spare measurement-group width for wider cells, capped at 48dp ordinarily and budgeted for four timing columns, the inline accumulated sum and the equally wide Total input, independently of whether one, four or eight attempts are present. Large cells shrink enough to keep the sum to Total's left rather than above it. Weight, RPE, completion and inter-group gaps retain their reserved widths. Ordinary numbers remain 15sp with 12sp units, timing numbers 12sp with 9sp units, and the Total heading/readout 10sp. Existing line-height budgets, limits and horizontal insets of 4dp/2dp remain.
 
@@ -113,7 +148,7 @@ Variant names, repeat chevrons and previous-result labels retain their top-edge 
 
 Previous performance sits at the top-right edge, using the exact parent exercise, variant and ordinal in an earlier completed workout. Its compact summary uses `Prev: <resistance><unit>, <rep count>` without resistance/reps wording or previous RPE; bodyweight has no resistance value. Variant titles use compact semibold text and selector chevrons use muted text colour; neither uses the selection accent. Skill hold shows `<attempt sum>s / <independent total>s`. Absent measurements are omitted, not filled with zero. Recorded ROM units are retained. Built-in bands use Yw/Rd/Bl/Pr; custom definitions use their current RGB hex code, since historical band snapshots do not contain colour. Deleted definitions fall back to their recorded names rather than inventing a historical colour. There is no other-position fallback or empty comparison placeholder.
 
-Variant changes remain per-set, refresh renderers/comparisons immediately and do not start rest. Compatible values carry across; incompatible raw values, units and variant snapshots are buffered for switching back, including saved-instance restoration. Inactive-variant buffers are editing state, not a new database/backup archive. Persisted active measurements retain the existing save path. Metric settings offer exactly one resistance and one measurement choice; ambiguous legacy flag combinations require explicit review/selection rather than automatic conversion. Stored legacy flags/order and historical snapshots are not migrated or globally rewritten. Planche resolves to bands/hold; both Handstand variants inherit skill hold. Legacy total-only hold backing remains distinct when retaining that metric type. A hold-mode set retaining multiple recorded attempts shows their aggregate read-only and directs the user to Skill hold to edit them, rather than silently discarding attempts or mislabelling the first attempt as the aggregate.
+Variant changes remain per-set, refresh renderers/comparisons immediately and do not start rest. Compatible values carry across; incompatible raw values, units and variant snapshots are buffered for switching back, including saved-instance restoration. Inactive-variant buffers remain editing state, durably stored in entry drafts and included in updated backups; they are not additional logged measurements. Persisted active measurements retain the existing save path. Metric settings offer exactly one resistance and one measurement choice; ambiguous legacy flag combinations require explicit review/selection rather than automatic conversion. Stored legacy flags/order and historical snapshots are not migrated or globally rewritten. Planche resolves to bands/hold; both Handstand variants inherit skill hold. Legacy total-only hold backing remains distinct when retaining that metric type. A hold-mode set retaining multiple recorded attempts shows their aggregate read-only and directs the user to Skill hold to edit them, rather than silently discarding attempts or mislabelling the first attempt as the aggregate.
 
 Draft configuration resolution, numeric validation and set/variant conversion live in `WorkoutSetDraftLogic.kt`, independently of Compose rendering. The variant picker emits selection events; the workout screen retains editing state, save ordering and completion/rest effects. Saved-instance encoding and database/transfer formats are unchanged by this separation and the layout/access changes. Existing restored configuration buffers remain usable.
 
@@ -158,6 +193,7 @@ Finishing a valid strength or stretching session persists it before returning Ho
 - Training activity uses Habits' Monday-first, numbered six-row month calendar, shared cell styling and month chevrons/swipes, bounded by the first recorded activity month and the current month. Future calendar dates are inactive. Overview colours count completed workouts using the same local-day rule as the workout list; individual colours count the selected exercise's sessions including its variation filter. Intensity levels represent zero, one, two and three-or-more entries. Progress cells are opaque so equal counts share a fill colour rather than inheriting different backdrop glows; other pages retain their existing styling. Selecting a date updates a fixed date/count readout below the grid. Scrubbing either an exercise's points or RPE graph updates that shared selection and moves the displayed calendar month in either direction within its existing bounds. The calendar sits below all exercise graphs, including any separate ROM, and directly above personal records. Progress uses ordinary free scrolling without position snapping, section-anchor actions or artificial snap padding. All Progress plots are fixed at 200 dp: scrolling and delayed content measurements never resize them. Larger plots may require more scrolling; no text or history is clipped to fit a preset frame. RPE and personal records remain exercise-specific.
 - **FB-062:** weighted-repetition exercise charts show estimated one-rep max in kilograms rather than normalized points: one point per local calendar day, using the highest e1RM across all eligible completed working sets and workouts for that exercise and selected variation. The existing Epley calculation uses recorded weight and repetitions; bilateral repetitions use the lower recorded side. Warm-ups, failures, ROM, missing/non-positive weights or repetitions and non-finite estimates are excluded without rewriting stored data. The rolling line averages the last three recorded daily bests in the same kilogram units, calculated before date-range filtering. The graph heading, readout, empty state and methodology identify estimated 1RM. Calendar counts and read-only details still represent every eligible exercise session that day, not just the winning workout.
 - Other exercise types retain their existing session points and scoring. Overall training retains its existing normalized weekly points and personal baselines; unlike kilogram estimates are not combined into an overall e1RM.
+- ROM and Distance retain separate unit-grouped readouts and never contribute weighted scores, including when their primary measurement is recorded but its value is cleared. Set configuration takes precedence over saved workout-row fallback; legacy records without a recorded primary metric retain existing eligibility.
 - The individual exercise calendar always reserves its date/session readout space, including before selection and on empty days, so choosing a day never shifts the graphs or records. Its count uses **1 exercise session** / **2 exercise sessions**. A nonzero count opens a read-only glass modal for that exercise and local day, limited to the same sessions and variation filter counted by the calendar. It shows all saved sets within those sessions, including warm-ups and failures, with the existing compact units, variation groups, band circles and notes. Multiple sessions remain separately identified by workout name and time. Empty-day counts are not links; the editing logger and saved data are unchanged.
 - Weighted reps: `weight × (1 + reps / 30)`.
 - Assisted reps use total band width and compare only the same variation.
@@ -169,11 +205,68 @@ Finishing a valid strength or stretching session persists it before returning Ho
 - Applicable all-time PRs for weight, estimated 1RM, holds and calculated performance use transparent read-only rows separated by subtle lines, not filled editable-looking boxes. There is no divider above the Personal records heading.
 - ROM measurements live inside relevant stretches and remain separate from stretch freshness.
 
+## More and Settings
+
+**FB-072/074:** More lists Exercises, History, Settings and Archive, with visible
+Back on each child. Palette access is inside Settings; Palette Back returns Settings.
+More options are borderless full-width buttons with larger heading text and a subtle
+divider only between neighbouring options. Icons, navigation and haptics are unchanged.
+Settings groups existing controls inline as **Display & units**, **Workout & timers**,
+**Interaction & accessibility**, **Data & backups**, **About**. Theme/palette,
+units/anatomy, timers/permissions/cancel, interaction preferences, backup/import/CSV,
+notices/version and their defaults/confirmations/failures remain. Demo removal has
+one access point in Data & backups, not a duplicate Style action.
+Sections use the existing fading glow with subtle dividing lines, not enclosing borders.
+Back controls share a small left chevron and accessible description, without a visible Back label.
+
 ## Homepage and history
+
+**FB-077/001:** More's History list has one compact tile per finished workout,
+with its saved title left, viewing-zone finish date (start when finish is absent)
+right, and a small confirmed X. New workouts capture the programme name; older
+records fall back to their saved workout name, then **Recorded workout**, without
+historical backfill. Double-tap the title, its accessibility action or Enter/Space
+opens the existing editor. Keyword search retains exercise-name/notes coverage.
+Start alone means that exact day; Start+End is inclusive. End requires Start and
+reversed ranges report an error without swapping. Filters and list position survive
+editor return. List removal discards status only; confirmed permanent deletion stays
+inside the editor. Body-map buttons are removed from this list, not from Home's
+historical day anatomy page.
+
+**FB-082:** History rows use transparent fading glows and subtle separators instead
+of bordered cards. Title, date and confirmed X share one centred row, with extra
+space between date and X. Date filters are borderless, with a small top-right X
+on each selected date instead of Clear End/Clear dates buttons or static range-help
+captions. End's X clears only End; Start's X clears both dates because End requires Start.
+Actual invalid-range errors remain visible.
+
+History editing adds a chevron-only title-row Back and an edge-start swipe Back.
+The row below the title shows a compact viewing-zone date (for example **3rd Nov 2026**),
+a comma, and the plain editable start-time–finish-time range with seconds, respecting the device's
+12/24-hour format. There are no outlined clock panels, visible Started/Finished
+labels or duplicate endpoint dates. Logged duration uses the saved workout boundaries,
+including workouts with zero or one set, rather than the span of set timestamps.
+History set-value sections use central dots, matching Progress's recorded-workout view;
+the active logger retains its existing separators.
+Back respects owned dialogs, staged gestures,
+keyboard, invalid drafts and queued write failures. Repeated Back attempts cannot
+clear a failed autosave; only matching successful recovery resolves it. Exit checks
+are scoped to that workout. Cancel discards only its explicit date/clock intent,
+allowing unchanged exit after rejected timing input without clearing autosave
+failures. Unresolved write ownership remains blocking rather than reporting a
+successful save. Date changes shift both workout
+boundaries and all set log times by the same delta. Clocks change only the chosen
+boundary on its saved date, preserving seconds/milliseconds and all set times.
+Missing finish stays absent; invalid order, DST gaps and unresolved overlaps report
+errors. History numeric readouts use at most two decimals while focused raw
+entry, storage, calculations and exports retain full precision. The active logger's
+FB-080 layout/default timing flag remain unchanged. Numeric input glyphs start at
+the left of their number viewport; its width measures the text actually shown,
+not hidden trailing precision, while retaining the separate unit suffix.
 
 The homepage contains the freshness SVG above a calendar-month activity heatmap, without an active-workout card, Continue button or Home Resume replacement. Existing Programmes Resume remains available. The calendar has Monday-Sunday weekday headings, numbered dates and six permanently reserved week rows. Only dates in the selected month appear; all other cells remain blank. The current month includes future dates as neutral, disabled cells. The selected freshness date is authoritative: past months include every day, and the current month's selectable range stops at today. Displaying future calendar dates does not query future freshness or allow future history navigation. The front/back figures reuse the existing anatomical coordinates and hit regions.
 
-Home's anatomy and calendar are borderless, without enclosing card fills or technical grids, over very subtle static radial accent glows. A broader whole-section halo spans the Freshness heading and both figures, rather than separate small figure halos. Freshness and the calendar reuse Habits' soft glow, fading to zero at all four section edges. The Freshness and month/year headings use normal primary text colour; the month/year uses Habits' title style. A horizontal key extends from beneath that heading to the middle of the page; its visible endpoints are Recent and Older, with the full age ranges accessible. Home alone uses a compact icon-based strength/stretch switch (dumbbell and stretching figure) on a classic filled pill track with a rounded inset selection, retaining accessible mode labels, selected state and full-height touch targets; other screens keep their existing text controls. The neutral no-data colour and its accessibility explanation remain, without a visible no-data swatch or caption. Home shows muscles only, without head, hand, foot or other silhouette outlines. Both figures occupy 90% of their frame height, centred with balanced top/bottom breathing room and synchronized drawing/tap transforms. Their expanded proportions are retained while moving them slightly lower beneath the heading. History keeps its complete neutral silhouette and default sizing. The date slider and View date row are removed; the calendar moves upward into the freed space. Selected dates use a constant page-background-coloured 3dp inset outline, independent of activity intensity, with a bold number and accessibility selection state. Today's separate marker remains. Dates, callbacks and query limits remain unchanged. The key uses the exact active preset's continuous Freshness scale from most recent at the start to least recent at the end, respecting layout direction. Its five ordered bands are under 24 hours, 24–48 hours, 48–72 hours, 3–7 days and over 7 days; no-data remains a separate neutral.
+Home's anatomy and calendar are borderless, without enclosing card fills or technical grids, over very subtle static radial accent glows. A broader whole-section halo spans the Freshness heading and both figures, rather than separate small figure halos. Freshness and the calendar reuse Habits' soft glow, fading to zero at all four section edges. The Freshness and month/year headings use normal primary text colour; the month/year uses Habits' title style. A horizontal key extends from beneath that heading to the middle of the page; its visible endpoints are Recent and Older, with the full age ranges accessible. Home and Exercises use a compact icon-based strength/stretch switch (dumbbell and stretching figure) on a classic filled pill track with a rounded inset selection, retaining accessible mode labels, selected state and full-height touch targets; other screens keep their existing text controls. The neutral no-data colour and its accessibility explanation remain, without a visible no-data swatch or caption. Home shows muscles only, without head, hand, foot or other silhouette outlines. Both figures occupy 90% of their frame height, centred with balanced top/bottom breathing room and synchronized drawing/tap transforms. Their expanded proportions are retained while moving them slightly lower beneath the heading. History keeps its complete neutral silhouette and default sizing. The date slider and View date row are removed; the calendar moves upward into the freed space. Selected dates use a constant page-background-coloured 3dp inset outline, independent of activity intensity, with a bold number and accessibility selection state. Today's separate marker remains. Dates, callbacks and query limits remain unchanged. The key uses the exact active preset's continuous Freshness scale from most recent at the start to least recent at the end, respecting layout direction. Its five ordered bands are under 24 hours, 24–48 hours, 48–72 hours, 3–7 days and over 7 days; no-data remains a separate neutral.
 
 The calendar uses one compact header with the month/year between previous/next chevrons, without a separate Work tracker title or intensity key. Zero activity is neutral. Positive counts use a continuous light-to-strong ramp from the active preset, relative to the busiest eligible day in the displayed month; outside-month and future dates do not affect that scale. Dark themes retain increasing visual intensity rather than darkening into the background. Exact daily counts remain accessible.
 

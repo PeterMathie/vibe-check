@@ -1,6 +1,8 @@
 package com.petermathie.vibecheck
 
 import com.petermathie.vibecheck.domain.progress.SessionProgress
+import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
+import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.domain.workout.parsePerformance
 import com.petermathie.vibecheck.data.local.*
 import com.petermathie.vibecheck.ui.emptySet
@@ -123,6 +125,43 @@ class SessionProgressTest {
         val series=SessionProgress.romSeries(sets)
         assertEquals(setOf("cm","degrees"),series.keys)
         assertEquals(listOf(10.0,12.0),series.getValue("cm").map { it.romValue })
+    }
+    @Test fun distanceSeriesStaySeparateFromRomAndDoNotProduceStrengthScores() {
+        val rom = emptySet("e", 1).copy(romValue = 10.0, romUnit = "cm", loggedAt = 1)
+        val distance = emptySet("e", 2).copy(distanceValue = 18.125, distanceUnit = "cm", loggedAt = 2, reps = 5.0)
+        assertEquals(listOf(rom), SessionProgress.romSeries(listOf(rom, distance)).getValue("cm"))
+        assertEquals(listOf(distance), SessionProgress.distanceSeries(listOf(rom, distance)).getValue("cm"))
+        assertNull(SessionProgress.score(distance, 80.0, 0.0))
+    }
+    @Test fun recordedPrimaryMetricExcludesRetainedLegacyResultsEvenWhenItsValueWasCleared() {
+        val workout = finished("w", 1)
+        val row = row("r", "w")
+        val legacy = emptySet("r", 1).copy(weightKg = 60.0, reps = 5.0, holdMillis = 10_000)
+        listOf(
+            MeasurementMetric.DISTANCE,
+            MeasurementMetric.RANGE_OF_MOTION,
+        ).forEach { metric ->
+            val config = ExerciseInputConfig().withMeasurement(metric).encode()
+            val recorded = legacy.copy(variationInputConfigSnapshot = config)
+            assertNull(SessionProgress.score(recorded, 80.0, 0.0))
+            assertTrue(SessionProgress.points("bench", listOf(workout), listOf(row), listOf(recorded),
+                emptyList(), emptyList()).isEmpty())
+            assertTrue(SessionProgress.dailyEstimatedOneRepMax("bench", listOf(workout), listOf(row), listOf(recorded)).isEmpty())
+            val fallback = row.copy(inputConfig = config)
+            assertNull(SessionProgress.score(legacy, 80.0, 0.0, fallback.trackingType, fallback.inputConfig))
+            assertTrue(SessionProgress.points("bench", listOf(workout), listOf(fallback), listOf(legacy),
+                emptyList(), emptyList()).isEmpty())
+            assertTrue(SessionProgress.dailyEstimatedOneRepMax("bench", listOf(workout), listOf(fallback), listOf(legacy)).isEmpty())
+            val recordedReps = legacy.copy(
+                variationInputConfigSnapshot = ExerciseInputConfig().withMeasurement(MeasurementMetric.REPETITIONS).encode(),
+            )
+            assertNotNull(SessionProgress.score(recordedReps, 80.0, 0.0, fallback.trackingType, fallback.inputConfig))
+            assertEquals(60.0, recorded.weightKg!!, 0.0)
+            assertEquals(5.0, recorded.reps!!, 0.0)
+            assertEquals(10_000L, recorded.holdMillis)
+        }
+        assertNotNull(SessionProgress.score(legacy, 80.0, 0.0))
+        assertFalse(SessionProgress.dailyEstimatedOneRepMax("bench", listOf(workout), listOf(row), listOf(legacy)).isEmpty())
     }
     @Test fun recordsExposeHighestScoredPerformanceInsteadOfRepetitionCount(){
         val lowerScore=emptySet("e",1).copy(weightKg=50.0,reps=12.0)

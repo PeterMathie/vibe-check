@@ -9,6 +9,7 @@ import android.net.Uri
 import android.content.SharedPreferences
 import android.os.Build
 import com.petermathie.vibecheck.BuildConfig
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
@@ -86,6 +87,7 @@ fun SettingsScreen(
     vm: EditorViewModel,
     onStyle: () -> Unit,
     onRemoveDemo: ((Result<DemoRemovalSummary>) -> Unit) -> Unit,
+    onBack: () -> Unit = {},
 ) {
     val context=LocalContext.current;val prefs=context.getSharedPreferences("settings",0);val scope=rememberCoroutineScope()
     var message by remember { mutableStateOf("") };var last by remember { mutableStateOf(prefs.getLong("backup",0)) }
@@ -98,10 +100,21 @@ fun SettingsScreen(
     var scrollToNext by remember { mutableStateOf(prefs.getBoolean(SCROLL_TO_NEXT_EMPTY_SET, false)) }
     var notificationsEnabled by remember { mutableStateOf(timerNotificationsEnabled(context)) }
     var preciseTimersEnabled by remember { mutableStateOf(arePreciseTimersEnabled(context)) }
-    val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> if(uri!=null)scope.launch { try { val text=BackupPreferences.attach(vm.exportJson(),prefs);withContext(Dispatchers.IO){requireNotNull(context.contentResolver.openOutputStream(uri)){"Cannot open backup destination"}.bufferedWriter().use{it.write(text)}};last=System.currentTimeMillis();prefs.edit().putLong("backup",last).apply();message="Backup saved" }catch(e:Exception){message=e.message.orEmpty()} } }
+    var pendingOperations by remember { mutableIntStateOf(0) }
+    fun launchDataOperation(block: suspend () -> Unit) {
+        pendingOperations++
+        scope.launch {
+            try {
+                block()
+            } finally {
+                pendingOperations--
+            }
+        }
+    }
+    val export=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri -> if(uri!=null)launchDataOperation { try { val text=BackupPreferences.attach(vm.exportJson(),prefs);withContext(Dispatchers.IO){requireNotNull(context.contentResolver.openOutputStream(uri)){"Cannot open backup destination"}.bufferedWriter().use{it.write(text)}};last=System.currentTimeMillis();prefs.edit().putLong("backup",last).apply();message="Backup saved" }catch(e:Exception){message=e.message.orEmpty()} } }
     var pendingImport by remember { mutableStateOf<String?>(null) }
-    val restore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri!=null)scope.launch { try { pendingImport=withContext(Dispatchers.IO){context.contentResolver.openInputStream(uri)?.bufferedReader()?.use{it.readText()}} }catch(e:Exception){message=e.message.orEmpty()} } }
-    val csv=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if(uri!=null)scope.launch { try {val text=vm.exportCsv();withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use{it.write(text)}};message="CSV saved"}catch(e:Exception){message=e.message.orEmpty()} } }
+    val restore=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri!=null)launchDataOperation { try { pendingImport=withContext(Dispatchers.IO){context.contentResolver.openInputStream(uri)?.bufferedReader()?.use{it.readText()}} }catch(e:Exception){message=e.message.orEmpty()} } }
+    val csv=rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> if(uri!=null)launchDataOperation { try {val text=vm.exportCsv();withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use{it.write(text)}};message="CSV saved"}catch(e:Exception){message=e.message.orEmpty()} } }
     val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){
         notificationsEnabled = timerNotificationsEnabled(context)
         message=if(it)"Timer notifications enabled" else "Notifications disabled"
@@ -112,58 +125,103 @@ fun SettingsScreen(
     val preciseTimerSettings = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         preciseTimersEnabled = arePreciseTimersEnabled(context)
     }
+    val requestBack: () -> Unit = {
+        when {
+            notices != null -> notices = null
+            reducedMotionInfo -> reducedMotionInfo = false
+            preciseTimerInfo -> preciseTimerInfo = false
+            confirmRemoveDemo -> confirmRemoveDemo = false
+            pendingImport != null -> pendingImport = null
+            pendingOperations > 0 -> Unit
+            else -> onBack()
+        }
+    }
+    BackHandler(onBack = requestBack)
+    val palette = LocalVibePalette.current
     ScreenList {
-        item {
-            Text("Settings and data",style=MaterialTheme.typography.headlineSmall)
-            VibeActionButton("Colour palette", onStyle, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            SettingToggle("Pounds (lb)",lb){lb=it;prefs.edit().putBoolean("lb",it).apply()}
-            SettingToggle("Female anatomy",female){female=it;prefs.edit().putBoolean("female",it).apply()}
-            SettingToggle("Start rest automatically",auto){auto=it;prefs.edit().putBoolean("autoRest",it).apply()}
-            SettingToggle("Haptics",haptic){haptic=it;prefs.edit().putBoolean("haptic",it).apply()}
-            SettingToggle("Scroll to next empty set", scrollToNext) {
-                scrollToNext = it
-                prefs.edit().putBoolean(SCROLL_TO_NEXT_EMPTY_SET, it).apply()
+        item(key = "title") { MoreChildTitleRow("Settings", requestBack) }
+        item(key = "display") {
+            Column(Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Display & units", style = MaterialTheme.typography.titleLarge)
+                VibeActionButton("Colour palette", { if (pendingOperations == 0) onStyle() }, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                SettingToggle("Pounds (lb)",lb){lb=it;prefs.edit().putBoolean("lb",it).apply()}
+                SettingToggle("Female anatomy",female){female=it;prefs.edit().putBoolean("female",it).apply()}
             }
-            SettingToggle(
-                "Reduced motion",
-                reduced,
-                onInfo = { reducedMotionInfo = true },
-            ) { reduced=it;prefs.edit().putBoolean("reducedMotion",it).apply() }
-            SettingToggle("Timer notifications", notificationsEnabled) { enabled ->
-                if (enabled && Build.VERSION.SDK_INT >= 33 &&
-                    context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                ) {
-                    notify.launch(Manifest.permission.POST_NOTIFICATIONS)
-                } else {
-                    notificationSettings.launch(
-                        Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName),
-                    )
+        }
+        item(key = "workout") {
+            Column(Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                Text("Workout & timers", style = MaterialTheme.typography.titleLarge)
+                SettingToggle("Start rest automatically",auto){auto=it;prefs.edit().putBoolean("autoRest",it).apply()}
+                SettingToggle("Scroll to next empty set", scrollToNext) {
+                    scrollToNext = it
+                    prefs.edit().putBoolean(SCROLL_TO_NEXT_EMPTY_SET, it).apply()
                 }
+                SettingToggle("Timer notifications", notificationsEnabled) { enabled ->
+                    if (enabled && Build.VERSION.SDK_INT >= 33 &&
+                        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notify.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        notificationSettings.launch(
+                            Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName),
+                        )
+                    }
+                }
+                if(Build.VERSION.SDK_INT>=31) {
+                    SettingToggle(
+                        "Precise background timers",
+                        preciseTimersEnabled,
+                        onInfo = { preciseTimerInfo = true },
+                    ) {
+                        preciseTimerSettings.launch(
+                            Intent(
+                                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:${context.packageName}"),
+                            ),
+                        )
+                    }
+                }
+                VibeActionButton("Cancel rest timer", {RestTimer.cancel(context);message="Timer cancelled"}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
             }
-            if(Build.VERSION.SDK_INT>=31) {
+        }
+        item(key = "interaction") {
+            Column(Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                Text("Interaction & accessibility", style = MaterialTheme.typography.titleLarge)
+                SettingToggle("Haptics",haptic){haptic=it;prefs.edit().putBoolean("haptic",it).apply()}
                 SettingToggle(
-                    "Precise background timers",
-                    preciseTimersEnabled,
-                    onInfo = { preciseTimerInfo = true },
-                ) {
-                    preciseTimerSettings.launch(
-                        Intent(
-                            android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                            Uri.parse("package:${context.packageName}"),
-                        ),
-                    )
-                }
+                    "Reduced motion",
+                    reduced,
+                    onInfo = { reducedMotionInfo = true },
+                ) { reduced=it;prefs.edit().putBoolean("reducedMotion",it).apply() }
             }
-            VibeActionButton("Cancel rest timer", {RestTimer.cancel(context);message="Timer cancelled"}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            VibeActionButton("JSON backup", {export.launch("vibe-check-backup.json")}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            VibeActionButton("Restore / import structured JSON", {restore.launch(arrayOf("application/json","text/plain"))}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            VibeActionButton("CSV export", {csv.launch("vibe-check-workouts.csv")}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            Text("Last backup: ${if(last==0L)"Never" else Instant.ofEpochMilli(last)}")
-            VibeActionButton("Remove demo data", { confirmRemoveDemo = true }, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            VibeActionButton("Open-source asset notices", {notices=context.assets.open("THIRD_PARTY_NOTICES.md").bufferedReader().use { it.readText() }}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
-            Text("Vibe Check ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
-            Text(message)
+        }
+        item(key = "data") {
+            Column(Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                Text("Data & backups", style = MaterialTheme.typography.titleLarge)
+                VibeActionButton("JSON backup", {export.launch("vibe-check-backup.json")}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                VibeActionButton("Restore / import structured JSON", {restore.launch(arrayOf("application/json","text/plain"))}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                VibeActionButton("CSV export", {csv.launch("vibe-check-workouts.csv")}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                Text("Last backup: ${if(last==0L)"Never" else Instant.ofEpochMilli(last)}")
+                VibeActionButton("Remove demo data", { confirmRemoveDemo = true }, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                Text(message)
+            }
+        }
+        item(key = "about") {
+            Column(Modifier.fillMaxWidth().habitGlow(palette.accent, palette.isDark),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                HorizontalDivider(color = palette.border.copy(alpha = 0.3f))
+                Text("About", style = MaterialTheme.typography.titleLarge)
+                VibeActionButton("Open-source asset notices", {notices=context.assets.open("THIRD_PARTY_NOTICES.md").bufferedReader().use { it.readText() }}, Modifier.fillMaxWidth(), ActionImportance.SECONDARY)
+                Text("Vibe Check ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})")
+            }
         }
     }
     notices?.let { text -> OpenSourceNoticesDialog(text) { notices = null } }
@@ -188,17 +246,24 @@ fun SettingsScreen(
         confirmButton = {
             TextButton(onClick = {
                 confirmRemoveDemo = false
-                onRemoveDemo { result ->
-                    message = result.fold(
-                        onSuccess = { summary -> demoRemovalMessage(summary) },
-                        onFailure = { error -> "Demo data was not fully removed: ${error.message.orEmpty()}" },
-                    )
+                pendingOperations++
+                try {
+                    onRemoveDemo { result ->
+                        pendingOperations--
+                        message = result.fold(
+                            onSuccess = { summary -> demoRemovalMessage(summary) },
+                            onFailure = { error -> "Demo data was not fully removed: ${error.message.orEmpty()}" },
+                        )
+                    }
+                } catch (error: Exception) {
+                    pendingOperations--
+                    message = "Demo data was not fully removed: ${error.message.orEmpty()}"
                 }
             }) { Text("Remove demo data") }
         },
         dismissButton = { TextButton(onClick = { confirmRemoveDemo = false }) { Text("Cancel") } },
     )
-    if(pendingImport!=null)AlertDialog(onDismissRequest={pendingImport=null},title={Text("Import records?")},text={Text("Matching record IDs will be updated. Other records are retained. Make a backup first if you want to keep the previous values.")},confirmButton={TextButton(onClick={val text=pendingImport!!;pendingImport=null;scope.launch{try{val restored=BackupPreferences.validate(text);vm.importJson(text);BackupPreferences.restore(restored,prefs);lb=prefs.getBoolean("lb",false);female=prefs.getBoolean("female",false);auto=prefs.getBoolean("autoRest",false);haptic=prefs.getBoolean("haptic",true);reduced=prefs.getBoolean("reducedMotion",false);message="Import complete. Restored colours are active."}catch(e:Exception){message="Import failed: ${e.message}"}}}){Text("Import")}},dismissButton={TextButton(onClick={pendingImport=null}){Text("Cancel")}})
+    if(pendingImport!=null)AlertDialog(onDismissRequest={pendingImport=null},title={Text("Import records?")},text={Text("Matching record IDs will be updated. Other records are retained. Make a backup first if you want to keep the previous values.")},confirmButton={TextButton(onClick={val text=pendingImport!!;pendingImport=null;launchDataOperation{try{val restored=BackupPreferences.validate(text);vm.importJson(text);BackupPreferences.restore(restored,prefs);lb=prefs.getBoolean("lb",false);female=prefs.getBoolean("female",false);auto=prefs.getBoolean("autoRest",false);haptic=prefs.getBoolean("haptic",true);reduced=prefs.getBoolean("reducedMotion",false);message="Import complete. Restored colours are active."}catch(e:Exception){message="Import failed: ${e.message}"}}}){Text("Import")}},dismissButton={TextButton(onClick={pendingImport=null}){Text("Cancel")}})
 }
 
 private fun demoRemovalMessage(summary: DemoRemovalSummary): String =

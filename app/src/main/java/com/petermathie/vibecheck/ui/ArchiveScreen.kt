@@ -1,5 +1,6 @@
 package com.petermathie.vibecheck.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,15 +14,16 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
-internal fun ArchiveScreen(vm: EditorViewModel) {
+internal fun ArchiveScreen(vm: EditorViewModel, onBack: () -> Unit = {}) {
     val programmes by vm.archivedProgrammes.collectAsStateWithLifecycle()
     val exercises by vm.exercises.collectAsStateWithLifecycle()
     val trackers by vm.trackers.collectAsStateWithLifecycle()
     val archivedExercises = exercises.filter { it.isArchived }.sortedBy { it.canonicalName }
     val archivedTrackers = trackers.filter { it.isArchived }.sortedBy { it.name }
 
+    BackHandler(onBack = onBack)
     ScreenList {
-        item { Text("Archive", style = MaterialTheme.typography.headlineLarge) }
+        item { MoreChildTitleRow("Archive", onBack) }
         if (programmes.isEmpty() && archivedExercises.isEmpty() && archivedTrackers.isEmpty()) {
             item { com.petermathie.vibecheck.ui.components.VibeStatePanel("Archived plans, exercises, and habits will appear here.") }
         }

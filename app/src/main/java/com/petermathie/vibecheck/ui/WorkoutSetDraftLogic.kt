@@ -8,15 +8,14 @@ import com.petermathie.vibecheck.domain.programme.ExerciseInputConfig
 import com.petermathie.vibecheck.domain.programme.MeasurementMetric
 import com.petermathie.vibecheck.domain.programme.ResistanceMetric
 import com.petermathie.vibecheck.domain.workout.*
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.json.*
 
 internal fun variantDraftMetadata(encoded: String): VariantDraftMetadata = object : VariantDraftMetadata {
-    private val values = JSONObject(encoded)
-    override val inputConfig get() = values.getString("inputConfig")
-    override val variantName get() = values.getString("variantName")
-    override val trackingType get() = values.getString("trackingType")
-    override val rank get() = if (values.isNull("rank")) null else values.getInt("rank")
+    private val values = Json.parseToJsonElement(encoded).jsonObject
+    override val inputConfig get() = values.getValue("inputConfig").jsonPrimitive.content
+    override val variantName get() = values.getValue("variantName").jsonPrimitive.content
+    override val trackingType get() = values.getValue("trackingType").jsonPrimitive.content
+    override val rank get() = if (values.getValue("rank") == JsonNull) null else values.getValue("rank").jsonPrimitive.int
 }
 
 internal fun acceptsRpeEdit(current: String, proposed: String): Boolean {
@@ -51,6 +50,7 @@ internal class WorkoutSetDraftLogic(
             when (measurementMetric) {
                 MeasurementMetric.REPETITIONS -> add(reps)
                 MeasurementMetric.RANGE_OF_MOTION -> add(draft.romValue)
+                MeasurementMetric.DISTANCE -> add(draft.distanceValue)
                 MeasurementMetric.HOLD -> if (!config.timeHeld && config.timeUnderTension) add(draft.timeUnderTension)
                     else addAll(attemptsFor(draft))
                 MeasurementMetric.SKILL_HOLD -> {
@@ -75,6 +75,7 @@ internal class WorkoutSetDraftLogic(
         val hasMeasurement = when (measurementMetric) {
             MeasurementMetric.REPETITIONS -> quantitativeInput(reps).value != null
             MeasurementMetric.RANGE_OF_MOTION -> quantitativeInput(draft.romValue).value != null
+            MeasurementMetric.DISTANCE -> quantitativeInput(draft.distanceValue).value != null
             MeasurementMetric.HOLD -> if (!config.timeHeld && config.timeUnderTension) {
                 quantitativeInput(draft.timeUnderTension).value != null
             } else attemptsFor(draft).any { quantitativeInput(it).value != null }
@@ -90,21 +91,32 @@ internal class WorkoutSetDraftLogic(
             weightKg = if (config.loggingWeightUnit == null) base.weightKg else quantitativeInput(resistance).value?.let {
                 if (config.loggingWeightUnit == "lb") it / 2.2046226218 else it
             },
-            reps = if (measurementMetric == MeasurementMetric.REPETITIONS) quantitativeInput(reps).value else base.reps,
+            reps = if (measurementMetric == MeasurementMetric.REPETITIONS) quantitativeInput(reps).value
+                else base.reps.takeIf { sameVariant },
             variationId = draft.variationId,
             variationNameSnapshot = if (sameVariant) base.variationNameSnapshot else cached?.variantName ?: variation?.name.orEmpty(),
             variationTrackingTypeSnapshot = if (sameVariant) base.variationTrackingTypeSnapshot else cached?.trackingType ?: variation?.trackingType.orEmpty(),
             variationRankSnapshot = if (sameVariant) base.variationRankSnapshot else cached?.rank ?: variation?.progressionRank,
-            holdMillis = durations.takeIf { it.isNotEmpty() }?.sum(),
-            tutEntriesMillis = encodeTimingMillis(durations),
-            timeUnderTensionMillis = quantitativeInput(draft.timeUnderTension).value?.times(1000)?.toLong(),
+            holdMillis = if (config.timeHeld || config.manyTuts) durations.takeIf { it.isNotEmpty() }?.sum()
+                else base.holdMillis.takeIf { sameVariant },
+            tutEntriesMillis = if (config.timeHeld || config.manyTuts) encodeTimingMillis(durations)
+                else base.tutEntriesMillis.takeIf { sameVariant } ?: "[]",
+            timeUnderTensionMillis = if (config.timeUnderTension)
+                quantitativeInput(draft.timeUnderTension).value?.times(1000)?.toLong()
+                else base.timeUnderTensionMillis.takeIf { sameVariant },
             bandResistance = config.bandResistance,
             addedWeightKg = quantitativeInput(draft.addedWeight).value?.let {
                 if (preferredWeightUnit == "lb") it / 2.2046226218 else it
             },
             rpe = quantitativeInput(draft.rpe, 10.0).value,
-            romValue = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) quantitativeInput(draft.romValue).value else base.romValue,
-            romUnit = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) draft.romUnit else base.romUnit,
+            romValue = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) quantitativeInput(draft.romValue).value
+                else base.romValue.takeIf { sameVariant },
+            romUnit = if (measurementMetric == MeasurementMetric.RANGE_OF_MOTION) draft.romUnit
+                else base.romUnit.takeIf { sameVariant },
+            distanceValue = if (measurementMetric == MeasurementMetric.DISTANCE) quantitativeInput(draft.distanceValue).value
+                else base.distanceValue.takeIf { sameVariant },
+            distanceUnit = if (measurementMetric == MeasurementMetric.DISTANCE) draft.distanceUnit
+                else base.distanceUnit.takeIf { sameVariant },
             updatedAt = System.currentTimeMillis(),
         )
     }
@@ -152,6 +164,10 @@ internal class WorkoutSetDraftLogic(
         return draft.copy(
             variationId = nextVariantId,
             performance = nextPerformance,
+            romValue = "",
+            romUnit = "degrees",
+            distanceValue = "",
+            distanceUnit = "cm",
             updatedAt = System.currentTimeMillis(),
         )
     }
@@ -216,7 +232,34 @@ internal fun visibleTimingInputs(attempts: List<String>, locked: Boolean): List<
 }
 
 internal fun variantDraftKey(setId: String, variantId: String?): String =
-    JSONArray().put(setId).put(variantId).toString()
+    buildJsonArray { add(setId); add(variantId?.let(::JsonPrimitive) ?: JsonNull) }.toString()
+
+internal fun decodeVariantDraftCache(encoded: String): Map<String, String> {
+    return Json.parseToJsonElement(encoded).jsonObject.mapValues { (_, value) ->
+        when (value) {
+            is JsonObject -> value.toString()
+            is JsonPrimitive -> {
+                require(value.isString) { "Cached variant must be an object or encoded string" }
+                value.content
+            }
+            else -> error("Cached variant must be an object or encoded string")
+        }
+    }
+}
+
+internal fun encodeVariantDraftCache(values: Map<String, String>): String =
+    buildJsonObject { values.forEach { (key, value) -> put(key, value) } }.toString()
+
+internal fun recoveredDraftNeedsSave(
+    draft: WorkoutEntryDraftEntity,
+    recorded: WorkoutSetEntity?,
+    recordedBandIds: List<String>,
+    logic: WorkoutSetDraftLogic,
+): Boolean {
+    if (recorded == null || draft.setId != recorded.id || bandIds(draft.bandIds) != recordedBandIds) return true
+    val candidate = logic.editedSet(draft) ?: return true
+    return candidate.copy(updatedAt = recorded.updatedAt, bandResistance = recorded.bandResistance) != recorded
+}
 
 internal fun encodeVariantDraft(
     draft: WorkoutEntryDraftEntity,
@@ -224,11 +267,11 @@ internal fun encodeVariantDraft(
     variantName: String,
     trackingType: String,
     rank: Int?,
-): String = JSONObject().apply {
+): String = buildJsonObject {
     put("inputConfig", inputConfig)
     put("variantName", variantName)
     put("trackingType", trackingType)
-    put("rank", rank ?: JSONObject.NULL)
+    put("rank", rank?.let(::JsonPrimitive) ?: JsonNull)
     put("performance", draft.performance)
     put("rpe", draft.rpe)
     put("bands", draft.bandIds)
@@ -238,26 +281,31 @@ internal fun encodeVariantDraft(
     put("assistance", draft.assistance)
     put("rom", draft.romValue)
     put("romUnit", draft.romUnit)
+    put("distance", draft.distanceValue)
+    put("distanceUnit", draft.distanceUnit)
     put("held", draft.timeHeld)
     put("total", draft.timeUnderTension)
     put("attempts", draft.tutEntries)
 }.toString()
 
 internal fun restoreVariantDraft(draft: WorkoutEntryDraftEntity, encoded: String): WorkoutEntryDraftEntity {
-    val values = JSONObject(encoded)
+    val values = Json.parseToJsonElement(encoded).jsonObject
+    fun text(key: String) = values.getValue(key).jsonPrimitive.content
     return draft.copy(
-        performance = values.getString("performance"),
-        rpe = values.getString("rpe"),
-        bandIds = values.getString("bands"),
-        leftValue = values.getString("left"),
-        rightValue = values.getString("right"),
-        addedWeight = values.getString("addedWeight"),
-        assistance = values.getString("assistance"),
-        romValue = values.getString("rom"),
-        romUnit = values.getString("romUnit"),
-        timeHeld = values.getString("held"),
-        timeUnderTension = values.getString("total"),
-        tutEntries = values.getString("attempts"),
+        performance = text("performance"),
+        rpe = text("rpe"),
+        bandIds = text("bands"),
+        leftValue = text("left"),
+        rightValue = text("right"),
+        addedWeight = text("addedWeight"),
+        assistance = text("assistance"),
+        romValue = text("rom"),
+        romUnit = text("romUnit"),
+        distanceValue = values["distance"]?.jsonPrimitive?.content ?: "",
+        distanceUnit = values["distanceUnit"]?.jsonPrimitive?.content ?: "cm",
+        timeHeld = text("held"),
+        timeUnderTension = text("total"),
+        tutEntries = text("attempts"),
     )
 }
 
@@ -286,7 +334,9 @@ internal fun draftFromSet(
         addedWeight = set.addedWeightKg?.let { if (addedWeightUnit == "lb") it * 2.2046226218 else it }?.let(::formatQuantitative).orEmpty(),
         assistance = set.assistanceKg?.toString().orEmpty(),
         romValue = set.romValue?.toString().orEmpty(),
-        romUnit = set.romUnit ?: "cm",
+        romUnit = set.romUnit ?: if (set.romValue == null) "degrees" else "cm",
+        distanceValue = set.distanceValue?.toString().orEmpty(),
+        distanceUnit = set.distanceUnit ?: "cm",
         timeHeld = set.holdMillis?.div(1000.0)?.toString().orEmpty(),
         timeUnderTension = set.timeUnderTensionMillis?.div(1000.0)?.let(::formatQuantitative).orEmpty(),
         tutEntries = timingMillis(set.tutEntriesMillis).takeIf { it.isNotEmpty() }
@@ -295,9 +345,8 @@ internal fun draftFromSet(
 }
 
 internal fun bandIds(value: String): List<String> {
-    val values = JSONArray(value)
-    return (0 until values.length()).map(values::getString)
+    return Json.parseToJsonElement(value).jsonArray.map { it.jsonPrimitive.content }
 }
 
 internal fun encodeBandIds(values: List<String>): String =
-    JSONArray().apply { values.forEach { put(it) } }.toString()
+    buildJsonArray { values.forEach { add(it) } }.toString()

@@ -50,6 +50,21 @@ class WorkoutWorkflowTest {
     fun tearDown() = database.close()
 
     @Test(timeout = 120_000)
+    fun newWorkoutCapturesProgrammeNameAndEffectiveExerciseWithoutChangingResume() = runBlocking {
+        val dao = database.editorDao()
+        val day = requireNotNull(database.programmeDao().day("demo-day-push"))
+        dao.renameProgramme(day.programmeId, "Programme at start")
+        dao.exerciseOverride(com.petermathie.vibecheck.data.local.ExerciseOverrideEntity("core:handstand", "Local handstand"))
+        val id = repository.startWorkout(day.id)
+        assertEquals(day.name, database.workoutDao().workout(id)!!.name)
+        assertEquals("Programme at start", database.workoutDao().workout(id)!!.programmeNameSnapshot)
+        assertEquals("Local handstand", dao.workoutExercisesForWorkout(id).first().exerciseName)
+        dao.renameProgramme(day.programmeId, "Renamed later")
+        assertEquals(id, repository.startWorkout(day.id))
+        assertEquals("Programme at start", database.workoutDao().workout(id)!!.programmeNameSnapshot)
+    }
+
+    @Test(timeout = 120_000)
     fun programmeToFinishedWorkoutUpdatesDerivedRecency() = runBlocking {
         val day = repository.observeProgrammeDays().first { it.isNotEmpty() }.first()
         val workoutId = repository.startWorkout(day.id)

@@ -587,3 +587,30 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
         db.execSQL("DROP TABLE workout_set_bands_backup")
     }
 }
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE workouts ADD COLUMN programmeNameSnapshot TEXT")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN distanceValue REAL")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN distanceUnit TEXT")
+        db.execSQL("ALTER TABLE workout_sets ADD COLUMN musclesSnapshotPresent INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE workout_entry_drafts ADD COLUMN distanceValue TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE workout_entry_drafts ADD COLUMN distanceUnit TEXT NOT NULL DEFAULT 'cm'")
+        db.execSQL("ALTER TABLE workout_entry_drafts ADD COLUMN variantDraftCache TEXT NOT NULL DEFAULT '{}'")
+        db.execSQL("ALTER TABLE exercise_reference_videos ADD COLUMN variationId TEXT REFERENCES exercise_variations(id) ON DELETE CASCADE")
+        db.execSQL("CREATE INDEX index_exercise_reference_videos_variationId ON exercise_reference_videos(variationId)")
+        db.execSQL("CREATE TABLE exercise_overrides (exerciseId TEXT NOT NULL PRIMARY KEY, name TEXT, musclesPresent INTEGER NOT NULL, FOREIGN KEY(exerciseId) REFERENCES exercises(id) ON DELETE CASCADE)")
+        db.execSQL("CREATE TABLE variation_overrides (variationId TEXT NOT NULL PRIMARY KEY, name TEXT, musclesPresent INTEGER NOT NULL, FOREIGN KEY(variationId) REFERENCES exercise_variations(id) ON DELETE CASCADE)")
+        db.execSQL("CREATE TABLE exercise_muscle_overrides (exerciseId TEXT NOT NULL, muscleId TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(exerciseId,muscleId), FOREIGN KEY(exerciseId) REFERENCES exercise_overrides(exerciseId) ON DELETE CASCADE, FOREIGN KEY(muscleId) REFERENCES muscles(id) ON DELETE RESTRICT)")
+        db.execSQL("CREATE TABLE variation_muscles (variationId TEXT NOT NULL, muscleId TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(variationId,muscleId), FOREIGN KEY(variationId) REFERENCES variation_overrides(variationId) ON DELETE CASCADE, FOREIGN KEY(muscleId) REFERENCES muscles(id) ON DELETE RESTRICT)")
+        db.execSQL("CREATE TABLE workout_set_muscles (setId TEXT NOT NULL, muscleId TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(setId,muscleId), FOREIGN KEY(setId) REFERENCES workout_sets(id) ON DELETE CASCADE, FOREIGN KEY(muscleId) REFERENCES muscles(id) ON DELETE RESTRICT)")
+        db.execSQL("CREATE INDEX index_exercise_muscle_overrides_exerciseId ON exercise_muscle_overrides(exerciseId)")
+        db.execSQL("CREATE INDEX index_exercise_muscle_overrides_muscleId ON exercise_muscle_overrides(muscleId)")
+        db.execSQL("CREATE INDEX index_variation_muscles_variationId ON variation_muscles(variationId)")
+        db.execSQL("CREATE INDEX index_variation_muscles_muscleId ON variation_muscles(muscleId)")
+        db.execSQL("CREATE INDEX index_workout_set_muscles_setId ON workout_set_muscles(setId)")
+        db.execSQL("CREATE INDEX index_workout_set_muscles_muscleId ON workout_set_muscles(muscleId)")
+        // Initialize only today's catalogue. Historical sets retain their legacy snapshots.
+        db.execSQL("INSERT INTO variation_overrides SELECT id,NULL,1 FROM exercise_variations")
+        db.execSQL("INSERT INTO variation_muscles SELECT v.id,m.muscleId,m.role FROM exercise_variations v JOIN exercise_muscles m ON m.exerciseId=v.exerciseId")
+    }
+}

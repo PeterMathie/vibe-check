@@ -46,6 +46,8 @@ data class SetDraft(
     val notes: String = "",
     val type: SetType = SetType.WORKING,
     val result: SetResult = SetResult.COMPLETED,
+    val distanceValue: Double? = null,
+    val distanceUnit: String? = null,
 )
 
 data class WorkoutSetLog(
@@ -58,6 +60,8 @@ data class WorkoutSetLog(
     val notes: String,
     val type: SetType,
     val result: SetResult,
+    val distanceValue: Double? = null,
+    val distanceUnit: String? = null,
 )
 
 data class WorkoutExerciseLog(

@@ -76,6 +76,21 @@ data class ExerciseMuscleEntity(
     val role: String,
 )
 
+@Entity(tableName = "exercise_overrides", primaryKeys = ["exerciseId"], foreignKeys = [
+    ForeignKey(entity = ExerciseEntity::class, parentColumns = ["id"], childColumns = ["exerciseId"], onDelete = ForeignKey.CASCADE),
+])
+data class ExerciseOverrideEntity(
+    val exerciseId: String,
+    val name: String? = null,
+    val musclesPresent: Boolean = false,
+)
+
+@Entity(tableName = "exercise_muscle_overrides", primaryKeys = ["exerciseId", "muscleId"], foreignKeys = [
+    ForeignKey(entity = ExerciseOverrideEntity::class, parentColumns = ["exerciseId"], childColumns = ["exerciseId"], onDelete = ForeignKey.CASCADE),
+    ForeignKey(entity = MuscleEntity::class, parentColumns = ["id"], childColumns = ["muscleId"], onDelete = ForeignKey.RESTRICT),
+], indices = [Index("exerciseId"), Index("muscleId")])
+data class ExerciseMuscleOverrideEntity(val exerciseId: String, val muscleId: String, val role: String)
+
 @Entity(
     tableName = "exercise_variations",
     primaryKeys = ["id"],
@@ -102,6 +117,21 @@ data class ExerciseVariationEntity(
     @androidx.room.ColumnInfo(defaultValue = "120") val restSeconds: Int = 120,
 )
 
+@Entity(tableName = "variation_overrides", primaryKeys = ["variationId"], foreignKeys = [
+    ForeignKey(entity = ExerciseVariationEntity::class, parentColumns = ["id"], childColumns = ["variationId"], onDelete = ForeignKey.CASCADE),
+])
+data class VariationOverrideEntity(
+    val variationId: String,
+    val name: String? = null,
+    val musclesPresent: Boolean = false,
+)
+
+@Entity(tableName = "variation_muscles", primaryKeys = ["variationId", "muscleId"], foreignKeys = [
+    ForeignKey(entity = VariationOverrideEntity::class, parentColumns = ["variationId"], childColumns = ["variationId"], onDelete = ForeignKey.CASCADE),
+    ForeignKey(entity = MuscleEntity::class, parentColumns = ["id"], childColumns = ["muscleId"], onDelete = ForeignKey.RESTRICT),
+], indices = [Index("variationId"), Index("muscleId")])
+data class VariationMuscleEntity(val variationId: String, val muscleId: String, val role: String)
+
 @Entity(
     tableName = "exercise_reference_videos",
     primaryKeys = ["id"],
@@ -110,8 +140,13 @@ data class ExerciseVariationEntity(
         parentColumns = ["id"],
         childColumns = ["exerciseId"],
         onDelete = ForeignKey.CASCADE,
+    ), ForeignKey(
+        entity = ExerciseVariationEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["variationId"],
+        onDelete = ForeignKey.CASCADE,
     )],
-    indices = [Index("exerciseId")],
+    indices = [Index("exerciseId"), Index("variationId")],
 )
 data class ExerciseReferenceVideoEntity(
     val id: String,
@@ -119,6 +154,7 @@ data class ExerciseReferenceVideoEntity(
     val displayName: String,
     val fileName: String,
     val createdAt: Long,
+    val variationId: String? = null,
 )
 
 @Entity(tableName = "bands", primaryKeys = ["id"])
@@ -213,6 +249,7 @@ data class WorkoutEntity(
     val notes: String,
     val bodyweightKg: Double?,
     val isDemo: Boolean,
+    val programmeNameSnapshot: String? = null,
 )
 
 @Entity(
@@ -306,7 +343,16 @@ data class WorkoutSetEntity(
     val legacyLeftReps: Int? = null,
     val legacyRightReps: Int? = null,
     @androidx.room.ColumnInfo(defaultValue = "'[]'") val tutEntriesMillis: String = "[]",
+    val distanceValue: Double? = null,
+    val distanceUnit: String? = null,
+    @ColumnInfo(defaultValue = "0") val musclesSnapshotPresent: Boolean = false,
 )
+
+@Entity(tableName = "workout_set_muscles", primaryKeys = ["setId", "muscleId"], foreignKeys = [
+    ForeignKey(entity = WorkoutSetEntity::class, parentColumns = ["id"], childColumns = ["setId"], onDelete = ForeignKey.CASCADE),
+    ForeignKey(entity = MuscleEntity::class, parentColumns = ["id"], childColumns = ["muscleId"], onDelete = ForeignKey.RESTRICT),
+], indices = [Index("setId"), Index("muscleId")])
+data class WorkoutSetMuscleEntity(val setId: String, val muscleId: String, val role: String)
 
 @Entity(
     tableName = "workout_set_bands",
@@ -367,6 +413,9 @@ data class WorkoutEntryDraftEntity(
     @androidx.room.ColumnInfo(defaultValue = "''") val timeHeld: String = "",
     @androidx.room.ColumnInfo(defaultValue = "''") val timeUnderTension: String = "",
     @androidx.room.ColumnInfo(defaultValue = "''") val tutEntries: String = "",
+    @ColumnInfo(defaultValue = "''") val distanceValue: String = "",
+    @ColumnInfo(defaultValue = "'cm'") val distanceUnit: String = "cm",
+    @ColumnInfo(defaultValue = "'{}'") val variantDraftCache: String = "{}",
 )
 
 @Entity(tableName = "trackers", primaryKeys = ["id"])

@@ -12,7 +12,8 @@ enum class MeasurementMetric(val label: String) {
     REPETITIONS("Repetitions"),
     HOLD("Hold duration"),
     SKILL_HOLD("Skill hold"),
-    RANGE_OF_MOTION("Range of motion"),
+    RANGE_OF_MOTION("ROM (degrees)"),
+    DISTANCE("Distance (cm)"),
 }
 
 enum class ExerciseMeasurement(val key: String, val label: String, val placeholder: String) {
@@ -25,6 +26,7 @@ enum class ExerciseMeasurement(val key: String, val label: String, val placehold
     ADDED_WEIGHT("addedWeight", "Added weight", "+— kg"),
     BANDS("bands", "Band resistance", "Bands —"),
     ROM("rom", "Range of motion", "— °"),
+    DISTANCE("distance", "Distance", "— cm"),
 }
 
 data class ExerciseInputConfig(
@@ -95,6 +97,7 @@ data class ExerciseInputConfig(
             ExerciseMeasurement.ADDED_WEIGHT -> addedWeight
             ExerciseMeasurement.BANDS -> bandResistance
             ExerciseMeasurement.ROM -> measurementMetric == MeasurementMetric.RANGE_OF_MOTION
+            ExerciseMeasurement.DISTANCE -> measurementMetric == MeasurementMetric.DISTANCE
         }
     }
 

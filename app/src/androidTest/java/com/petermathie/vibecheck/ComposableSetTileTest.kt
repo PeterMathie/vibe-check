@@ -55,6 +55,60 @@ class ComposableSetTileTest {
     @Test fun allTwelveCombinationsRemainUsableAtDoubleFontScale() = exerciseMatrix(320, 2f)
 
     @Test
+    fun historyValueColumnsUseCentralDotsInsteadOfVerticalRules() {
+        compose.setContent {
+            VibeCheckTheme {
+                Box(Modifier.width(320.dp)) {
+                    WorkoutSetTile(
+                        identity = "History values", dotSeparators = true,
+                        resistance = { Text("20 kg") },
+                        measurement = { Text("5 reps") },
+                        rpe = { Text("8 RPE") },
+                        completion = {},
+                        feedback = {},
+                    )
+                }
+            }
+        }
+        compose.onAllNodes(hasTestTag("Value divider for History values") and hasText("·"))
+            .assertCountEquals(2)
+    }
+
+    @Test
+    fun highPrecisionHistoryNumberMeasuresShownTextAndStartsAtLeftAfterFocusReturn() {
+        var raw by mutableStateOf("3.000000000001")
+        compose.setContent {
+            VibeCheckTheme {
+                CompositionLocalProvider(LocalWorkoutDisplayFractionDigits provides 2) {
+                    val focus = LocalFocusManager.current
+                    Column {
+                        MetricValue(raw, "", "History resistance", false, true, width = 60, unit = "kg",
+                            onChange = { raw = it })
+                        androidx.compose.material3.TextButton(onClick = { focus.clearFocus() }) { Text("Leave field") }
+                    }
+                }
+            }
+        }
+        val field = compose.onNodeWithContentDescription("History resistance")
+        fun assertShownNumberFits() {
+            val layouts = mutableListOf<TextLayoutResult>()
+            field.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertEquals("3", layout.layoutInput.text.text)
+            assertTrue("The first digit starts at the viewport's left", layout.getBoundingBox(0).left <= 2f)
+            assertTrue("The complete digit fits", layout.getBoundingBox(0).right <= layout.size.width)
+            compose.onNode(hasText("kg") and hasAnyAncestor(hasContentDescription("History resistance")),
+                useUnmergedTree = true).assertIsDisplayed()
+            assertEquals("3.000000000001", raw)
+        }
+        assertShownNumberFits()
+        field.performClick()
+        assertEquals("3.000000000001", raw)
+        compose.onNodeWithText("Leave field").performClick()
+        assertShownNumberFits()
+    }
+
+    @Test
     fun typingCentresTheWholeValueAndUnitAsTheyGrow() {
         var value by mutableStateOf("")
         val palette = VibePalettes.Ocean.dark

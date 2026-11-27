@@ -13,7 +13,11 @@ import org.json.JSONObject
 
 /** Versioned, structured, portable records. Photos are deliberately separate. */
 object DataTransfer {
-    val tables=listOf("muscles","exercises","exercise_aliases","exercise_muscles","exercise_variations","bands","programmes","programme_days","programme_exercises","workouts","workout_exercises","workout_muscles","workout_entry_drafts","workout_sets","workout_set_bands","trackers","tracker_fields","tracker_daily_values","tracker_day_outcomes","body_measurements","seed_metadata")
+    val tables=listOf("muscles","exercises","exercise_aliases","exercise_muscles","exercise_variations",
+        "exercise_overrides","exercise_muscle_overrides","variation_overrides","variation_muscles",
+        "bands","programmes","programme_days","programme_exercises","workouts","workout_exercises","workout_muscles",
+        "workout_entry_drafts","workout_sets","workout_set_muscles","workout_set_bands",
+        "trackers","tracker_fields","tracker_daily_values","tracker_day_outcomes","body_measurements","seed_metadata")
     suspend fun export(db:VibeDatabase):String=withContext(Dispatchers.IO) {
         val root=JSONObject().put("format","vibe-trainer").put("version",1)
         val data=JSONObject()
@@ -49,15 +53,28 @@ object DataTransfer {
         val sql=db.openHelper.writableDatabase
         sql.beginTransaction()
         try {
+            val newVariations = mutableSetOf<String>()
             tables.forEach { table ->
                 if(!data.has(table)) return@forEach
                 require(data.get(table) is JSONArray) { "$table must be an array" }
                 val rows=data.getJSONArray(table)
+                replaceImportedMappings(sql, data, table, rows)
                 val schema=ImportValidation.columns(sql,table)
                 val columns=schema.map { it.name };val keys=schema.filter { it.key }.map { it.name }
                 val seen=mutableSetOf<List<Any>>()
                 repeat(rows.length()) { i ->
                     val row=rows.getJSONObject(i)
+                    val previous = ImportValidation.existing(sql, table, row, schema)
+                    val newFields: Map<String, Any> = when (table) {
+                        "workouts" -> mapOf("programmeNameSnapshot" to JSONObject.NULL)
+                        "workout_sets" -> mapOf("distanceValue" to JSONObject.NULL, "distanceUnit" to JSONObject.NULL, "musclesSnapshotPresent" to 0)
+                        "workout_entry_drafts" -> mapOf("distanceValue" to "", "distanceUnit" to "cm", "variantDraftCache" to "{}")
+                        else -> emptyMap()
+                    }
+                    newFields.forEach { (field, default) ->
+                        if (!row.has(field)) row.put(field, previous?.get(field) ?: default)
+                    }
+                    if (table == "exercise_variations" && previous == null) newVariations.add(row.getString("id"))
                     if (table == "programmes" && !row.has("colourArgb")) {
                         val id = row.getString("id")
                         val colour = sql.query("SELECT colourArgb FROM programmes WHERE id=?", arrayOf(id)).use {
@@ -209,6 +226,21 @@ object DataTransfer {
                     else if(updateColumns.isNotEmpty()) sql.execSQL("UPDATE `$table` SET ${updateColumns.joinToString { "`$it`=?" }} WHERE ${keys.joinToString(" AND ") { "`$it`=?" }}",(updateColumns+keys).map { if(row.isNull(it))null else row.get(it) }.toTypedArray())
                 }
             }
+            // Legacy imports initialize new catalogue variants, never historical set maps.
+            newVariations.forEach { id ->
+                val present = sql.query("SELECT musclesPresent FROM variation_overrides WHERE variationId=?", arrayOf(id)).use {
+                    it.moveToFirst() && it.getInt(0) == 1
+                }
+                if (!present) {
+                    sql.execSQL("INSERT OR IGNORE INTO variation_overrides(variationId,name,musclesPresent) VALUES (?,NULL,1)", arrayOf(id))
+                    sql.execSQL("UPDATE variation_overrides SET musclesPresent=1 WHERE variationId=?", arrayOf(id))
+                    sql.execSQL(
+                        "INSERT OR REPLACE INTO variation_muscles(variationId,muscleId,role) SELECT v.id,m.muscleId,m.role FROM exercise_variations v JOIN (" +
+                            com.petermathie.vibecheck.data.local.EFFECTIVE_MAPPINGS +
+                            ") m ON m.exerciseId=v.exerciseId WHERE v.id=?", arrayOf(id),
+                    )
+                }
+            }
             sql.query("PRAGMA foreign_key_check").use { require(!it.moveToFirst()){ "Import contains broken references" } }
             ImportValidation.relationships(sql)
             sql.execSQL(
@@ -234,10 +266,35 @@ object DataTransfer {
         } finally { sql.endTransaction() }
         db.invalidationTracker.refreshVersionsAsync()
     }
+    private fun replaceImportedMappings(
+        sql: androidx.sqlite.db.SupportSQLiteDatabase, data: JSONObject, table: String, rows: JSONArray,
+    ) {
+        val ownership = when (table) {
+            "exercise_muscle_overrides" -> Triple("exerciseId", "exercise_overrides", "musclesPresent")
+            "variation_muscles" -> Triple("variationId", "variation_overrides", "musclesPresent")
+            "workout_set_muscles" -> Triple("setId", "workout_sets", "musclesSnapshotPresent")
+            else -> return
+        }
+        val (owner, ownerTable, presence) = ownership
+        val owners = mutableSetOf<String>()
+        repeat(rows.length()) { owners.add(rows.getJSONObject(it).getString(owner)) }
+        if (data.has(ownerTable)) {
+            val parents = data.getJSONArray(ownerTable)
+            repeat(parents.length()) {
+                val row = parents.getJSONObject(it)
+                if (row.optInt(presence) == 1 || row.opt(presence) == true) {
+                    owners.add(row.getString(if (ownerTable == "workout_sets") "id" else owner))
+                }
+            }
+        }
+        owners.forEach { sql.execSQL("DELETE FROM `$table` WHERE `$owner`=?", arrayOf(it)) }
+    }
     suspend fun csv(db:VibeDatabase):String=withContext(Dispatchers.IO) {
         fun quote(s:String)="\""+s.replace("\"","\"\"")+"\""
         val out=StringBuilder()
-        db.openHelper.readableDatabase.query("SELECT w.name AS workout,w.finishedAt,w.notes AS workoutNotes,COALESCE(NULLIF(we.exerciseName,''),e.canonicalName) AS exercise,we.notes AS exerciseNotes,v.name AS variation,(SELECT GROUP_CONCAT(COALESCE(NULLIF(sb.nameSnapshot,''),b.name), ' + ') FROM workout_set_bands sb JOIN bands b ON b.id=sb.bandId WHERE sb.setId=s.id) AS bands,(SELECT SUM(CASE WHEN sb.widthCentimetresSnapshot>0 THEN sb.widthCentimetresSnapshot ELSE b.widthCentimetres END) FROM workout_set_bands sb JOIN bands b ON b.id=sb.bandId WHERE sb.setId=s.id) AS bandWidthCm,s.* FROM workout_sets s JOIN workout_exercises we ON we.id=s.workoutExerciseId JOIN exercises e ON e.id=we.actualExerciseId JOIN workouts w ON w.id=we.workoutId LEFT JOIN exercise_variations v ON v.id=s.variationId WHERE w.status='FINISHED' ORDER BY w.finishedAt,s.ordinal").use { c ->
+        val columns = ImportValidation.columns(db.openHelper.readableDatabase, "workout_sets").map { it.name }
+            .filterNot { it in setOf("distanceValue", "distanceUnit", "musclesSnapshotPresent") }.joinToString(",") { "s.`$it`" }
+        db.openHelper.readableDatabase.query("SELECT w.name AS workout,w.finishedAt,w.notes AS workoutNotes,COALESCE(NULLIF(we.exerciseName,''),e.canonicalName) AS exercise,we.notes AS exerciseNotes,COALESCE(NULLIF(s.variationNameSnapshot,''),v.name) AS variation,(SELECT GROUP_CONCAT(COALESCE(NULLIF(sb.nameSnapshot,''),b.name), ' + ') FROM workout_set_bands sb JOIN bands b ON b.id=sb.bandId WHERE sb.setId=s.id) AS bands,(SELECT SUM(CASE WHEN sb.widthCentimetresSnapshot>0 THEN sb.widthCentimetresSnapshot ELSE b.widthCentimetres END) FROM workout_set_bands sb JOIN bands b ON b.id=sb.bandId WHERE sb.setId=s.id) AS bandWidthCm,$columns FROM workout_sets s JOIN workout_exercises we ON we.id=s.workoutExerciseId JOIN exercises e ON e.id=we.actualExerciseId JOIN workouts w ON w.id=we.workoutId LEFT JOIN exercise_variations v ON v.id=s.variationId WHERE w.status='FINISHED' ORDER BY w.finishedAt,s.ordinal").use { c ->
             out.appendLine(c.columnNames.joinToString(",",transform=::quote))
             while(c.moveToNext())out.appendLine(c.columnNames.indices.joinToString(","){quote(if(c.isNull(it))"" else c.getString(it))})
         };out.toString()

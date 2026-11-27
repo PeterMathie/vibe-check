@@ -335,7 +335,7 @@ class WorkoutSetDraftLogicTest {
             ).withResistance(resistance, "lb").withMeasurement(measurement)
             val draft = emptyEntryDraft("row", 1).copy(
                 variationId = "variant", performance = if (config.loggingWeightUnit == null) "7.5" else "22.046226218 x 7.5",
-                addedWeight = "4.4092452436", romValue = "45", romUnit = "cm", rpe = "9",
+                addedWeight = "4.4092452436", romValue = "45", romUnit = "cm", distanceValue = "18.75", rpe = "9",
                 tutEntries = encodeTimingInputs(listOf("1.25", "", "2.5")), timeUnderTension = "10.5",
             )
             val parsed = requireNotNull(WorkoutSetDraftLogic(
@@ -346,9 +346,11 @@ class WorkoutSetDraftLogicTest {
             assertEquals(if (measurement == MeasurementMetric.RANGE_OF_MOTION) 45.0 else 20.0, parsed.romValue)
             assertEquals(if (measurement == MeasurementMetric.RANGE_OF_MOTION) "cm" else "degrees", parsed.romUnit)
             assertEquals(2.0, requireNotNull(parsed.addedWeightKg), 0.000001)
-            assertEquals(3_750L, parsed.holdMillis)
-            assertEquals(listOf(1_250L, 2_500L), timingMillis(parsed.tutEntriesMillis))
-            assertEquals(10_500L, parsed.timeUnderTensionMillis)
+            assertEquals(if (config.timeHeld || config.manyTuts) 3_750L else null, parsed.holdMillis)
+            assertEquals(if (config.timeHeld || config.manyTuts) listOf(1_250L, 2_500L) else emptyList<Long>(),
+                timingMillis(parsed.tutEntriesMillis))
+            assertEquals(if (config.timeUnderTension) 10_500L else null, parsed.timeUnderTensionMillis)
+            assertEquals(if (measurement == MeasurementMetric.DISTANCE) 18.75 else null, parsed.distanceValue)
             assertEquals(recorded.id, parsed.id)
             assertEquals(recorded.loggedAt, parsed.loggedAt)
             assertEquals(recorded.leftReps, parsed.leftReps)
@@ -422,5 +424,95 @@ class WorkoutSetDraftLogicTest {
         assertEquals(3, changed.variationRankSnapshot)
         assertEquals(9, WorkoutSetDraftLogic(config, recorded, live, metadata(config.encode(), rank = null))
             .parsedSet(draft.copy(variationId = "next"))?.variationRankSnapshot)
+    }
+
+    @Test
+    fun distanceNeverAliasesLegacyRomAndInactiveBuffersDoNotValidateOrLog() {
+        val recorded = emptySet("row", 1).copy(romValue = 42.125, romUnit = "cm", distanceValue = 18.75, distanceUnit = "cm")
+        val draft = emptyEntryDraft("row", 1).copy(
+            setId = recorded.id, distanceValue = "20.12345", romValue = ".", romUnit = "cm",
+        )
+        val logic = WorkoutSetDraftLogic(config(MeasurementMetric.DISTANCE), recorded)
+        val saved = requireNotNull(logic.parsedSet(draft))
+        assertEquals(20.12345, saved.distanceValue!!, 0.0)
+        assertEquals(42.125, saved.romValue!!, 0.0)
+        assertEquals("cm", saved.romUnit)
+        val cleared = requireNotNull(logic.editedSet(draft.copy(distanceValue = "")))
+        assertNull(cleared.distanceValue)
+        assertEquals(recorded.romValue, cleared.romValue)
+        assertNull(logic.parsedSet(draft.copy(distanceValue = "")))
+        assertNotNull(logic.inputError(draft.copy(distanceValue = ".")))
+
+        val newSet = requireNotNull(WorkoutSetDraftLogic(config(MeasurementMetric.REPETITIONS))
+            .parsedSet(draft.copy(performance = "5", distanceValue = ".")))
+        assertNull(newSet.distanceValue)
+        assertNull(newSet.romValue)
+    }
+
+    @Test
+    fun durableVariantCacheRestoresIndependentRawBuffersAndUnseenVariantsStartEmpty() {
+        val draft = emptyEntryDraft("row", 1).copy(
+            variationId = "first", romValue = "42.125", romUnit = "cm", distanceValue = "18.7500", distanceUnit = "cm",
+        )
+        val key = variantDraftKey(draft.setId, draft.variationId)
+        val encoded = encodeVariantDraft(draft, config(MeasurementMetric.DISTANCE).encode(), "First", "ROM_MEASUREMENT", 1)
+        val cache = decodeVariantDraftCache(encodeVariantDraftCache(mapOf(key to encoded)))
+        val next = WorkoutSetDraftLogic(config(MeasurementMetric.DISTANCE))
+            .changeVariant(draft, "second", config(MeasurementMetric.RANGE_OF_MOTION))
+        assertEquals("", next.distanceValue)
+        assertEquals("", next.romValue)
+        assertEquals("degrees", next.romUnit)
+        val restored = restoreVariantDraft(next.copy(variationId = "first"), cache.getValue(key))
+        assertEquals(draft.romValue, restored.romValue)
+        assertEquals(draft.romUnit, restored.romUnit)
+        assertEquals(draft.distanceValue, restored.distanceValue)
+        assertEquals("cm", restored.distanceUnit)
+        val objectCache = kotlinx.serialization.json.buildJsonObject {
+            put(key, kotlinx.serialization.json.Json.parseToJsonElement(encoded))
+        }.toString()
+        val objectRestored = restoreVariantDraft(next.copy(variationId = "first"),
+            decodeVariantDraftCache(objectCache).getValue(key))
+        assertEquals(restored, objectRestored)
+        assertEquals(draft.setId, objectRestored.setId)
+        assertEquals(draft.variationId, objectRestored.variationId)
+    }
+
+    @Test
+    fun historyFormatsOnlyDisplayedNumbersWithoutMutatingSourceTextOrValues() {
+        val raw = androidx.compose.ui.text.AnnotatedString("18.1234567")
+        val shown = HistoryNumberTransformation(2).filter(raw)
+        assertEquals("18.12", shown.text.text)
+        assertEquals("18.1234567", raw.text)
+        assertEquals("-42.13", HistoryNumberTransformation(2)
+            .filter(androidx.compose.ui.text.AnnotatedString("-42.125")).text.text)
+        for (offset in 0..raw.length) assertTrue(shown.offsetMapping.originalToTransformed(offset) in 0..shown.text.length)
+        assertEquals(raw.length, shown.offsetMapping.transformedToOriginal(shown.text.length))
+        val exponent = androidx.compose.ui.text.AnnotatedString("1e3")
+        val expanded = HistoryNumberTransformation(2).filter(exponent)
+        assertEquals("1000", expanded.text.text)
+        assertEquals(expanded.text.length, expanded.offsetMapping.originalToTransformed(exponent.length))
+        assertEquals("18.", HistoryNumberTransformation(2).filter(
+            androidx.compose.ui.text.AnnotatedString("18.")).text.text)
+        val set = emptySet("row", 1).copy(
+            distanceValue = 18.1234567, distanceUnit = "cm",
+            variationInputConfigSnapshot = config(MeasurementMetric.DISTANCE).encode(),
+        )
+        assertEquals("18.12 cm", setDescription(set, maximumFractionDigits = 2))
+        assertEquals("18.1234567 cm", setDescription(set))
+        assertEquals(18.1234567, set.distanceValue!!, 0.0)
+    }
+
+    @Test
+    fun recoveredCachedSavedValuesDoNotTriggerUntouchedReparseButActualPendingChangesDo() {
+        val config = config(MeasurementMetric.REPETITIONS).withResistance(ResistanceMetric.KILOGRAMS, "lb")
+        val draft = emptyEntryDraft("row", 1).copy(
+            performance = "20 x 7.5000", rpe = "8.00", variantDraftCache = "{\"unused\":\"buffer\"}",
+        )
+        val recorded = requireNotNull(WorkoutSetDraftLogic(config).parsedSet(draft))
+        val logic = WorkoutSetDraftLogic(config, recorded)
+        assertFalse(recoveredDraftNeedsSave(draft, recorded, emptyList(), logic))
+        assertTrue(recoveredDraftNeedsSave(draft.copy(performance = "20 x 8"), recorded, emptyList(), logic))
+        assertTrue(recoveredDraftNeedsSave(draft.copy(performance = "20 x ."), recorded, emptyList(), logic))
+        assertTrue(recoveredDraftNeedsSave(draft.copy(bandIds = "[\"band-yellow\"]"), recorded, emptyList(), logic))
     }
 }

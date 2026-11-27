@@ -1,7 +1,7 @@
 package com.petermathie.vibecheck.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,33 +13,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import com.petermathie.vibecheck.data.DemoRemovalSummary
 import com.petermathie.vibecheck.ui.theme.LocalVibePalette
 import com.petermathie.vibecheck.ui.theme.VibePalette
 import com.petermathie.vibecheck.ui.theme.VibePalettePreset
 import com.petermathie.vibecheck.ui.theme.VibePalettes
-import com.petermathie.vibecheck.ui.theme.VibeShapes
 import com.petermathie.vibecheck.ui.theme.VibeThemeMode
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceLevel
 import com.petermathie.vibecheck.ui.theme.VibeSurfaceState
@@ -51,13 +40,12 @@ internal fun StyleScreen(
     onSelect: (String) -> Unit,
     themeMode: VibeThemeMode,
     onThemeModeChange: (VibeThemeMode) -> Unit,
-    onRemoveDemo: ((Result<DemoRemovalSummary>) -> Unit) -> Unit,
+    onBack: () -> Unit = {},
 ) {
-    var confirmRemoveDemo by remember { mutableStateOf(false) }
-    var demoMessage by remember { mutableStateOf<String?>(null) }
+    BackHandler(onBack = onBack)
     ScreenList {
         item {
-            Text("Style", style = MaterialTheme.typography.headlineLarge)
+            MoreChildTitleRow("Style", onBack, backDescription = "Back to Settings")
             Text(
                 "Choose one curated palette. Interface, charts and Freshness colours update together.",
                 color = LocalVibePalette.current.textSecondary,
@@ -77,36 +65,7 @@ internal fun StyleScreen(
         items(VibePalettes.presets, key = { it.id }) { preset ->
             PaletteCard(preset, selectedId == preset.id) { onSelect(preset.id) }
         }
-        item {
-            VibeCard {
-                Text("Development data", style = MaterialTheme.typography.titleLarge)
-                Text("Remove all fake personal history while keeping the complete exercise catalogue and your own data.", color = LocalVibePalette.current.textSecondary)
-                OutlinedButton(
-                    onClick = { confirmRemoveDemo = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium,
-                ) { Text("Remove demo data") }
-                demoMessage?.let { Text(it, color = LocalVibePalette.current.textSecondary) }
-            }
-        }
     }
-    if (confirmRemoveDemo) AlertDialog(
-        onDismissRequest = { confirmRemoveDemo = false },
-        title = { Text("Remove all demo personal data?") },
-        text = { Text("Demo workouts, programmes, habits, body history and generated photos will be removed. Catalogue definitions and your own records will remain.") },
-        confirmButton = {
-            TextButton(onClick = {
-                confirmRemoveDemo = false
-                onRemoveDemo { result ->
-                    demoMessage = result.fold(
-                        onSuccess = { "Demo personal data removed. Exercise catalogue preserved." },
-                        onFailure = { "Demo data was not fully removed: ${it.message.orEmpty()}" },
-                    )
-                }
-            }) { Text("Remove demo data") }
-        },
-        dismissButton = { TextButton(onClick = { confirmRemoveDemo = false }) { Text("Cancel") } },
-    )
 }
 
 @Composable
